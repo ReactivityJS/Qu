@@ -5,17 +5,26 @@
 //   - file://<id>       jeder Eintrag kann einen echten Datei-Upload referenzieren
 //
 // Die Liste UND die Notiz je Eintrag sind echte Live-Ansichten, kein
-// Snapshot nach einem Klick — gebaut auf src/ui/bindings.js:
-//   - viewObject() für die Liste (one-way: qu.on(prefix + '/*', cb,
-//     { initial: true }) pro Kind-QuBit)
-//   - bindKey() für die Notiz (two-way: derselbe Mechanismus PLUS ein
-//     Schreib-Listener zurück, mit Echo-Schutz nach (id, ts) statt
-//     Wert-Vergleich beim Rendern, und Wert-Vergleich vor dem Schreiben)
+// Snapshot nach einem Klick — und zeigen bewusst BEIDE Ebenen der UI-Schicht
+// nebeneinander, jede dort, wo sie das richtige Werkzeug ist:
+//   - viewObject() (src/ui/bindings.js, JS) für die Liste — Aufzählen von
+//     Kind-QuBits unter einem Prefix hat keine deklarative Entsprechung
+//     (bewusst: siehe Doku-Kommentar in ui/components.js), bleibt also JS.
+//   - <qu-bind> (src/ui/components.js, Custom Element) für die Notiz je
+//     Eintrag — eine einzelne Leaf-QuBit (`${entryId}/note`), genau der
+//     Fall, für den die Komponente gebaut ist: `path`+`key` statt einem
+//     manuellen bindKey()-Aufruf, disconnectedCallback() räumt beim
+//     Entfernen aus dem DOM automatisch auf (kein von Hand verwaltetes
+//     off() pro Eintrag mehr nötig).
+// Derselbe Echo-Schutz gilt in beiden Fällen (id+ts statt Wert-Vergleich
+// beim Rendern, Wert-Vergleich vor dem Schreiben) — <qu-bind> ruft dieselbe
+// bindKey()-Funktion nur aus einem connectedCallback() statt von Hand auf.
 // Es gibt an keiner Stelle einen "Neu laden"-Aufruf.
 import {
   Qu, MemoryFileStorageAdapter, createReferenceHandlerPlugin, createFileHandlerPlugin,
-  objRef, keyRef, resolveReference, viewObject, bindKey,
+  objRef, keyRef, resolveReference, viewObject,
 } from '../../../src/index.js';
+import '../../../src/ui/components.js';
 import { el } from '../render.mjs';
 
 const CATEGORIES = [
@@ -115,13 +124,17 @@ function renderAvatar(qu, avatarRef, fileHandler, targetEl) {
  * schreibt neue Einträge; die Liste selbst wird NIE manuell neu geladen —
  * jede Änderung kommt ausschließlich über viewObject()s eine Subscription
  * herein. Jeder Eintrag bekommt außerdem ein zweiseitig gebundenes
- * Notiz-Feld (bindKey) — als eigene Leaf-QuBit unter dem Eintrag, tippen
+ * Notiz-Feld (<qu-bind>) — als eigene Leaf-QuBit unter dem Eintrag, tippen
  * schreibt sofort, kein Speichern-Knopf, und die Änderung eines zweiten
  * Tabs/Fensters auf demselben Eintrag würde hier genauso ankommen wie ein
  * frischer Eintrag.
  */
 export function mountLibraryView(container, ctx) {
   const { qu, base, fileStorage, fileHandler } = ctx;
+  // Muss VOR jedem angehängten <qu-bind>-Nachfahren gesetzt sein —
+  // appendChild() löst connectedCallback() synchron aus, das dort per
+  // DOM-Walk nach der nächsten .qu-Property sucht (siehe ui/components.js).
+  container.qu = qu;
 
   container.appendChild(el('h3', { text: 'Live-Bibliothek (reaktiv, kein Refresh-Button)' }));
 
@@ -175,12 +188,16 @@ export function mountLibraryView(container, ctx) {
         class: 'lib-note', rows: '2',
         placeholder: 'Live-Notiz zu diesem Eintrag — direkt tippen, kein Speichern-Knopf',
       });
-      li.append(nameEl, metaEl, fileAreaEl, noteInput);
+      // <qu-bind> statt eines manuellen bindKey()-Aufrufs: path=q.id,
+      // key="note" -> eigene Leaf-QuBit `${q.id}/note`, unabhängig vom
+      // Render-Zyklus der Liste selbst (kein Feld des Eintrags-Objekts).
+      // Das eingewickelte <textarea> wird automatisch zum Bind-Ziel (siehe
+      // "Target element" in ui/components.js) — Vorteil gegenüber dem
+      // vorherigen bindKey()-Aufruf: disconnectedCallback() räumt beim
+      // Entfernen aus dem DOM selbst auf, kein von Hand verwaltetes off().
+      const noteBind = el('qu-bind', { path: q.id, key: 'note' }, [noteInput]);
+      li.append(nameEl, metaEl, fileAreaEl, noteBind);
       list.appendChild(li);
-      // Two-way, einmal pro Eintrag verdrahtet — unabhängig vom
-      // Render-Zyklus der Liste selbst (die Notiz ist eine eigene Leaf-
-      // QuBit, `${entryId}/note`, kein Feld des Eintrags-Objekts).
-      bindKey(qu, `${q.id}/note`, noteInput);
       return { nameEl, metaEl, fileAreaEl };
     },
     render(item, value) {

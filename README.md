@@ -174,11 +174,15 @@ docs/lab/                    interaktives Lab — der primäre Weg, QU im Browse
     04-network-relay.mjs             echter WebSocket-Relay, Live-Push, reziproker
                                 Sync, Datei-Mirroring
     05-references-practice.mjs        obj://key://file:// an einem Beispiel;
-                                mountLibraryView() ist die reaktive Live-Ansicht,
-                                gebaut auf src/ui/bindings.js: viewObject() für
-                                die Liste, bindKey() für ein zweiseitig
-                                gebundenes Notizfeld je Eintrag (tippen
-                                schreibt sofort, kein Speichern-Knopf)
+                                mountLibraryView() zeigt beide UI-Ebenen
+                                nebeneinander: viewObject() (src/ui/
+                                bindings.js, JS) für die Liste — kein
+                                deklaratives Gegenstück für "Kind-QuBits
+                                unter einem Prefix aufzählen" — und
+                                <qu-bind> (src/ui/components.js, Custom
+                                Element) für ein zweiseitig gebundenes
+                                Notizfeld je Eintrag (tippen schreibt
+                                sofort, kein Speichern-Knopf)
 examples/
   todo-lib.mjs               Logik einer teilbaren ToDo-Liste, getrennt von jeder UI
   todo-lib.test.mjs            node:test dafür — Space + Link + FP-basiertes Schreibrecht
@@ -508,20 +512,25 @@ startbar, jeder mit dem exakt gezeigten Code (keine narrative Annäherung):
 5. **Referenzen in der Praxis** — eine kleine Kontakt-/Dateibibliothek:
    `obj://` baut die Liste, `key://` verweist auf eine Kategorie, `file://`
    auf einen echten Datei-Upload (`<input type="file">`, keine synthetischen
-   Bytes). Liste **und** Notizfeld sind **durchgängig reaktiv**, beide auf
-   `src/ui/bindings.js` gebaut statt auf Hand-verdrahtetem `qu.on(...)`:
-   `viewObject()` für die Liste (`initial: true` liefert beim Mounten
-   zuerst, was schon da ist, danach kommt jede Änderung — neuer Eintrag,
-   neuer Upload — über dieselbe Subscription herein) und `bindKey()` für
-   ein zweiseitig gebundenes Notizfeld je Eintrag: Tippen schreibt sofort
-   in eine eigene Leaf-QuBit (`<eintragId>/note`), kein Speichern-Knopf,
-   und ein Echo-Schutz verhindert sowohl unnötige Schreibvorgänge bei
-   identischem Wert als auch ein Selbst-Überschreiben des Cursors beim
-   Tippen (Vergleich über `(id, ts)`, nicht über den Wert). Kein
-   Lab-Abschnitt mit einer Liste/Live-Ansicht oder einem editierbaren Feld
-   sollte künftig anders gebaut werden — Snapshot-nach-Klick ist nur für
-   einmalige Diagnose-Schritte richtig (siehe Abschnitt 5, Schritt 4, der
-   genau diesen Kontrast explizit zeigt).
+   Bytes). Liste **und** Notizfeld sind **durchgängig reaktiv** und zeigen
+   bewusst beide UI-Ebenen nebeneinander, jede dort, wo sie das richtige
+   Werkzeug ist, statt auf Hand-verdrahtetem `qu.on(...)`:
+   `viewObject()` (`src/ui/bindings.js`, JS) für die Liste — "Kind-QuBits
+   unter einem Prefix aufzählen" hat kein deklaratives Gegenstück, bleibt
+   also JS (`initial: true` liefert beim Mounten zuerst, was schon da ist,
+   danach kommt jede Änderung — neuer Eintrag, neuer Upload — über dieselbe
+   Subscription herein) — und `<qu-bind>` (`src/ui/components.js`, Custom
+   Element) für ein zweiseitig gebundenes Notizfeld je Eintrag: Tippen
+   schreibt sofort in eine eigene Leaf-QuBit (`<eintragId>/note`), kein
+   Speichern-Knopf, `path`+`key` statt einem manuellen `bindKey()`-Aufruf,
+   und `disconnectedCallback()` räumt beim Entfernen aus dem DOM automatisch
+   auf. Derselbe Echo-Schutz gilt in beiden Fällen (Vergleich über `(id,
+   ts)` beim Rendern, Wert-Vergleich vor dem Schreiben) — `<qu-bind>` ruft
+   intern dieselbe `bindKey()`-Funktion nur aus einem `connectedCallback()`
+   statt von Hand auf. Kein Lab-Abschnitt mit einer Liste/Live-Ansicht oder
+   einem editierbaren Feld sollte künftig anders gebaut werden — Snapshot-
+   nach-Klick ist nur für einmalige Diagnose-Schritte richtig (siehe
+   Abschnitt 5, Schritt 4, der genau diesen Kontrast explizit zeigt).
 
 Jeder Abschnitt hängt seine zentralen Objekte an `window` (z.B. `window.qu`
 nach Abschnitt 1, `window.quLab.network.alice` immer) — zum Weiterprobieren

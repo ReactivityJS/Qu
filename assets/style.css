@@ -217,6 +217,10 @@ li.fail pre { color: var(--text); white-space: pre-wrap; margin: 0.4rem 0 0 0; }
 .lib-file-link { color: var(--accent); text-decoration: none; }
 .lib-file-link:hover { text-decoration: underline; }
 .lib-note { flex: 1 1 100%; background: #00000066; border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.6rem; color: var(--text); font-size: 0.82rem; font-family: inherit; resize: vertical; }
+/* <qu-bind> wraps .lib-note (see labs/05-references-practice.mjs) — layout-
+   transparent so the textarea still participates in .lib-entry's flexbox
+   directly, exactly as if <qu-bind> weren't there. */
+.lib-entry qu-bind { display: contents; }
 
 #debug-panel { margin-top: 1.5rem; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.75rem 1rem; }
 #debug-panel summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
