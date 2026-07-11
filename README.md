@@ -127,6 +127,29 @@ src/
                           identischem Wert, Re-Render unterbleibt bei
                           identischem (id, ts) statt Wertevergleich — siehe
                           Doku-Kommentar in der Datei.
+    components.js             <qu-view>/<qu-bind> — Custom Elements über
+                          bindings.js: connectedCallback()/
+                          disconnectedCallback() sind das on()/off(), das
+                          bindings.js-Aufrufer bisher von Hand verdrahten
+                          mussten. Zwei Elemente, nicht vier: <qu-bind> ist
+                          <qu-view> plus Schreiben-zurück, eine
+                          überschriebene Methode statt eines zweiten
+                          Mechanismus. `path` (+ optional `key`, ergibt
+                          `${path}/${key}` als eigene Leaf-QuBit — deckt ein
+                          Objekt mit mehreren Properties als N
+                          Geschwister-Elemente ab, dieselbe "jedes Feld
+                          seine eigene Leaf-QuBit"-Philosophie wie
+                          bindObject()) und `attr` (Default wie bindKey
+                          selbst: value falls vorhanden, sonst textContent;
+                          frei überschreibbar auf innerHTML/checked/jedes
+                          HTML-Attribut wie href/src/class). Bindet ein
+                          eingewickeltes einzelnes Kind-Element (z.B. ein
+                          echtes `<input>`) statt `is="..."` zu brauchen
+                          (fehlt in Safari). Qu-Instanz nie global: `.qu`
+                          als Property auf dem Element oder einem Vorfahren,
+                          per DOM-Walk gefunden — bewusst BROWSER-ONLY
+                          (erweitert HTMLElement beim Modul-Laden), deshalb
+                          nicht im Barrel `src/index.js`, direkt importieren.
 test/
   qu.test.mjs               Tests für die Qu-Fassade
   chat.test.mjs               Tests für das Chat-Modul (inkl. Kollisionssicherheit, Presence, Lesebestätigungen)

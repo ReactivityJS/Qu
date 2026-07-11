@@ -2,11 +2,15 @@
 // here — internal file layout (core/adapters/network/data/modules) can
 // change without breaking `import { ... } from 'qu-core'`.
 //
-// The only things deliberately NOT exported here are adapters/node-fs.js
-// and adapters/node-fs-file-storage.js — they import node:fs/node:path,
-// which would break any page that loads this barrel in a browser (CORS/
-// module-resolution errors, not just "unused code"). Node-only consumers
-// (the relay, Node scripts) import them directly from their own files.
+// Deliberately NOT exported here — for opposite platform reasons:
+// - adapters/node-fs.js and adapters/node-fs-file-storage.js import
+//   node:fs/node:path, which would break any page that loads this barrel
+//   in a browser (CORS/module-resolution errors, not just "unused code").
+//   Node-only consumers (the relay, Node scripts) import them directly.
+// - ui/components.js extends HTMLElement at module-evaluation time (a
+//   Custom Element class declaration, not just a function body reference),
+//   which throws immediately if imported in Node. Browser consumers import
+//   it directly: `import '../ui/components.js';`.
 // Everything else here only *references* browser globals (WebSocket,
 // RTCPeerConnection, localStorage, indexedDB, ...) inside function bodies —
 // safe to import in Node too, it just can't be called there.

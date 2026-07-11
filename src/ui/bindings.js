@@ -63,7 +63,9 @@ export function viewObject(qu, prefix, { createItem, render, key = (q) => q.id, 
   return () => { off(); items.clear(); };
 }
 
-const DEFAULT_ELEMENT_IO = {
+// Exported so ui/components.js's <qu-view>/<qu-bind> can fall back to the
+// exact same default instead of re-declaring the heuristic a second time.
+export const DEFAULT_ELEMENT_IO = {
   get: (el) => ('value' in el ? el.value : el.textContent),
   set: (el, v) => { if ('value' in el) el.value = v; else el.textContent = v; },
   event: 'input',
