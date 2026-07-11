@@ -27,7 +27,7 @@
   <script type="module">
     import { renderSection } from './render.mjs';
     import { runSteps } from './lab-runner.mjs';
-    import { identitySteps, spacesSteps, storageSteps, networkSteps } from './labs/index.mjs';
+    import { identitySteps, spacesSteps, storageSteps, networkSteps, referencesSteps, mountLibraryView } from './labs/index.mjs';
 
     const sectionsEl = document.getElementById('sections');
     // One ctx per section (not shared across sections) — each section is
@@ -64,12 +64,24 @@
         consoleHint: 'window.aliceNet / window.bobNet / window.carolNet nach den jeweiligen Schritten',
         steps: networkSteps,
       },
+      {
+        id: 'references',
+        title: '3 · Referenzen in der Praxis: Kontakt-/Dateibibliothek',
+        description: 'obj:// (Liste), key:// (Kategorie-Verweis) und file:// (echter Datei-Upload) an einem zusammenhängenden Beispiel. Die Liste unten ist reaktiv (qu.on(..., { initial: true })) — kein Refresh-Button, jede Änderung erscheint von selbst.',
+        consoleHint: 'window.qu nach Schritt 1',
+        steps: referencesSteps,
+        onMount: (live, ctx) => mountLibraryView(live, ctx),
+      },
     ];
 
     for (const section of sections) {
       const ctx = {};
       window.quLab[section.id] = ctx;
-      sectionsEl.appendChild(renderSection(section, (onStep) => runSteps(section.steps, onStep, ctx)));
+      sectionsEl.appendChild(renderSection(
+        section,
+        (onStep) => runSteps(section.steps, onStep, ctx),
+        section.onMount ? (live) => section.onMount(live, ctx) : undefined,
+      ));
     }
 
     document.getElementById('reset-all').addEventListener('click', () => {

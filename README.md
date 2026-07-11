@@ -139,6 +139,9 @@ docs/lab/                    interaktives Lab — der primäre Weg, QU im Browse
                                 Browser-Test, nicht nur node --check
     04-network-relay.mjs             echter WebSocket-Relay, Live-Push, reziproker
                                 Sync, Datei-Mirroring
+    05-references-practice.mjs        obj://key://file:// an einem Beispiel;
+                                mountLibraryView() ist die reaktive Live-Ansicht
+                                (qu.on(..., {initial:true}), kein Refresh-Button)
 examples/
   todo-lib.mjs               Logik einer teilbaren ToDo-Liste, getrennt von jeder UI
   todo-lib.test.mjs            node:test dafür — Space + Link + FP-basiertes Schreibrecht
@@ -449,7 +452,7 @@ npm start
 
 Der primäre Weg, QU im Browser selbst auszuprobieren — ersetzt die alten
 Terminal-/Einzelseiten-Demos (jetzt in `archive/`, nicht mehr gepflegt).
-Vier eigenständige Abschnitte, jeder per eigenem "Ausführen"-Button
+Fünf eigenständige Abschnitte, jeder per eigenem "Ausführen"-Button
 startbar, jeder mit dem exakt gezeigten Code (keine narrative Annäherung):
 
 1. **Identität** — anlegen, in `localStorage` speichern, wieder laden
@@ -465,6 +468,17 @@ startbar, jeder mit dem exakt gezeigten Code (keine narrative Annäherung):
    ausliefert: Handshake, Live-Push, reziproker Sync für einen später
    verbindenden Client, Datei-Mirroring (ein Client lädt eine Datei vom
    Relay, nachdem der Original-Uploader schon getrennt hat).
+5. **Referenzen in der Praxis** — eine kleine Kontakt-/Dateibibliothek:
+   `obj://` baut die Liste, `key://` verweist auf eine Kategorie, `file://`
+   auf einen echten Datei-Upload (`<input type="file">`, keine synthetischen
+   Bytes). Die Liste ist **durchgängig reaktiv** — sie hängt an genau einem
+   `qu.on(prefix + '/**', cb, { initial: true })`, nicht an einem
+   "Neu laden"-Knopf: `initial: true` liefert beim Mounten zuerst, was schon
+   da ist, danach kommt jede Änderung (neuer Eintrag, neuer Upload) über
+   dieselbe Subscription herein. Kein Lab-Abschnitt mit einer Liste/Live-
+   Ansicht sollte künftig anders gebaut werden — Snapshot-nach-Klick ist nur
+   für einmalige Diagnose-Schritte richtig (siehe Abschnitt 5, Schritt 4,
+   der genau diesen Kontrast explizit zeigt).
 
 Jeder Abschnitt hängt seine zentralen Objekte an `window` (z.B. `window.qu`
 nach Abschnitt 1, `window.quLab.network.alice` immer) — zum Weiterprobieren

@@ -56,8 +56,16 @@ export function renderStepCard(entry) {
  * and a hint about what lands on `window` for manual console use — the
  * whole point being that a step's code block and its `run()` are the exact
  * same code, not a narrated approximation of it.
+ *
+ * `onMount(liveContainer)`, if given, runs once after a successful step run
+ * and gets an empty container to mount a *persistent, reactive* view into
+ * (a `qu.on(pattern, cb, { initial: true })` subscription driving the DOM,
+ * not a snapshot) — see labs/05-references-practice.mjs. Any cleanup
+ * function it returns is called before the next run (re-clicking
+ * "Ausführen" unsubscribes the old view instead of stacking a second one
+ * on top).
  */
-export function renderSection({ id, title, description, consoleHint }, onRun) {
+export function renderSection({ id, title, description, consoleHint }, onRun, onMount) {
   const section = el('section', { class: 'lab-section', id });
   section.appendChild(el('h2', { text: title }));
   if (description) section.appendChild(el('p', { class: 'step-desc', text: description }));
@@ -75,11 +83,18 @@ export function renderSection({ id, title, description, consoleHint }, onRun) {
   const results = el('div', { class: 'lab-results' });
   section.appendChild(results);
 
+  const live = el('div', { class: 'lab-live' });
+  if (onMount) section.appendChild(live);
+  let unmount = null;
+
   runBtn.addEventListener('click', async () => {
     runBtn.disabled = true;
     status.textContent = 'läuft…';
     status.className = 'lab-status';
     results.textContent = '';
+    unmount?.();
+    unmount = null;
+    live.textContent = '';
     let ok = 0;
     let fail = 0;
     try {
@@ -89,6 +104,7 @@ export function renderSection({ id, title, description, consoleHint }, onRun) {
       });
       status.textContent = `${ok} von ${ok + fail} Schritten wie erwartet` + (fail ? `, ${fail} unerwartet fehlgeschlagen` : '');
       status.className = fail ? 'lab-status warn' : 'lab-status ok';
+      if (onMount) unmount = await onMount(live);
     } catch (e) {
       status.textContent = `Abgebrochen: ${e.message}`;
       status.className = 'lab-status warn';

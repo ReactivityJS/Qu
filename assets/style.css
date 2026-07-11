@@ -203,6 +203,20 @@ li.fail pre { color: var(--text); white-space: pre-wrap; margin: 0.4rem 0 0 0; }
 .lab-toolbar-global button { background: var(--border); color: var(--text); border: none; border-radius: 6px; padding: 0.4rem 0.8rem; font-size: 0.82rem; cursor: pointer; }
 .lab-toolbar-global button:hover { background: var(--fail); color: #0f1115; }
 
+/* --- Reactive live views inside a lab section (e.g. Lab 5) --- */
+.lab-live { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px dashed var(--border); }
+.lab-live h3 { margin: 0 0 0.75rem 0; color: var(--accent); font-size: 1rem; }
+.lib-form { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+.lib-input { background: #00000066; border: 1px solid var(--border); border-radius: 8px; padding: 0.45rem 0.7rem; color: var(--text); font-size: 0.9rem; }
+.lib-input[type="text"] { flex: 1 1 12rem; }
+.lib-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.lib-entry { background: #0000004d; border-radius: 10px; padding: 0.7rem 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+.lib-name { font-weight: 600; }
+.lib-meta { font-size: 0.8rem; color: var(--muted); background: var(--border); border-radius: 999px; padding: 0.1rem 0.6rem; }
+.lib-file-area { font-size: 0.82rem; color: var(--muted); }
+.lib-file-link { color: var(--accent); text-decoration: none; }
+.lib-file-link:hover { text-decoration: underline; }
+
 #debug-panel { margin-top: 1.5rem; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.75rem 1rem; }
 #debug-panel summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
 .debug-toolbar { display: flex; gap: 1rem; align-items: center; margin: 0.6rem 0; font-size: 0.8rem; color: var(--muted); }
