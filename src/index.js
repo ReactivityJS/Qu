@@ -22,8 +22,10 @@ export { QuIdentity } from './core/identity.js';
 export { QuClock } from './core/clock.js';
 export { debug, onDebug, enableConsoleDebug } from './core/debug.js';
 export { assertChannel, createLoopbackChannelPair } from './core/channel.js';
+export { assertStorageAdapter } from './core/storage.js';
 export { createVerifyPlugin } from './core/verify.js';
 export { createACLPlugin, filterForReader } from './core/acl.js';
+export { createIdentityACL } from './core/identity-acl.js';
 export {
   spaceIdOf,
   isUserSpaceId,
@@ -62,11 +64,14 @@ export {
 } from './data/references.js';
 export { publishFile, reassembleFile, missingChunks } from './data/files/manifest.js';
 export { DefaultFileTransfer } from './data/files/transfer.js';
+export { assertFileStorageAdapter } from './data/files/contract.js';
 export { shareFile, resolveFileRef, createFileHandlerPlugin } from './data/files/index.js';
 
 // Application modules — optional, built entirely on the public Qu/Session
-// API (see modules/spaces.js, modules/chat.js).
-export { createSpaceACLResolver, createSpace } from './modules/spaces.js';
+// API (see modules/spaces.js, modules/chat.js). createSpacesPlugin() is
+// what makes qu.createSpace() exist at all — the Core default ACL
+// (core/identity-acl.js) only ever grants `~<your fingerprint>`.
+export { createSpaceACLResolver, createSpace, createSpacesPlugin } from './modules/spaces.js';
 export {
   sendMessage, listMessages, onMessage, createChatRoom,
   markRead, getReadReceipts, onReadReceipt,

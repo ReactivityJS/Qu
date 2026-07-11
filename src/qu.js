@@ -6,14 +6,36 @@ import { userSpaceId } from './core/space.js';
 import { MemoryAdapter } from './adapters/memory.js';
 import { createVerifyPlugin } from './core/verify.js';
 import { createACLPlugin } from './core/acl.js';
-import { createSpaceACLResolver, createSpace } from './modules/spaces.js';
+import { createIdentityACL } from './core/identity-acl.js';
 
 // Tracks which Runtime instances already have the default Verify+ACL
 // middleware installed, so sharing one Runtime across several `Qu`
 // instances (e.g. several users on one server process) never registers
-// the same middleware twice. A WeakSet here, not a property on the
-// Runtime itself — Qu composes Runtime, it doesn't reach into it.
-const wiredRuntimes = new WeakSet();
+// the same middleware twice — and holds the one mutable "which policy is
+// currently in force" slot per Runtime.
+//
+// The ACL *enforcement* middleware (core/acl.js's createACLPlugin) is
+// registered on the Runtime exactly once, wrapping a stable indirection
+// function that reads `resolver.current` on every call. That's what lets a
+// plugin's `install(qu)` — which necessarily runs AFTER `Qu.create()` has
+// already resolved and already registered the middleware — still change
+// *which* policy gets consulted (e.g. the Spaces plugin swapping in
+// manifest-aware resolution), without re-registering middleware or
+// weakening the "Verify+ACL, no exceptions" guarantee: enforcement itself
+// never becomes optional, only the policy it enforces is swappable.
+const wiredRuntimes = new WeakMap(); // Runtime -> { resolver: { current: getACLFn } }
+
+function wireRuntime(runtime) {
+  let wired = wiredRuntimes.get(runtime);
+  if (!wired) {
+    const resolver = { current: createIdentityACL() };
+    runtime.use(createVerifyPlugin());
+    runtime.use(createACLPlugin((id) => resolver.current(id)));
+    wired = { resolver };
+    wiredRuntimes.set(runtime, wired);
+  }
+  return wired.resolver;
+}
 
 function isQuIdentity(x) {
   return x && typeof x.sign === 'function' && typeof x.fingerprint === 'string';
@@ -21,20 +43,25 @@ function isQuIdentity(x) {
 
 /**
  * Qu is the class most applications should actually instantiate — it wraps
- * Runtime + Store + Session + the Spaces ACL resolver behind plain instance
- * methods, so a caller doesn't need to assemble those pieces by hand for
- * the common case. QuRuntime/QuStore/QuSession/etc. remain the underlying
+ * Runtime + Store + Session behind plain instance methods, so a caller
+ * doesn't need to assemble those pieces by hand for the common case.
+ * QuRuntime/QuStore/QuSession/etc. remain the underlying
  * primitives (still directly usable — `qu.runtime` is the escape hatch)
  * for advanced composition: custom middleware ordering, non-default
  * adapters, or several `Qu` instances deliberately sharing one Runtime.
  *
- * Qu itself only knows Identity/Session/publish-get-query-on and the
- * default Space-ACL policy (zero network/storage-vendor dependency — safe
- * to use fully offline). Everything else — Files, References, Replication,
- * WebRTC, Chat — is a plugin, installed via `use()`. A plugin's underlying
- * functions (e.g. `sendMessage(qu, spaceId, opts)` in modules/chat.js)
- * always work standalone too; `use()` only adds convenience sugar
- * (`qu.sendMessage(spaceId, opts)`) on top for apps that want it.
+ * Qu itself only knows Identity/Session/publish-get-query-on and one
+ * structural ACL fact: you may always write under `~<your fingerprint>`,
+ * nothing else (see core/identity-acl.js — this costs nothing, needs no
+ * manifest or Storage round-trip, and follows directly from `fingerprint =
+ * hash(pubKey)`, so it's a property of Identity, not a policy choice).
+ * Everything else — generic multi-writer Spaces, Files, References,
+ * Replication, WebRTC, Chat — is a plugin, installed via `use()`. A
+ * plugin's underlying functions (e.g. `sendMessage(qu, spaceId, opts)` in
+ * modules/chat.js) always work standalone too; `use()` only adds
+ * convenience sugar (`qu.sendMessage(spaceId, opts)`) on top for apps that
+ * want it. `qu.createSpace()` in particular does not exist until
+ * `qu.use(createSpacesPlugin())` — see modules/spaces.js.
  *
  * Three ways to get an identity:
  *   Qu.create()                        — generates a new one
@@ -49,20 +76,14 @@ export class Qu {
   #runtime;
   #store;
   #session;
-  #acl;
+  #aclResolver;
   #guest;
 
   /** Primary entry point — async because generating/importing keys is inherently async. */
   static async create({ identity, guest = false, runtime, store } = {}) {
     const resolvedStore = store ?? new QuStore([{ prefix: '', adapter: new MemoryAdapter() }]);
     const resolvedRuntime = runtime ?? new QuRuntime({ store: resolvedStore });
-    const acl = createSpaceACLResolver(resolvedRuntime);
-
-    if (!wiredRuntimes.has(resolvedRuntime)) {
-      resolvedRuntime.use(createVerifyPlugin());
-      resolvedRuntime.use(createACLPlugin(acl));
-      wiredRuntimes.add(resolvedRuntime);
-    }
+    const aclResolver = wireRuntime(resolvedRuntime);
 
     let resolvedIdentity = null;
     if (identity) {
@@ -75,17 +96,17 @@ export class Qu {
       resolvedIdentity = await QuIdentity.generate(); // guests still get a real, ephemeral identity — see class doc
     }
 
-    return new Qu({ runtime: resolvedRuntime, store: resolvedStore, identity: resolvedIdentity, guest, acl });
+    return new Qu({ runtime: resolvedRuntime, store: resolvedStore, identity: resolvedIdentity, guest, aclResolver });
   }
 
   /** Lower-level, synchronous constructor for when you already have a resolved identity/runtime (e.g. sharing a Runtime — pass `runtime: other.runtime`). Prefer `Qu.create()` unless you need this. */
-  constructor({ runtime, store, identity = null, guest = false, acl } = {}) {
+  constructor({ runtime, store, identity = null, guest = false, aclResolver } = {}) {
     if (!runtime) throw new Error('[Qu] runtime is required — use Qu.create() unless you already have one');
     this.#runtime = runtime;
     this.#store = store ?? runtime.store;
     this.#guest = guest;
-    this.#acl = acl ?? createSpaceACLResolver(runtime);
-    this.#session = new QuSession(runtime, { identity, getACL: this.#acl });
+    this.#aclResolver = aclResolver ?? { current: createIdentityACL() };
+    this.#session = new QuSession(runtime, { identity, getACL: (id) => this.#aclResolver.current(id) });
   }
 
   // --- identity ---
@@ -136,12 +157,6 @@ export class Qu {
     return { alias: alias?.value, pub: pub?.value, epub: epub?.value };
   }
 
-  // --- spaces (Space-ACL policy is the one optional module wired by default — see class doc: zero network/storage dependency, so it's still offline-safe) ---
-  async createSpace(opts) {
-    this.#assertCanWrite('createSpace');
-    return createSpace(this.#session, opts);
-  }
-
   /**
    * Installs a plugin: either a plain `(qu) => {...}` function, or an
    * `{ install(qu) {...} }` object — the same shape `createFileHandlerPlugin()`,
@@ -158,10 +173,26 @@ export class Qu {
     return this;
   }
 
+  /**
+   * Upgrades the ACL *policy* consulted by the Verify+ACL enforcement
+   * middleware that's already running on this Qu's Runtime (registered
+   * once, in `Qu.create()` — see wireRuntime() above). This is how
+   * modules/spaces.js's createSpacesPlugin() adds generic multi-writer
+   * Spaces and manifest-granted extra writers on a User-Space: it doesn't
+   * (and can't) re-register middleware, it swaps which function that
+   * middleware asks. Affects every Qu instance sharing this Runtime, not
+   * just the one that called it — ACL is a property of the Space being
+   * written to, not of who's asking.
+   */
+  setACLResolver(getACL) {
+    this.#aclResolver.current = getACL;
+    return this;
+  }
+
   // --- escape hatch for advanced composition ---
   get runtime() { return this.#runtime; }
   get store() { return this.#store; }
   get session() { return this.#session; }
-  /** The `getACL(id)` resolver this Qu instance's Session/ACL-enforcement use — the network plugin's `connect()` passes this to DefaultReplication so remote sync honors the same read-ACL as local reads. */
-  get acl() { return this.#acl; }
+  /** The `getACL(id)` resolver this Qu instance's Session/ACL-enforcement currently use — the network plugin's `connect()` passes this to DefaultReplication so remote sync honors the same read-ACL as local reads. Always reflects the latest `setACLResolver()` call, even ones made after this getter was first read. */
+  get acl() { return (id) => this.#aclResolver.current(id); }
 }

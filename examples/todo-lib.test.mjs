@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu } from '../src/index.js';
+import { Qu, createSpacesPlugin } from '../src/index.js';
 import {
   createTodoList, canWrite, grantWriteAccess,
   addItem, setItemDone, deleteItem, listItems, onItemsChange,
 } from './todo-lib.mjs';
 
 test('owner can write immediately; a stranger cannot until granted access', async () => {
-  const owner = await Qu.create();
+  const owner = (await Qu.create()).use(createSpacesPlugin());
   const stranger = await Qu.create({ runtime: owner.runtime }); // same "relay", separate identity
 
   const listId = await createTodoList(owner);
@@ -22,7 +22,7 @@ test('owner can write immediately; a stranger cannot until granted access', asyn
 });
 
 test('granting access preserves the existing writers instead of replacing them', async () => {
-  const owner = await Qu.create();
+  const owner = (await Qu.create()).use(createSpacesPlugin());
   const alice = await Qu.create({ runtime: owner.runtime });
   const bob = await Qu.create({ runtime: owner.runtime });
 
@@ -37,7 +37,7 @@ test('granting access preserves the existing writers instead of replacing them',
 });
 
 test('a writer who is not an admin cannot grant access to someone else', async () => {
-  const owner = await Qu.create();
+  const owner = (await Qu.create()).use(createSpacesPlugin());
   const alice = await Qu.create({ runtime: owner.runtime });
   const listId = await createTodoList(owner);
   await grantWriteAccess(owner, listId, alice.fingerprint); // alice can now write items, but is not an admin
@@ -46,7 +46,7 @@ test('a writer who is not an admin cannot grant access to someone else', async (
 });
 
 test('items: add, toggle done, delete (tombstone, filtered out of listItems), live updates', async () => {
-  const owner = await Qu.create();
+  const owner = (await Qu.create()).use(createSpacesPlugin());
   const listId = await createTodoList(owner);
 
   const seen = [];
@@ -72,7 +72,7 @@ test('items: add, toggle done, delete (tombstone, filtered out of listItems), li
 });
 
 test('any writer can toggle an item another writer created — shared-list semantics, not per-author ownership', async () => {
-  const owner = await Qu.create();
+  const owner = (await Qu.create()).use(createSpacesPlugin());
   const alice = await Qu.create({ runtime: owner.runtime });
   const listId = await createTodoList(owner);
   await grantWriteAccess(owner, listId, alice.fingerprint);

@@ -1,5 +1,6 @@
 import { sha256Hex } from '../../core/bytes.js';
 import { debug } from '../../core/debug.js';
+import { assertFileStorageAdapter } from './contract.js';
 
 const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64 KiB
 const YIELD_EVERY_N_CHUNKS = 8; // give the event loop (and the WebSocket connection's own housekeeping) room to breathe on a long file
@@ -31,6 +32,7 @@ function yieldToEventLoop() {
  */
 export async function publishFile(session, id, bytes, { name, mime = 'application/octet-stream', chunkSize = DEFAULT_CHUNK_SIZE, fileStorage, refs, encryptFor } = {}) {
   if (!fileStorage) throw new Error('[publishFile] fileStorage (a FileStorageAdapter) is required');
+  assertFileStorageAdapter(fileStorage);
   const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   const chunks = splitChunks(data, chunkSize);
   debug('files', 'chunking-start', { id, size: data.length, chunkCount: chunks.length });

@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
-import { Qu, sendMessage, listMessages, createWebSocketChannel, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin } from '../src/index.js';
+import { Qu, sendMessage, listMessages, createWebSocketChannel, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
 import { createRelay } from '../relay/relay.mjs';
 import { bridgeWebSocketServer } from '../relay/node-ws-bridge.mjs';
 import { QuStore, NullAdapter } from '../src/index.js';
@@ -48,7 +48,7 @@ test('a file survives the uploader disconnecting: the relay mirrors it and serve
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const aliceFiles = new MemoryFileStorageAdapter();
-  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createFileHandlerPlugin({ fileStorage: aliceFiles }));
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createFileHandlerPlugin({ fileStorage: aliceFiles })).use(createSpacesPlugin());
   const chA = createWebSocketChannel(url);
   await chA.connect();
   const replA = await alice.connect(chA, { pushTopics: ['qu-demo-room/'] });
@@ -64,7 +64,7 @@ test('a file survives the uploader disconnecting: the relay mirrors it and serve
   await chA.close(); // alice is now fully gone
 
   const bobFiles = new MemoryFileStorageAdapter();
-  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createFileHandlerPlugin({ fileStorage: bobFiles }));
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createFileHandlerPlugin({ fileStorage: bobFiles })).use(createSpacesPlugin());
   const chB = createWebSocketChannel(url);
   await chB.connect();
   const replB = await bob.connect(chB, { pushTopics: ['qu-demo-room/'] });
@@ -85,7 +85,7 @@ test('chat data survives a relay restart when given a data directory', async () 
   const dataDir = await tmpDir('persist');
 
   const first = await startTestServer({ dataDir });
-  const alice = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(`ws://127.0.0.1:${first.port}/relay`);
   await chA.connect();
   const replA = await alice.connect(chA, { pushTopics: ['qu-demo-room/'] });
@@ -95,7 +95,7 @@ test('chat data survives a relay restart when given a data directory', async () 
 
   // Simulate the relay process restarting: a brand new server, same dataDir.
   const second = await startTestServer({ dataDir });
-  const bob = (await Qu.create()).use(createNetworkPlugin());
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chB = createWebSocketChannel(`ws://127.0.0.1:${second.port}/relay`);
   await chB.connect();
   const replB = await bob.connect(chB, { pushTopics: ['qu-demo-room/'] });
@@ -113,12 +113,12 @@ test('the signal/ mount dispatches live but is never persisted, not even across 
 
   const first = await startTestServer({ dataDir, pushTopics: ['qu-demo-room/', 'signal/'] });
 
-  const alice = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(`ws://127.0.0.1:${first.port}/relay`);
   await chA.connect();
   const replA = await alice.connect(chA, { pushTopics: ['signal/'] });
 
-  const bob = (await Qu.create()).use(createNetworkPlugin());
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chB = createWebSocketChannel(`ws://127.0.0.1:${first.port}/relay`);
   await chB.connect();
   const replB = await bob.connect(chB, { pushTopics: ['signal/'] });
@@ -145,8 +145,8 @@ test('sending a large multi-chunk image through the real relay does not break su
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const aliceFiles = new MemoryFileStorageAdapter();
-  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createFileHandlerPlugin({ fileStorage: aliceFiles }));
-  const bob = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createFileHandlerPlugin({ fileStorage: aliceFiles })).use(createSpacesPlugin());
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(url);
   const chB = createWebSocketChannel(url);
   await chA.connect();

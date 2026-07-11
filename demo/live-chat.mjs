@@ -1,4 +1,4 @@
-import { Qu, createWebSocketChannel, MemoryFileStorageAdapter, reassembleFile, onDebug, createNetworkPlugin, createFileHandlerPlugin } from '../src/index.js';
+import { Qu, createWebSocketChannel, MemoryFileStorageAdapter, reassembleFile, onDebug, createNetworkPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
 import {
   sendMessage, listMessages, onMessage, createChatRoom,
   markRead, getReadReceipts, onReadReceipt,
@@ -89,6 +89,7 @@ async function main() {
   const localFileStorage = new MemoryFileStorageAdapter();
   qu.use(createNetworkPlugin());
   qu.use(createFileHandlerPlugin({ fileStorage: localFileStorage }));
+  qu.use(createSpacesPlugin()); // ROOM_ID is a generic (non-User) Space — the Core default only ever grants your own ~<fingerprint>/**
 
   // Mobile browsers frequently kill a background WebSocket connection
   // outright when the screen turns off or the tab is backgrounded, to save

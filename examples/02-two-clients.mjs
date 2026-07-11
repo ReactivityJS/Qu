@@ -14,11 +14,11 @@
 //
 // Ausführen: node examples/02-two-clients.mjs
 
-import { Qu, createLoopbackChannelPair, createNetworkPlugin } from '../src/index.js';
+import { Qu, createLoopbackChannelPair, createNetworkPlugin, createSpacesPlugin } from '../src/index.js';
 
 async function main() {
-  const alice = (await Qu.create()).use(createNetworkPlugin());
-  const bob = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   console.log('Alice:', alice.fingerprint);
   console.log('Bob:  ', bob.fingerprint);
 

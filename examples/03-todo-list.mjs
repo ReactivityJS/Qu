@@ -3,7 +3,7 @@
 // denselben universellen Relay wie die Chat-Demo (kein eigener Server-Code
 // für ToDo-Listen nötig — siehe relay/relay.mjs).
 
-import { Qu, createWebSocketChannel, createNetworkPlugin } from '../src/index.js';
+import { Qu, createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../src/index.js';
 import { createTodoList, canWrite, grantWriteAccess, addItem, setItemDone, deleteItem, listItems, onItemsChange } from './todo-lib.mjs';
 
 const IDENTITY_KEY = 'qu-todo-identity-keys'; // eigener Key, unabhängig von der Chat-Demo — jedes Beispiel ist für sich verständlich
@@ -37,7 +37,7 @@ async function main() {
   // Bewusst kein Reconnect-Handling hier (siehe demo/live-chat.mjs für
   // die vollständige Version mit Backoff + visibilitychange) — dieses
   // Beispiel zeigt Space + ACL + Teilen, nicht Verbindungs-Robustheit.
-  const qu = (await loadOrCreateIdentity()).use(createNetworkPlugin());
+  const qu = (await loadOrCreateIdentity()).use(createNetworkPlugin()).use(createSpacesPlugin());
   myFpEl.textContent = qu.fingerprint;
 
   const channel = createWebSocketChannel(relayUrl());

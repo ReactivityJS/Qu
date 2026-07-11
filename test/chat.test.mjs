@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu, MemoryFileStorageAdapter, sendMessage, listMessages, createChatRoom, markRead, getReadReceipts, setPresence, getPresence, startHeartbeat, createFileHandlerPlugin } from '../src/index.js';
+import { Qu, MemoryFileStorageAdapter, sendMessage, listMessages, createChatRoom, markRead, getReadReceipts, setPresence, getPresence, startHeartbeat, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
 
 test('append(): two different writers can never collide on the same message id, even with an identical timestamp', async () => {
-  const alice = await Qu.create();
+  const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
   const roomId = await alice.createSpace({ writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] });
 
@@ -17,7 +17,7 @@ test('append(): two different writers can never collide on the same message id, 
 });
 
 test('a message id containing another writer\'s fingerprint does not change the actual signed authorship', async () => {
-  const alice = await Qu.create();
+  const alice = (await Qu.create()).use(createSpacesPlugin());
   const mallory = await Qu.create({ runtime: alice.runtime });
   const roomId = await alice.createSpace({ writers: ['*'], readers: ['*'] });
 
@@ -30,7 +30,7 @@ test('a message id containing another writer\'s fingerprint does not change the 
 });
 
 test('1:1 chat: two members can exchange messages, a third party cannot read them', async () => {
-  const alice = await Qu.create();
+  const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
   const mallory = await Qu.create({ runtime: alice.runtime });
 
@@ -45,7 +45,7 @@ test('1:1 chat: two members can exchange messages, a third party cannot read the
 });
 
 test('group chat: three members can all write, order is preserved by timestamp', async () => {
-  const alice = await Qu.create();
+  const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
   const carol = await Qu.create({ runtime: alice.runtime });
   const roomId = await createChatRoom(alice, [alice.fingerprint, bob.fingerprint, carol.fingerprint]);
@@ -60,7 +60,7 @@ test('group chat: three members can all write, order is preserved by timestamp',
 });
 
 test('an image attachment round-trips via refs + File-Handling, addressed the same collision-safe way as messages', async () => {
-  const alice = await Qu.create();
+  const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
   const roomId = await createChatRoom(alice, [alice.fingerprint, bob.fingerprint]);
   const fileStorage = new MemoryFileStorageAdapter();
@@ -80,7 +80,7 @@ test('an image attachment round-trips via refs + File-Handling, addressed the sa
 });
 
 test('read receipts: a per-reader LWW slot, keyed by verified writer not by path', async () => {
-  const alice = await Qu.create();
+  const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
   const roomId = await createChatRoom(alice, [alice.fingerprint, bob.fingerprint]);
   const { qubit: m1 } = await sendMessage(alice, roomId, { text: 'hi' });
@@ -92,7 +92,7 @@ test('read receipts: a per-reader LWW slot, keyed by verified writer not by path
 });
 
 test('presence: online while heartbeating, offline after an explicit stop, stale entries are not reported online', async () => {
-  const alice = await Qu.create();
+  const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
   const roomId = await createChatRoom(alice, [alice.fingerprint, bob.fingerprint]);
 

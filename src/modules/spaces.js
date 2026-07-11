@@ -1,6 +1,12 @@
 import { spaceIdOf, isUserSpaceId, fingerprintOfUserSpace, randomSpaceId } from '../core/space.js';
 
 /**
+ * The Spaces plugin: replaces the Core's zero-config default ACL
+ * (core/identity-acl.js — "write only under your own `~<fingerprint>`,
+ * nothing else") with manifest-aware resolution. Without this plugin
+ * installed, `qu.createSpace()` does not exist and no generic (non-User)
+ * Space is ever writable, at all — see qu.js's `setACLResolver()`.
+ *
  * ACLs are bound to Spaces, not to individual paths or messages — one
  * manifest QuBit per Space, stored exactly at the Space's own root id.
  * This is a `getACL(id)` implementation, so it plugs directly into the
@@ -10,7 +16,8 @@ import { spaceIdOf, isUserSpaceId, fingerprintOfUserSpace, randomSpaceId } from 
  * User-Space (`~<fingerprint>`): the owner is always a writer/admin, with
  * or without a manifest, and no manifest content can remove that — you
  * cannot be locked out of your own identity root. A manifest can only ADD
- * writers beyond the owner.
+ * writers beyond the owner — the one behavior this plugin adds on top of
+ * the Core default, for User-Spaces specifically.
  *
  * Generic Space (uuid): no implicit owner. Bootstrap rule: before any
  * manifest exists, anyone may write (including the first manifest itself —
@@ -56,4 +63,23 @@ export async function createSpace(session, { writers = [], readers = ['*'], admi
   const adminList = admins ?? (session.fingerprint ? [session.fingerprint] : []);
   await session.publish(spaceId, { admins: adminList, writers, readers, createdAt: Date.now() });
   return spaceId;
+}
+
+/**
+ * `qu.use(createSpacesPlugin())` — swaps the Core's identity-only default
+ * ACL for this manifest-aware one (via `qu.setACLResolver()`, affecting
+ * every Qu instance sharing this Runtime, not just the caller) and attaches
+ * `qu.createSpace(opts)`. Without this, `createChatRoom()`/any multi-writer
+ * Space is unwritable — the Core default only ever grants `~<own fingerprint>`.
+ */
+export function createSpacesPlugin() {
+  return {
+    install(qu) {
+      qu.setACLResolver(createSpaceACLResolver(qu.runtime));
+      qu.createSpace = async (opts) => {
+        if (qu.isGuest) throw new Error('[Spaces] Guest-Sessions haben kein Schreibrecht (versucht: createSpace). Mit Qu.create({ identity }) eine echte Identität verwenden.');
+        return createSpace(qu.session, opts);
+      };
+    },
+  };
 }

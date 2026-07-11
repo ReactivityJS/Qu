@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { Qu, sendMessage, listMessages, createNetworkPlugin } from '../src/index.js';
+import { Qu, sendMessage, listMessages, createNetworkPlugin, createSpacesPlugin } from '../src/index.js';
 import { createWebSocketChannel } from '../src/network/transports/websocket-browser.js';
 import { createRelay } from '../relay/relay.mjs';
 import { bridgeWebSocketServer } from '../relay/node-ws-bridge.mjs';
@@ -21,8 +21,8 @@ test('two independent WebSocket clients exchange a chat message via the real rel
   const { server, port } = await startTestServer();
   const url = `ws://127.0.0.1:${port}/relay`;
 
-  const alice = (await Qu.create()).use(createNetworkPlugin());
-  const bob = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
 
   const chA = createWebSocketChannel(url);
   const chB = createWebSocketChannel(url);
@@ -52,14 +52,14 @@ test('a third, later-connecting client syncs existing room history from the rela
   const { server, port } = await startTestServer();
   const url = `ws://127.0.0.1:${port}/relay`;
 
-  const alice = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(url);
   await chA.connect();
   const replA = await alice.connect(chA, { pushTopics: ['qu-demo-room/'] });
   await sendMessage(alice, 'qu-demo-room', { text: 'already here before carol joins' });
   await wait(50);
 
-  const carol = (await Qu.create()).use(createNetworkPlugin());
+  const carol = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chC = createWebSocketChannel(url);
   await chC.connect();
   const replC = await carol.connect(chC, { pushTopics: ['qu-demo-room/'] });
@@ -81,8 +81,8 @@ test('createWebSocketChannel().isOpen() reflects real connection state, and reco
   const { server, port } = await startTestServer();
   const url = `ws://127.0.0.1:${port}/relay`;
 
-  const alice = (await Qu.create()).use(createNetworkPlugin());
-  const bob = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   let chA = createWebSocketChannel(url);
   const chB = createWebSocketChannel(url);
   await chA.connect();
@@ -123,9 +123,9 @@ test('routed events (qu.route) are forwarded to the correct fingerprint, with th
   const { server, port } = await startTestServer();
   const url = `ws://127.0.0.1:${port}/relay`;
 
-  const alice = (await Qu.create()).use(createNetworkPlugin());
-  const bob = (await Qu.create()).use(createNetworkPlugin());
-  const mallory = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const mallory = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(url);
   const chB = createWebSocketChannel(url);
   const chM = createWebSocketChannel(url);
@@ -172,8 +172,8 @@ test('routed events (qu.route) are forwarded to the correct fingerprint, with th
 test('a routed event is never persisted — it never reaches the relay\'s own store, unlike publish()/append()', async () => {
   const { server, port, relay } = await startTestServer();
   const url = `ws://127.0.0.1:${port}/relay`;
-  const alice = (await Qu.create()).use(createNetworkPlugin());
-  const bob = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(url);
   const chB = createWebSocketChannel(url);
   await chA.connect();
@@ -197,7 +197,7 @@ test('a routed event is never persisted — it never reaches the relay\'s own st
 test('signaling to an offline/unknown fingerprint is silently dropped, not queued or errored back to the sender', async () => {
   const { server, port } = await startTestServer();
   const url = `ws://127.0.0.1:${port}/relay`;
-  const alice = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(url);
   await chA.connect();
   await alice.connect(chA, { pushTopics: [] });

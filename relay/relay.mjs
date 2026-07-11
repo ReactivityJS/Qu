@@ -1,4 +1,4 @@
-import { Qu, QuStore, MemoryAdapter, NullAdapter, ReplicationHub, createSpaceACLResolver, DefaultFileTransfer, MemoryFileStorageAdapter } from '../src/index.js';
+import { Qu, QuStore, MemoryAdapter, NullAdapter, ReplicationHub, createSpacesPlugin, DefaultFileTransfer, MemoryFileStorageAdapter } from '../src/index.js';
 import { debug } from '../src/core/debug.js';
 
 /**
@@ -34,9 +34,8 @@ export async function createRelay({
   identity,
   pushTopics = [],
 } = {}) {
-  const relay = await Qu.create({ store, identity });
-  const acl = createSpaceACLResolver(relay.runtime);
-  const hub = new ReplicationHub(relay.runtime, { identity: relay.identity, getACL: acl, pushTopics });
+  const relay = (await Qu.create({ store, identity })).use(createSpacesPlugin()); // generic (non-User) rooms — the relay's own Runtime enforces this on every incoming push, exactly like any other write
+  const hub = new ReplicationHub(relay.runtime, { identity: relay.identity, getACL: relay.acl, pushTopics });
   const connected = new Map(); // fingerprint -> { channel, fileTransfer }
 
   // Proactively mirror a file's chunks from its uploader while they're

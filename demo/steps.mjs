@@ -6,7 +6,7 @@
 // deliberately what an application would actually write, not the lower-
 // level Runtime/Store/Session wiring the facade composes internally.
 
-import { Qu, createLoopbackChannelPair, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin } from '../src/index.js';
+import { Qu, createLoopbackChannelPair, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -15,13 +15,13 @@ export const steps = [
     id: 'identities',
     title: '1 · Drei Instanzen, drei getrennte Geräte',
     description: 'Jede Qu.create() erzeugt eine eigene Identität UND ein eigenes, unabhängiges Gerät (eigene Runtime, eigener Store) — kein manuelles Verdrahten von Runtime/Store/Session nötig.',
-    code: `const alice = (await Qu.create()).use(createNetworkPlugin());
-const bob = (await Qu.create()).use(createNetworkPlugin());
+    code: `const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
 const mallory = await Qu.create();`,
     kind: 'info',
     async run(ctx) {
-      ctx.alice = (await Qu.create()).use(createNetworkPlugin());
-      ctx.bob = (await Qu.create()).use(createNetworkPlugin());
+      ctx.alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+      ctx.bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
       ctx.mallory = await Qu.create();
       return { 'alice.fingerprint': ctx.alice.fingerprint, 'bob.fingerprint': ctx.bob.fingerprint, 'mallory.fingerprint': ctx.mallory.fingerprint };
     },

@@ -22,12 +22,16 @@ import { Qu } from './src/index.js';
 
 ```js
 const alice = await Qu.create();
-await alice.publish('chat/room1/msg1', { text: 'hello' });
-alice.on('chat/room1/**', (qubit) => console.log(qubit.value));
+await alice.publish(`${alice.userSpaceId}/chat/room1/msg1`, { text: 'hello' });
+alice.on(`${alice.userSpaceId}/chat/room1/**`, (qubit) => console.log(qubit.value));
 ```
 
+Ohne jedes Plugin ist nur dein eigener `~<fingerprint>`-Space beschreibbar
+(`core/identity-acl.js`) — für geteilte, generische Spaces (Chat-Räume,
+ToDo-Listen, …) `qu.use(createSpacesPlugin())`.
+
 `Qu` ist die empfohlene Fassade — sie erzeugt (oder importiert) eine
-Identität und verdrahtet Runtime/Store/Session/Space-ACL im Hintergrund,
+Identität und verdrahtet Runtime/Store/Session im Hintergrund,
 sodass man für den Normalfall keine mehreren Bausteine von Hand
 zusammensetzen muss. **Der Core selbst ist local-only/offline**: ohne
 weiteres Zutun landet alles im `MemoryAdapter`, es wird kein Netzwerk-Code
@@ -71,12 +75,17 @@ src/
                           (Core + Memory/Null-Adapter + alle Plugin-Factories —
                           kein node:fs, kein Browser-only-Code zwingend geladen)
   qu.js                   Qu — schlanke Fassade: Identity/Session/publish+append+
-                          get+query+on/Space-ACL, plus generisches qu.use(plugin)
+                          get+query+on, plus generisches qu.use(plugin) und
+                          qu.setACLResolver() (der Erweiterungspunkt, den
+                          createSpacesPlugin() nutzt)
   core/                  lokal, offline-sicher, keine Netzwerk-/Storage-Vendor-
                           Abhängigkeit: Pipeline, Runtime, Store (Adapter-Mounts),
                           Session, Identity, Clock, Subscription Engine (Trie),
-                          Channel-Contract, Space, Bytes, Debug, Verify (Zero-
-                          Trust-Signaturprüfung), ACL-Enforcement, Sign (canonical
+                          Channel-Contract, StorageAdapter-Contract, Space,
+                          Bytes, Debug, Verify (Zero-Trust-Signaturprüfung),
+                          ACL-Enforcement, **Identity-ACL** (Zero-Config-
+                          Default: nur dein eigenes ~<fingerprint> ist
+                          beschreibbar — siehe unten), Sign (canonical
                           payload), Crypto (ECDH+HKDF+AES-256-GCM)
   adapters/              Kategorie 1 — Storage-Adapter: Memory · Null ·
                           MemoryFileStorage (Core-Default) · LocalStorage ·
@@ -93,13 +102,18 @@ src/
                           (obj://, key://, file:// — ReferenceHandler, Tiefen-
                           limit konfigurierbar), files/{manifest,transfer}.js
                           (Chunking/Content-Addressing/Transfer-Protokoll,
-                          unverändert), files/index.js (FileHandler — file://-
+                          unverändert), files/contract.js (FileStorageAdapter-
+                          Contract), files/index.js (FileHandler — file://-
                           Wrapper, createFileHandlerPlugin)
   modules/                Anwendungsmodule, optional, nur auf öffentlicher
                           Runtime/Session/Qu-API aufgebaut:
-    spaces.js              Space-ACL-Resolver (Manifest-basiert) — der eine
-                          Default, den Qu.create() der Ergonomie halber
-                          mitbringt (keine Netzwerk-/Storage-Abhängigkeit)
+    spaces.js              createSpacesPlugin() — Space-ACL-Resolver
+                          (Manifest-basiert) + qu.createSpace(). Ersetzt den
+                          Core-Default (core/identity-acl.js: nur dein
+                          eigenes ~<fingerprint>) durch manifest-bewusste
+                          Auflösung; ohne dieses Plugin existiert
+                          qu.createSpace() gar nicht und kein generischer
+                          Space ist beschreibbar
     chat.js                  Räume, Nachrichten, Anhänge, Presence, Lesebestätigungen
                           (auf append()+publish() aufgebaut), createChatPlugin
 test/
@@ -133,12 +147,30 @@ relay/
 ## Core, Storage, Network, Data — wie die Plugins zusammenspielen
 
 Ein `Qu.create()` ohne jedes `use()` ist vollständig lokal: Identity, Session,
-`publish`/`append`/`get`/`query`/`on`, `resolveRefs`, Space-ACL — alles auf
-dem `MemoryAdapter`, kein `node:fs`-Import, kein `WebSocket`/`RTCPeerConnection`
+`publish`/`append`/`get`/`query`/`on`, `resolveRefs` — alles auf dem
+`MemoryAdapter`, kein `node:fs`-Import, kein `WebSocket`/`RTCPeerConnection`
 je referenziert. Das ist mit einem einzigen Test abgesichert
 (`grep` auf `src/index.js` findet keinen Netzwerk-/Node-Import) und mit
 einem End-to-End-Smoke-Test (`Qu.create()` → `publish`/`get` → funktioniert,
 ganz ohne Plugin).
+
+**Der ACL-Default ist bewusst strikt, nicht "offen bis konfiguriert":** ohne
+jedes Plugin darfst du ausschließlich unter deinem eigenen
+`~<fingerprint>/**` schreiben, sonst nirgends (`core/identity-acl.js`). Das
+ist keine Sicherheitslücke, die später gestopft wird, sondern die einzige
+ACL-Tatsache, die strukturell zur Identität selbst gehört: `fingerprint =
+hash(pubKey)` (`core/identity.js`) bedeutet bereits, dass nur du je eine
+gültige Signatur für `writer = <dein Fingerprint>` erzeugen kannst — "du
+darfst unter deinem eigenen Space schreiben" kostet also nichts extra, kein
+Manifest, kein Storage-Roundtrip. Generische (Nicht-User-)Spaces,
+zusätzliche Writer auf deinem eigenen Space per Manifest, `readers`/`admins`-
+Listen — das sind echte Policy-Entscheidungen, keine strukturellen, und
+gehören dem Spaces-Plugin (`createSpacesPlugin()`, siehe Punkt 4 unten).
+`qu.setACLResolver(getACL)` ist der Erweiterungspunkt, den das Plugin nutzt
+— er tauscht aus, *welche* Policy die bereits laufende Verify+ACL-Middleware
+befragt, ohne sie neu zu registrieren (die Middleware selbst ist immer aktiv,
+nie optional) und wirkt für **alle** Qu-Instanzen, die sich ein Runtime
+teilen, nicht nur für die aufrufende.
 
 Alles darüber hinaus ist eine von drei Plugin-Kategorien, jede über
 `qu.use(plugin)` andockbar (oder — für die zugrundeliegenden Funktionen —
@@ -175,14 +207,26 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
      begrenzt, wie viele Referenz-Hops kaskadiert werden — inklusive
      Zyklenschutz (ein Ref, der auf sich selbst zurückführt, bleibt ab dem
      zweiten Auftreten im selben Pfad unaufgelöst statt zu hängen).
+4. **Spaces** (`src/modules/spaces.js`, `createSpacesPlugin()`) — löst den
+   Core-Default (nur `~<eigener-fingerprint>`) durch manifest-bewusste ACL-
+   Auflösung ab: generische (UUID-)Spaces mit `writers`/`readers`/`admins`,
+   und zusätzliche Writer auf einem User-Space per Manifest. Fügt
+   `qu.createSpace(opts)` hinzu — ohne dieses Plugin existiert die Methode
+   nicht, und `createChatRoom()`/jede Multi-Writer-Anwendung ist
+   unbeschreibbar. Kein Storage-/Netzwerk-Bezug, also weiterhin offline-
+   sicher — aber eine echte Policy-Entscheidung, kein struktureller
+   Core-Bestandteil, deshalb Plugin statt Default.
 
-Anwendungsmodule (`src/modules/`) — der Space-ACL-Resolver und Chat — sind
-eine vierte, lockerere Kategorie: fertige Bausteine, ausschließlich auf der
-öffentlichen Runtime/Session/Qu-API aufgebaut, kein Sonderzugriff auf den
-Core. `chat.js`s Text-Pfad (`sendMessage`/`listMessages`/…) braucht selbst
-kein Netzwerk-Plugin — nur `append()`/`query()`/`createSpace()`, alles
-Core. Anhänge brauchen zusätzlich einen `FileHandler`; Mehrgeräte-Sync
-zusätzlich einen `NetworkPlugin` — Chat selbst bleibt davon unwissend.
+`chat.js` (`src/modules/chat.js`, `createChatPlugin()`) ist die eine
+lockerere, nicht-numerierte Kategorie: ein fertiger Baustein, ausschließlich
+auf der öffentlichen Runtime/Session/Qu-API aufgebaut, kein Sonderzugriff
+auf den Core — eher Beispielcode als Architektur. Sein Text-Pfad
+(`sendMessage`/`listMessages`/…) braucht `append()`/`query()` (Core) und
+`createSpace()` (Spaces-Plugin, für den geteilten Room) — aber kein
+Netzwerk-Plugin: eine Chat-Room bleibt vollständig lokal nutzbar, nur ohne
+Mehrgeräte-Sync. Anhänge brauchen zusätzlich einen `FileHandler`;
+Mehrgeräte-Sync zusätzlich einen `NetworkPlugin` — Chat selbst bleibt davon
+unwissend.
 
 ## Im Browser (Server starten)
 

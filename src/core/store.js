@@ -4,13 +4,14 @@
 // draft's query(), which always did a full unfiltered adapter.getAll() scan
 // — passes the concrete prefix down to the adapter so adapters that *can*
 // filter efficiently (IndexedDB range cursor, SQL WHERE, etc.) are able to.
+import { assertStorageAdapter } from './storage.js';
 
 export class QuStore {
   #mounts = []; // [{ prefix, adapter, replicate }], sorted longest-prefix-first
 
   constructor(mounts) {
     this.#mounts = [...mounts]
-      .map((m) => ({ replicate: true, ...m }))
+      .map((m) => ({ replicate: true, ...m, adapter: assertStorageAdapter(m.adapter) }))
       .sort((a, b) => b.prefix.length - a.prefix.length);
   }
 

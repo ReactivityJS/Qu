@@ -16,7 +16,7 @@
 //   4. Audio/Video als zusätzliche Tracks auf DERSELBEN RTCPeerConnection,
 //      nicht als zweite Verbindung.
 
-import { Qu, createWebSocketChannel, createNetworkPlugin } from '../src/index.js';
+import { Qu, createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../src/index.js';
 
 const IDENTITY_KEY = 'qu-webrtc-example-identity';
 
@@ -57,7 +57,7 @@ function conversationTopic(fpA, fpB) {
 }
 
 async function main() {
-  const qu = (await loadOrCreateIdentity()).use(createNetworkPlugin());
+  const qu = (await loadOrCreateIdentity()).use(createNetworkPlugin()).use(createSpacesPlugin());
   myFpEl.textContent = qu.fingerprint;
 
   // Signaling-Kanal: die normale Relay-Verbindung. WebRTC selbst kennt

@@ -1,20 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu, QuIdentity, createLoopbackChannelPair, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin } from '../src/index.js';
+import { Qu, QuIdentity, createLoopbackChannelPair, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
 
-test('Qu.create() generates an identity and can publish/query', async () => {
+test('Qu.create() generates an identity and can publish/query — under its own User-Space, with zero plugins installed', async () => {
   const alice = await Qu.create();
   assert.ok(alice.fingerprint);
-  await alice.publish('chat/room1/msg1', { text: 'hi' });
-  const rows = await alice.query('chat/room1/**');
+  await alice.publish(`${alice.userSpaceId}/chat/room1/msg1`, { text: 'hi' });
+  const rows = await alice.query(`${alice.userSpaceId}/chat/room1/**`);
   assert.equal(rows[0].value.text, 'hi');
 });
 
-test('a guest instance has an identity but cannot write', async () => {
-  const guest = await Qu.create({ guest: true });
+test('without the Spaces plugin, a generic (non-User) path is unwritable — the Core default only ever grants your own User-Space', async () => {
+  const alice = await Qu.create();
+  assert.equal(typeof alice.createSpace, 'undefined', 'createSpace() must not exist before qu.use(createSpacesPlugin())');
+  await assert.rejects(() => alice.publish('chat/room1/msg1', 'nope'), /\[ACL\] Write denied/);
+});
+
+test('a guest instance has an identity but cannot write — even to its own User-Space, even with createSpace() available', async () => {
+  const guest = (await Qu.create({ guest: true })).use(createSpacesPlugin());
   assert.ok(guest.fingerprint, 'guests still get a real, ephemeral identity');
   assert.equal(guest.isGuest, true);
-  await assert.rejects(() => guest.publish('chat/room1/msg1', 'nope'));
+  await assert.rejects(() => guest.publish(`${guest.userSpaceId}/msg1`, 'nope'));
   await assert.rejects(() => guest.createSpace());
 });
 
@@ -34,7 +40,7 @@ test('publishProfile()/readProfile() use individual leaf QuBits under the User-S
 });
 
 test('two Qu instances can share one Runtime without double-registering middleware', async () => {
-  const alice = await Qu.create();
+  const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
 
   const rA = await alice.publish('shared/note1', 'from alice');
@@ -44,7 +50,7 @@ test('two Qu instances can share one Runtime without double-registering middlewa
 });
 
 test('createSpace() via the facade produces a working, ACL-enforced Space', async () => {
-  const alice = await Qu.create();
+  const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
   const roomId = await alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] });
 
@@ -54,8 +60,8 @@ test('createSpace() via the facade produces a working, ACL-enforced Space', asyn
 });
 
 test('connect() authenticates the channel and returns a working DefaultReplication', async () => {
-  const alice = (await Qu.create()).use(createNetworkPlugin());
-  const bob = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const { a, b } = createLoopbackChannelPair();
 
   const [replAlice, replBob] = await Promise.all([alice.connect(a), bob.connect(b)]);
@@ -74,7 +80,7 @@ test('shareFile()/fileTransfer() work through the facade', async () => {
   const bob = (await Qu.create()).use(createFileHandlerPlugin({ fileStorage: bobFiles }));
   const bytes = new TextEncoder().encode('hello file');
 
-  const { manifestId } = await alice.shareFile('files/f1', bytes, { name: 'f.txt', fileStorage: aliceFiles });
+  const { manifestId } = await alice.shareFile(`${alice.userSpaceId}/files/f1`, bytes, { name: 'f.txt', fileStorage: aliceFiles }); // under alice's own User-Space — no Spaces plugin needed; bob's runtime accepts it on ingest because the ACL check is id-owner-based, not "who's asking locally"
 
   const { a: chA, b: chB } = createLoopbackChannelPair();
   const xferAlice = alice.fileTransfer(chA, aliceFiles);
@@ -99,7 +105,7 @@ test('Qu.create({ identity }) reuses an existing QuIdentity or re-imported keys'
 });
 
 test('qu.connect() with role/group/metric registers a route; without them, behaves exactly as before (no router involvement)', async () => {
-  const alice = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const bob = (await Qu.create({ runtime: alice.runtime })).use(createNetworkPlugin());
 
   const { a: chMirror, b: chMirrorPeer } = createLoopbackChannelPair('a-mirror', 'b-mirror');

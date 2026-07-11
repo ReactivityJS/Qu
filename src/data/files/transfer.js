@@ -3,6 +3,7 @@ import { sha256Hex, toB64, fromB64 } from '../../core/bytes.js';
 import { missingChunks } from './manifest.js';
 import { filterForReader } from '../../core/acl.js';
 import { debug } from '../../core/debug.js';
+import { assertFileStorageAdapter } from './contract.js';
 
 /**
  * File-Handling is an optional Module, same standing as Replication — it
@@ -49,7 +50,7 @@ export class DefaultFileTransfer {
   constructor(runtime, channel, fileStorage, { getACL = async () => null, peerFingerprint = null } = {}) {
     this.#runtime = runtime;
     this.#channel = assertChannel(channel);
-    this.#fileStorage = fileStorage;
+    this.#fileStorage = assertFileStorageAdapter(fileStorage);
     this.#getACL = getACL;
     this.#peerFingerprint = peerFingerprint;
     this.#off = channel.onMessage((msg) => this.#handleMessage(msg));
