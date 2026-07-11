@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Beispiel: Teilbare ToDo-Liste</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+  <style>
+    .todo-shell { max-width: 640px; }
+    .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+    .box h2 { margin: 0 0 0.6rem; font-size: 0.95rem; color: var(--accent); }
+    .box p { margin: 0.3rem 0; font-size: 0.85rem; color: var(--muted); }
+    code.fp { display: block; background: #00000066; padding: 0.5rem 0.7rem; border-radius: 6px; font-size: 0.8rem; word-break: break-all; margin: 0.4rem 0; }
+    .row { display: flex; gap: 0.5rem; }
+    .row input[type="text"] { flex: 1; background: #00000066; border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.6rem; color: var(--text); font-size: 0.85rem; }
+    .row button { background: var(--accent); color: #0f1115; border: none; border-radius: 6px; padding: 0.45rem 0.9rem; font-weight: 600; cursor: pointer; }
+    #writers { font-size: 0.78rem; color: var(--muted); word-break: break-all; }
+    #readonly-notice { color: var(--fail); font-size: 0.85rem; }
+    ul#items { list-style: none; margin: 0; padding: 0; }
+    ul#items li { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+    ul#items li.done span:first-of-type { text-decoration: line-through; color: var(--muted); }
+    ul#items li span:first-of-type { flex: 1; }
+    .item-meta { font-size: 0.72rem; color: var(--muted); }
+    ul#items li button { background: none; border: none; color: var(--fail); cursor: pointer; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <main class="todo-shell">
+    <a class="back" href="/examples/index.html">&larr; Zurück</a>
+    <h1>Teilbare ToDo-Liste</h1>
+    <p class="lede">
+      Zeigt: eine Liste ist nur ein <code>Space</code>; Teilen heißt, den Link mit der
+      Space-ID zu verschicken; Schreibrecht wird explizit per Fingerprint-String erteilt —
+      siehe <a href="/docs/view.html?file=/examples/README.md">Erklärung</a>.
+    </p>
+    <div id="status" class="chat-status">Verbinde …</div>
+
+    <div class="box">
+      <h2>Dein Fingerprint</h2>
+      <p>Schicke ihn dem Besitzer der Liste, damit er/sie dich freischalten kann.</p>
+      <code class="fp" id="my-fp">…</code>
+    </div>
+
+    <div class="box" hidden>
+      <h2>Liste teilen</h2>
+      <p>Diesen Link weitergeben — jeder kann die Liste damit sehen, aber noch nicht bearbeiten.</p>
+      <input type="text" id="share-link" readonly onclick="this.select()" style="width:100%; background:#00000066; border:1px solid var(--border); border-radius:6px; padding:0.5rem; color:var(--text); font-size:0.8rem;" />
+    </div>
+
+    <div class="box">
+      <h2>Schreibrecht erteilen (nur als Besitzer/Admin sichtbar)</h2>
+      <form id="grant-form" class="row" hidden>
+        <input type="text" id="grant-fp" placeholder="Fingerprint einfügen …" />
+        <button type="submit">Freischalten</button>
+      </form>
+      <p>Aktuelle Schreibrechte: <span id="writers">…</span></p>
+    </div>
+
+    <p id="readonly-notice" hidden>Du hast nur Lesezugriff — schicke dein Fingerprint (oben) an den Besitzer.</p>
+
+    <form id="add-form" class="row" hidden style="margin-bottom: 1rem;">
+      <input type="text" id="add-text" placeholder="Neuer Eintrag …" />
+      <button type="submit">Hinzufügen</button>
+    </form>
+
+    <ul id="items"></ul>
+  </main>
+
+  <script type="module" src="./03-todo-list.mjs"></script>
+</body>
+</html>

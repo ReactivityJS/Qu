@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Quelltext</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+  <style>
+    #content pre { padding: 1.5rem; font-size: 0.85rem; line-height: 1.6; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="/index.html">&larr; Zurück</a>
+    <div id="content">Lade…</div>
+  </main>
+  <script type="module">
+    // Deliberately NOT the markdown viewer (docs/view.html) — running .mjs
+    // source through marked.js would treat it as prose, not code, and
+    // mangle anything that looks like markdown syntax (backticks, #, *).
+    const params = new URLSearchParams(location.search);
+    const file = params.get('file');
+    const content = document.getElementById('content');
+    if (!file) {
+      content.textContent = 'Kein ?file=... angegeben.';
+    } else {
+      try {
+        const res = await fetch(file);
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        const text = await res.text();
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.textContent = text;
+        pre.appendChild(code);
+        content.textContent = '';
+        content.appendChild(pre);
+        document.title = `QU — ${file.split('/').pop()}`;
+      } catch (e) {
+        content.textContent = `Konnte ${file} nicht laden: ${e.message}`;
+      }
+    }
+  </script>
+</body>
+</html>

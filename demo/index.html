@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Demo (Browser)</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <main>
+    <a class="back" href="/index.html">&larr; Zurück</a>
+    <h1>QU Demo — Alice &amp; Bob, zwei Geräte, ein Framework</h1>
+    <p class="lede">
+      Dieselbe Logik wie <code>npm run demo</code> (aus <code>demo/steps.mjs</code>) —
+      hier visuell dargestellt: jeder Schritt zeigt den tatsächlich ausgeführten Code
+      und das Ergebnis, inklusive zweier absichtlich fehlschlagender Sicherheits-Demos.
+    </p>
+    <div id="demo"></div>
+  </main>
+
+  <script type="module">
+    import { renderDemo } from './browser-demo.mjs';
+    renderDemo(document.getElementById('demo'));
+  </script>
+</body>
+</html>

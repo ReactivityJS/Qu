@@ -1,0 +1,59 @@
+import { spaceIdOf, isUserSpaceId, fingerprintOfUserSpace, randomSpaceId } from '../core/space.js';
+
+/**
+ * ACLs are bound to Spaces, not to individual paths or messages — one
+ * manifest QuBit per Space, stored exactly at the Space's own root id.
+ * This is a `getACL(id)` implementation, so it plugs directly into the
+ * existing createACLPlugin/filterForReader without either of those needing
+ * to know Spaces exist.
+ *
+ * User-Space (`~<fingerprint>`): the owner is always a writer/admin, with
+ * or without a manifest, and no manifest content can remove that — you
+ * cannot be locked out of your own identity root. A manifest can only ADD
+ * writers beyond the owner.
+ *
+ * Generic Space (uuid): no implicit owner. Bootstrap rule: before any
+ * manifest exists, anyone may write (including the first manifest itself —
+ * first-write-wins). Once a manifest exists, it governs. This is a known,
+ * accepted v1 simplification (a race for the very first write is possible);
+ * revisiting it (e.g. reserve-before-write) is a later, backward-compatible
+ * addition, not an architectural change.
+ *
+ * Writing the manifest itself (id === spaceId) requires being listed in
+ * `admins`, not merely `writers` — so a Space's regular writers can't
+ * silently reassign its own permissions.
+ */
+export function createSpaceACLResolver(runtime) {
+  return async function getACL(id) {
+    const spaceId = spaceIdOf(id);
+    const manifestQ = await runtime.get(spaceId);
+    const m = manifestQ?.value ?? null;
+    const isManifestWrite = id === spaceId;
+
+    if (isUserSpaceId(spaceId)) {
+      const owner = fingerprintOfUserSpace(spaceId);
+      const writers = new Set(m?.writers ?? []);
+      const admins = new Set(m?.admins ?? []);
+      writers.add(owner);
+      admins.add(owner); // structural guarantee: never lockable
+      return {
+        writers: isManifestWrite ? [...admins] : [...writers],
+        readers: m?.readers ?? ['*'],
+      };
+    }
+
+    if (!m) return { writers: ['*'], readers: ['*'] }; // bootstrap: no manifest yet
+    return {
+      writers: isManifestWrite ? (m.admins ?? []) : (m.writers ?? []),
+      readers: m.readers ?? ['*'],
+    };
+  };
+}
+
+/** Convenience: create a new generic Space with an explicit manifest. Returns the new SpaceId. */
+export async function createSpace(session, { writers = [], readers = ['*'], admins } = {}) {
+  const spaceId = randomSpaceId();
+  const adminList = admins ?? (session.fingerprint ? [session.fingerprint] : []);
+  await session.publish(spaceId, { admins: adminList, writers, readers, createdAt: Date.now() });
+  return spaceId;
+}

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Dokumentation</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+</head>
+<body>
+  <main>
+    <a class="back" href="/index.html">&larr; Zurück</a>
+    <div id="content">Lade…</div>
+  </main>
+  <script type="module">
+    // marked v12 no longer assigns `id` attributes to headings by default
+    // (older versions did, via a now-removed `headerIds` option) — every
+    // "#section" link in our own docs was pointing at nothing. Slugs are
+    // generated here to match standard GitHub-flavored-markdown behaviour
+    // (lowercase, strip punctuation, spaces -> hyphens) so hand-written
+    // anchors in the source markdown keep working without each doc author
+    // needing to embed raw HTML.
+    function slugify(text) {
+      return text
+        .toLowerCase()
+        .trim()
+        .replace(/[`*_~]/g, '')
+        .replace(/[^\p{L}\p{N}\s-]/gu, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+    }
+
+    function assignHeadingIds(container) {
+      const seen = new Map();
+      for (const h of container.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+        let slug = slugify(h.textContent);
+        const count = seen.get(slug) ?? 0;
+        seen.set(slug, count + 1);
+        if (count > 0) slug = `${slug}-${count}`; // duplicate headings get -1, -2, ... same as GitHub
+        h.id = slug;
+      }
+    }
+
+    const params = new URLSearchParams(location.search);
+    const file = params.get('file') || '/README.md';
+    const content = document.getElementById('content');
+    try {
+      const res = await fetch(file);
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const md = await res.text();
+      content.innerHTML = marked.parse(md);
+      assignHeadingIds(content);
+      document.title = `QU — ${file.split('/').pop()}`;
+
+      // The browser's native "scroll to #hash on load" already ran before
+      // the fetch above finished, when the target element didn't exist yet
+      // — so it silently did nothing. Redo it now that headings have ids.
+      if (location.hash) {
+        document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+      }
+    } catch (e) {
+      content.textContent = `Konnte ${file} nicht laden: ${e.message}`;
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Beispiele</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <main>
+    <a class="back" href="/index.html">&larr; Zurück</a>
+    <h1>Beispiele</h1>
+    <p class="lede">
+      Kleiner und fokussierter als die <a href="/demo/live-chat.html">Live-Chat-Demo</a> —
+      jedes Beispiel zeigt genau ein Konzept. Quellcode direkt lesen lohnt sich, jede Datei
+      ist kommentiert. Details siehe <a href="/docs/view.html?file=/examples/README.md">README</a>.
+    </p>
+
+    <nav class="cards">
+      <a class="card" href="/docs/code.html?file=/examples/01-local-user.mjs">
+        <h2>1 · Lokaler User</h2>
+        <p>Ein <code>Qu</code>, kein Netzwerk. publish/get/append/query/on in ~30 Zeilen.</p>
+      </a>
+      <a class="card" href="/docs/code.html?file=/examples/02-two-clients.mjs">
+        <h2>2 · Zwei Clients verbinden</h2>
+        <p>Handshake, Live-Push, reziproker Sync — ohne Server, per Loopback-Channel.</p>
+      </a>
+      <a class="card" href="/examples/03-todo-list.html">
+        <h2>3 · Teilbare ToDo-Liste</h2>
+        <p>Space + Link teilen + Schreibrecht per Fingerprint erteilen. Läuft live über den Relay.</p>
+      </a>
+      <a class="card" href="/examples/04-webrtc.html">
+        <h2>4 · WebRTC-Direktverbindung</h2>
+        <p>Verbinden/Trennen zu einem Fingerprint ohne den Relay als Datenpfad, plus Audio/Video.</p>
+      </a>
+    </nav>
+
+    <p class="lede" style="margin-top: 2rem;">
+      Beispiele 1 und 2 sind reine Node-Skripte (<code>node examples/01-local-user.mjs</code>) —
+      oben verlinkt als Lesetext, da sie kein Netzwerk brauchen und nichts auf einer Seite anzuzeigen
+      haben. Beispiele 3 und 4 laufen im Browser, weil sie tatsächlich zwei Personen verbinden sollen.
+    </p>
+  </main>
+</body>
+</html>

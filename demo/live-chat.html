@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Live-Chat</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <main class="chat-shell">
+    <a class="back" href="/index.html">&larr; Zurück</a>
+    <h1>QU Live-Chat</h1>
+    <p class="lede">
+      Echter WebSocket-Relay (<code>relay/chat-relay.mjs</code>), echte Identität pro Browser
+      (in <code>localStorage</code> gespeichert). Öffne diese Seite in mehreren Tabs oder
+      Browsern gegen denselben Server, um live miteinander zu chatten — Raum:
+      <code>qu-demo-room</code> (offen, keine Anmeldung nötig).
+    </p>
+    <div id="status" class="chat-status">Verbinde …</div>
+
+    <div class="chat-layout">
+      <section class="chat-main">
+        <ul id="messages" class="messages"></ul>
+        <form id="composer" class="composer">
+          <input id="text-input" type="text" placeholder="Nachricht schreiben …" autocomplete="off" />
+          <input id="file-input" type="file" title="Datei/Bild/Video anhängen" />
+          <button type="submit">Senden</button>
+        </form>
+      </section>
+      <aside class="chat-side">
+        <div>Du bist: <strong id="my-alias">…</strong></div>
+        <h2>Online</h2>
+        <ul id="presence" class="presence"></ul>
+      </aside>
+    </div>
+
+    <details id="debug-panel" open>
+      <summary>Debug-Ausgabe (<span id="debug-count">0</span>) — alles von Runtime, Replication, Files, WebSocket</summary>
+      <div class="debug-toolbar">
+        <button type="button" id="debug-clear">Leeren</button>
+        <label><input type="checkbox" id="debug-pause" /> pausieren</label>
+      </div>
+      <pre id="debug-log"></pre>
+    </details>
+  </main>
+
+  <script type="module" src="./live-chat.mjs"></script>
+</body>
+</html>

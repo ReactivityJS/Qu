@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Tests (Browser)</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "node:test": "./browser-shim/test.mjs",
+        "node:assert/strict": "./browser-shim/assert.mjs"
+      }
+    }
+  </script>
+</head>
+<body>
+  <main>
+    <a class="back" href="/index.html">&larr; Zurück</a>
+    <h1>QU Testsuite (Browser)</h1>
+    <p class="lede">Dieselben <code>test/*.test.mjs</code>-Dateien wie <code>npm test</code> — unverändert, nur über eine Import-Map auf einen Browser-Shim statt <code>node:test</code>/<code>node:assert</code> umgeleitet.</p>
+    <div id="summary">Läuft…</div>
+    <ul id="results"></ul>
+  </main>
+
+  <script type="module">
+    import { runAll } from './browser-shim/test.mjs';
+
+    // Importing these registers their test() calls into the shim's queue —
+    // nothing runs yet, exactly like node:test's own behaviour.
+    await import('./core.test.mjs');
+    await import('./identity.test.mjs');
+    await import('./session.test.mjs');
+    await import('./spaces.test.mjs');
+    await import('./replication.test.mjs');
+    await import('./files.test.mjs');
+    await import('./qu.test.mjs');
+    await import('./chat.test.mjs');
+
+    const list = document.getElementById('results');
+    const summary = document.getElementById('summary');
+    let pass = 0;
+    let fail = 0;
+
+    await runAll((r) => {
+      const li = document.createElement('li');
+      li.className = r.pass ? 'pass' : 'fail';
+      li.textContent = `${r.pass ? '✓' : '✗'} ${r.name} (${r.ms.toFixed(1)} ms)`;
+      if (!r.pass) {
+        const pre = document.createElement('pre');
+        pre.textContent = r.error?.stack || String(r.error);
+        li.appendChild(pre);
+      }
+      list.appendChild(li);
+      r.pass ? pass++ : fail++;
+      summary.textContent = `${pass} bestanden, ${fail} fehlgeschlagen`;
+    });
+
+    summary.textContent += ' — fertig.';
+  </script>
+</body>
+</html>

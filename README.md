@@ -1,0 +1,452 @@
+# QU — qu-core
+
+Ein kleines, ereignisgetriebenes, Zero-Trust-Framework für lokale und
+verteilte Anwendungen. Reines Vanilla JavaScript (ESM), keine
+Laufzeit-Abhängigkeiten, läuft in Node ≥ 20 und modernen Browsern
+(Web Crypto API, `crypto.randomUUID()`).
+
+Die vollständige Architektur-Spezifikation steht in
+[`qu-whitepaper-v0.6.md`](./qu-whitepaper-v0.6.md), die vollständige
+Aufrufreferenz jeder Funktion/Klasse in [`API.md`](./API.md) — dieses README
+ist der Schnelleinstieg.
+
+## Installation
+
+Kein Build-Schritt. Einfach importieren:
+
+```js
+import { Qu } from './src/index.js';
+```
+
+## Quickstart
+
+```js
+const alice = await Qu.create();
+await alice.publish('chat/room1/msg1', { text: 'hello' });
+alice.on('chat/room1/**', (qubit) => console.log(qubit.value));
+```
+
+`Qu` ist die empfohlene Fassade — sie erzeugt (oder importiert) eine
+Identität und verdrahtet Runtime/Store/Session/Space-ACL im Hintergrund,
+sodass man für den Normalfall keine mehreren Bausteine von Hand
+zusammensetzen muss. **Der Core selbst ist local-only/offline**: ohne
+weiteres Zutun landet alles im `MemoryAdapter`, es wird kein Netzwerk-Code
+geladen. Netzwerk (Replication/Transporte/Routing), Storage jenseits von
+Memory/Null, und Referenz-/Datei-Handling sind Plugins — angedockt über
+`qu.use(...)`:
+
+```js
+import { Qu, createNetworkPlugin, createFileHandlerPlugin, MemoryFileStorageAdapter } from './src/index.js';
+
+const alice = await Qu.create();
+alice.use(createNetworkPlugin());                                    // qu.connect()/qu.router/qu.webrtc()
+alice.use(createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })); // qu.shareFile()/qu.resolveFileRef()
+```
+
+Jedes Plugin ist auch ohne `use()` direkt nutzbar — `sendMessage(qu, spaceId, opts)`
+aus `modules/chat.js` etwa funktioniert unverändert ohne dass irgendetwas
+"installiert" wurde; `use()` fügt nur `qu.sendMessage(spaceId, opts)`-Sugar
+hinzu, für wer sie will. Siehe [Core, Storage, Network, Data](#core-storage-network-data--wie-die-plugins-zusammenspielen) unten.
+
+**Nächster Schritt: `examples/`** — drei kurze, fokussierte Beispiele
+(lokaler User, zwei verbundene Clients, teilbare ToDo-Liste), deutlich
+kompakter als die volle Chat-Demo. Für Multi-User-Rechte, Verschlüsselung,
+Sync und Dateien: siehe [`API.md`](./API.md) (vollständige Referenz) und
+`demo/` (durchgängiges
+Beispiel). Die darunterliegenden Bausteine (`QuRuntime`, `QuSession`,
+`QuStore`, …) bleiben für fortgeschrittene Fälle direkt nutzbar —
+`qu.runtime` ist die Fluchttür dorthin.
+
+## Projektstruktur
+
+```
+index.js                ← Server-Bootstrap (ruft nur server/static-server.mjs auf, kein QU-Code)
+index.html                ← Navigation zu Demo/Tests/Whitepaper/README/API (ebenfalls kein QU-Code)
+API.md                     vollständige Aufrufreferenz (Parameter, Rückgabewerte, Beispiele)
+server/static-server.mjs   generischer statischer Dateiserver
+assets/style.css            gemeinsames Stylesheet für alle Tooling-Seiten
+docs/view.html                generischer Markdown-Viewer (Whitepaper, README, API.md)
+src/
+  index.js              ← einziger öffentlicher Einstiegspunkt der Bibliothek
+                          (Core + Memory/Null-Adapter + alle Plugin-Factories —
+                          kein node:fs, kein Browser-only-Code zwingend geladen)
+  qu.js                   Qu — schlanke Fassade: Identity/Session/publish+append+
+                          get+query+on/Space-ACL, plus generisches qu.use(plugin)
+  core/                  lokal, offline-sicher, keine Netzwerk-/Storage-Vendor-
+                          Abhängigkeit: Pipeline, Runtime, Store (Adapter-Mounts),
+                          Session, Identity, Clock, Subscription Engine (Trie),
+                          Channel-Contract, Space, Bytes, Debug, Verify (Zero-
+                          Trust-Signaturprüfung), ACL-Enforcement, Sign (canonical
+                          payload), Crypto (ECDH+HKDF+AES-256-GCM)
+  adapters/              Kategorie 1 — Storage-Adapter: Memory · Null ·
+                          MemoryFileStorage (Core-Default) · LocalStorage ·
+                          SessionStorage · IndexedDB (Browser) · node-fs ·
+                          node-fs-file-storage (Node, node:fs — bewusst NICHT
+                          im Barrel, siehe index.js)
+  network/               Kategorie 2 — Replication, Transporte, Routing, alles
+                          optional: Handshake, Router, Routed-Events,
+                          replication/{Default,Hub,Provider}, transports/
+                          {WebSocket,WebRTC}, WebRTC-Peer-Manager,
+                          index.js (createNetworkPlugin — qu.connect()/qu.router/
+                          qu.webrtc()-Sugar)
+  data/                  Kategorie 3 — Referenzen & Dateien: references.js
+                          (obj://, key://, file:// — ReferenceHandler, Tiefen-
+                          limit konfigurierbar), files/{manifest,transfer}.js
+                          (Chunking/Content-Addressing/Transfer-Protokoll,
+                          unverändert), files/index.js (FileHandler — file://-
+                          Wrapper, createFileHandlerPlugin)
+  modules/                Anwendungsmodule, optional, nur auf öffentlicher
+                          Runtime/Session/Qu-API aufgebaut:
+    spaces.js              Space-ACL-Resolver (Manifest-basiert) — der eine
+                          Default, den Qu.create() der Ergonomie halber
+                          mitbringt (keine Netzwerk-/Storage-Abhängigkeit)
+    chat.js                  Räume, Nachrichten, Anhänge, Presence, Lesebestätigungen
+                          (auf append()+publish() aufgebaut), createChatPlugin
+test/
+  qu.test.mjs               Tests für die Qu-Fassade
+  chat.test.mjs               Tests für das Chat-Modul (inkl. Kollisionssicherheit, Presence, Lesebestätigungen)
+  relay.test.mjs               End-to-End gegen den echten WebSocket-Relay (native WebSocket-Clients, kein Loopback)
+  *.test.mjs                node:test — je Datei ein weiterer Themenbereich
+  browser-shim/             node:test/node:assert-Ersatz für den Browser
+  index.html                 dieselben Tests, im Browser (via Import-Map)
+examples/
+  01-local-user.mjs          ein Qu, kein Netzwerk (node examples/01-local-user.mjs)
+  02-two-clients.mjs           Handshake, Push, reziproker Sync über Loopback-Channel
+  03-todo-list.html/.mjs         teilbare Liste: Space + Link + FP-basiertes Schreibrecht
+  04-webrtc.html/.mjs              Direktverbindung zu einem Fingerprint, Audio/Video
+  todo-lib.mjs                    Logik getrennt von der UI, per node --test prüfbar
+  index.html                       Übersichtsseite
+demo/
+  steps.mjs                 Schritt-Definitionen: Titel, Erklärung, Code, Ausführung — die einzige Logikquelle
+  run-steps.mjs               generischer Runner (führt aus, fängt erwartete/unerwartete Fehler ab)
+  chat-demo.mjs                 Terminal-Presenter (npm run demo)
+  browser-demo.mjs               visueller Presenter (Chat-Bubbles, Datei-Karten, Ablehnungs-Boxen)
+  index.html                       lädt browser-demo.mjs
+  live-chat.mjs                     echte Mehrbenutzer-Chat-UI (WebSocket-Relay, Presence, Lesebestätigungen)
+  live-chat.html                     lädt live-chat.mjs
+relay/
+  ws-server.mjs              minimaler RFC-6455-WebSocket-Server, keine Abhängigkeit
+  relay.mjs                    createRelay() — universeller QU-Relay-Kern, kein App-/Node-Bezug
+  node-ws-bridge.mjs            Node-spezifische Brücke: http.Server-Upgrades → attachChannel()
+```
+
+## Core, Storage, Network, Data — wie die Plugins zusammenspielen
+
+Ein `Qu.create()` ohne jedes `use()` ist vollständig lokal: Identity, Session,
+`publish`/`append`/`get`/`query`/`on`, `resolveRefs`, Space-ACL — alles auf
+dem `MemoryAdapter`, kein `node:fs`-Import, kein `WebSocket`/`RTCPeerConnection`
+je referenziert. Das ist mit einem einzigen Test abgesichert
+(`grep` auf `src/index.js` findet keinen Netzwerk-/Node-Import) und mit
+einem End-to-End-Smoke-Test (`Qu.create()` → `publish`/`get` → funktioniert,
+ganz ohne Plugin).
+
+Alles darüber hinaus ist eine von drei Plugin-Kategorien, jede über
+`qu.use(plugin)` andockbar (oder — für die zugrundeliegenden Funktionen —
+ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
+
+1. **Storage-Adapter** (`src/adapters/`) — `MemoryAdapter`/`NullAdapter` sind
+   der Core-Default; `LocalStorageAdapter`/`SessionStorageAdapter`/
+   `IndexedDBAdapter` (Browser) und `FileSystemStorageAdapter`/
+   `FileSystemFileStorageAdapter` (Node, `node:fs`) sind Drop-in-Ersatz —
+   an `QuStore`-Mounts übergeben, nichts sonst ändert sich.
+2. **Network** (`src/network/`, `createNetworkPlugin()`) — Replication,
+   Router (Subscription/Routing über mehrere Transport-Wege wie WS-Relay
+   und WebRTC), Handshake, WebSocket-/WebRTC-Transporte. `qu.use(createNetworkPlugin())`
+   fügt `qu.connect()`/`qu.router`/`qu.webrtc()` hinzu — vorher existieren
+   diese Methoden schlicht nicht auf der Qu-Instanz. Node Relay/Router/
+   StorageMirror (`relay/`) sind Deployments *dieser* Kategorie, kein
+   Sonderbau: `Router{role:'mirror'}` + ein durables `StorageAdapter` +
+   `relay/relay.mjs` ergeben zusammen einen StorageMirror.
+3. **Data — Referenzen & Dateien** (`src/data/`) — `obj://`/`key://`/`file://`
+   als URI-Schema, additiv zum bestehenden `refs`-Array:
+   - `key://<pfad>` zeigt auf **einen** QuBit-Wert (Foreign-Key-artig).
+   - `obj://<pfad>` sammelt die direkten Kind-QuBits unter `<pfad>/*` zu
+     einem Objekt (oder mit `asArray: true` zu einem sortierten Array) —
+     **das** ist der Weg, um Listen/Arrays/Tabellen abzubilden: jede
+     Zeile ist ihr eigener QuBit unter `<pfad>/<zeilenschlüssel>`.
+   - `file://<manifestId>` referenziert eine Datei; mit einem
+     `FileHandler` (`createFileHandlerPlugin({ fileStorage })`) löst es zu
+     echten Bytes auf, sonst zum rohen Manifest.
+   - `resolveReference(qu, ref, { maxDepth, asArray, fileHandler })` /
+     `resolveValue(qu, value, opts)` lösen manuell auf — bewusst kein
+     automatischer Read-Hook in `Session`, gleiche Philosophie wie das
+     bestehende `resolveRefs()`: der Core bleibt ein dummer Store, die App
+     entscheidet, wann sie einem Link folgt. `maxDepth` (Default 1)
+     begrenzt, wie viele Referenz-Hops kaskadiert werden — inklusive
+     Zyklenschutz (ein Ref, der auf sich selbst zurückführt, bleibt ab dem
+     zweiten Auftreten im selben Pfad unaufgelöst statt zu hängen).
+
+Anwendungsmodule (`src/modules/`) — der Space-ACL-Resolver und Chat — sind
+eine vierte, lockerere Kategorie: fertige Bausteine, ausschließlich auf der
+öffentlichen Runtime/Session/Qu-API aufgebaut, kein Sonderzugriff auf den
+Core. `chat.js`s Text-Pfad (`sendMessage`/`listMessages`/…) braucht selbst
+kein Netzwerk-Plugin — nur `append()`/`query()`/`createSpace()`, alles
+Core. Anhänge brauchen zusätzlich einen `FileHandler`; Mehrgeräte-Sync
+zusätzlich einen `NetworkPlugin` — Chat selbst bleibt davon unwissend.
+
+## Im Browser (Server starten)
+
+```
+npm start
+```
+
+Startet einen minimalen, statischen Node-HTTP-Server (`index.js` — enthält
+selbst keine QU-Logik, ruft nur `server/static-server.mjs` und
+`relay/relay.mjs` (universeller Relay-Kern) und
+`relay/node-ws-bridge.mjs` (Node-Transport) auf) auf `http://localhost:8787`. Von dort aus über
+`index.html` erreichbar:
+
+- **Demo** (`/demo/index.html`) — dieselbe `chat-demo.mjs` wie `npm run demo`,
+  Konsolen-Ausgabe im Browser statt im Terminal.
+- **Live-Chat** (`/demo/live-chat.html`) — echter WebSocket-Relay, mehrere
+  Browser/Tabs gegen denselben Server, Presence + Lesebestätigungen +
+  Anhang-Metadaten (siehe unten).
+- **Tests** (`/test/index.html`) — dieselben `test/*.test.mjs`-Dateien wie
+  `npm test`, unverändert; eine Import-Map leitet nur `node:test` und
+  `node:assert/strict` auf einen kleinen Browser-Shim um
+  (`test/browser-shim/`).
+- **Whitepaper**, **README**, **API-Referenz** (`/docs/view.html?file=...`)
+  — ein generischer Markdown-Viewer, derselbe für alle drei Dokumente.
+
+`index.js` und `index.html` enthalten bewusst keinen QU-Code — sie
+verlinken/laden/rufen nur auf, was ohnehin existiert (`src/`, `test/`,
+`demo/`, `relay/`, die `.md`-Dateien).
+
+## Der Relay ist universell, nicht Chat-spezifisch
+
+`relay/relay.mjs` (`createRelay()`) kennt weder Chat noch irgendeine andere
+Anwendung — es ist derselbe "eine Runtime, viele Channels"-Kern, den das
+Whitepaper in §10/§12 für jeden Server-Knoten vorsieht, hier nur benannt.
+Es macht auch keine Annahme über Persistenz: Standard ist rein
+speicherbasiert (läuft identisch in Node und im Browser), eigene
+`StorageAdapter`/`FileStorageAdapter`-Instanzen werden von außen
+hereingereicht. Wie eine `Channel`-Verbindung zustande kommt, ist ebenso
+entkoppelt — `attachChannel()` nimmt alles, was den `Channel`-Contract
+erfüllt, ob echtes WebSocket, ein zukünftiger WebRTC-DataChannel, oder ein
+Browser-Tab, das für andere Tabs relayt.
+
+`relay/node-ws-bridge.mjs` ist das einzige Node-spezifische Stück
+(`bridgeWebSocketServer()`) — reine Socket-Mechanik (`http.Server`-Upgrades
+zu `Channel`s), kein App-Bezug. `relay/ws-server.mjs` selbst ist ein
+minimaler RFC-6455-WebSocket-Server ohne Abhängigkeit.
+
+`index.js` entscheidet als konkretes Deployment, **was** persistiert wird
+(Filesystem-Adapter, `.relay-data/`) und **welche** Topics gerouted werden
+(`qu-demo-room/`) — das ist Konfiguration an der richtigen Stelle, nicht im
+Relay-Kern eingebaut.
+
+**Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
+`FileSystemFileStorageAdapter` waren versehentlich im zentralen,
+browserfähigen `src/index.js` exportiert — jede Seite, die davon
+importierte, zog dadurch `node:fs` mit, was der Browser nicht auflösen
+kann (CORS-Fehler beim Laden). `jsdom` konnte das in meinen eigenen Tests
+nicht aufdecken, weil es Node-Module anders aufzulösen versucht als ein
+echter Browser. Behoben: beide Adapter sind jetzt bewusst **nicht** Teil
+des universellen Barrels, sondern nur direkt aus ihren eigenen Dateien
+importierbar (`src/adapters/node-fs*.js`) — ausschließlich von Node-
+spezifischem Code wie `index.js` genutzt.
+
+Client-seitig macht `createWebSocketChannel(url)`
+(`src/network/transports/websocket-browser.js`) dasselbe für den Browser, was
+`createLoopbackChannelPair` für Tests tut — derselbe `Channel`-Contract, nur
+über ein echtes Netzwerk.
+
+**Ein zweiter echter Fund:** Der Server parst eingehende Frames sofort, aber
+`channel.onMessage()` wird erst registriert, wenn der jeweilige Consumer
+(z. B. `authenticateChannel`) tatsächlich läuft — dazwischen liegt oft ein
+`await` (Schlüsselerzeugung). Nachrichten, die in dieser Lücke ankommen,
+gingen zunächst spurlos verloren. Behoben durch Zwischenspeichern
+unzustellbarer Nachrichten bis zum ersten `onMessage()`-Aufruf — in allen
+drei Channel-Implementierungen (Loopback, WS-Server, WS-Client), nicht nur
+dort, wo es zuerst auffiel.
+
+**Presence & Lesebestätigungen** (`modules/chat.js`): Online-Status ist ein
+Heartbeat auf einen festen Pro-Mitglied-Slot (`${room}/presence/${fp}`,
+LWW) — ein Leser gilt nur als online, wenn `lastSeen` frisch genug ist,
+unabhängig vom zuletzt veröffentlichten Status (deckt auch den Fall ab, in
+dem ein Tab ohne sauberes Beenden verschwindet). Lesebestätigungen
+(`${room}/reads/${fp}`) funktionieren identisch — ein LWW-Register pro
+Leser, kein Sonderfall.
+
+**Datei-/Bild-/Video-Anhänge funktionieren End-to-End**, inklusive
+Relay-seitigem Chunk-Caching: Der Relay hängt pro Verbindung einen eigenen
+`DefaultFileTransfer` an und zieht sich die Chunks proaktiv vom Uploader,
+solange der noch verbunden ist — danach kann jeder andere Client die Datei
+vom Relay laden, auch wenn der Original-Uploader längst weg ist.
+
+Ein Leichtgewichts-Nachrichtentyp (`qu.file.readiness.request/response`)
+fragt nur "hast du schon alles?", ohne selbst Bytes zu übertragen — die
+Chat-UI zeigt den "Laden"-Button erst an, wenn diese Prüfung ein "ja"
+liefert. Vorher führte ein zu früher Klick (Empfänger lädt, bevor der Relay
+fertig gespiegelt hat) zu einer korrekten, aber unnötigen Fehlermeldung;
+`requestFile()` selbst wiederholt außerdem fehlgeschlagene oder
+"noch nicht da"-Chunk-Anfragen mit Backoff, statt beim ersten Fehlschlag
+sofort aufzugeben.
+
+**Reconnect ohne Reload:** Mobile Browser (getestet: Android/Chrome auf
+einem Pixel 10) killen eine WebSocket-Verbindung oft lautlos, sobald der
+Bildschirm ausgeht oder der Tab in den Hintergrund geht — die Seite merkt
+das nicht von selbst. `live-chat.mjs` reagiert jetzt auf drei Signale:
+das `close`-Event des Channels, `visibilitychange` (Bildschirm/Tab wird
+wieder aktiv) und `online` (Netzwerk kommt zurück) — bei jedem wird geprüft,
+ob die Verbindung noch wirklich offen ist (`channel.isOpen()`, nicht nur
+"haben wir sie nie geschlossen"), und bei Bedarf mit exponentiellem Backoff
+neu verbunden (neuer Channel, neuer Handshake, `sync()` nur für die Differenz
+seit der letzten gesehenen Nachricht — nicht den ganzen Raum erneut).
+
+## Routing & WebRTC: direkter Weg zu einer Node, ohne den Relay zu ersetzen
+
+`src/network/router.js` entscheidet, welche Channels ein QuBit beim Push
+bekommen — pluggable, damit Routing später ausgetauscht werden kann, ohne
+Replication/Files anzufassen. Zwei Rollen:
+
+- **`role: 'mirror'`** — bekommt *immer* alles, unabhängig von jeder
+  anderen Entscheidung. Dafür gedacht: die eigene Storage-Relay-Verbindung.
+  Ein Client repliziert alles, was er selbst schreibt, bedingungslos zu
+  seinem Mirror — das darf keine Routing-Optimierung je wegoptimieren.
+- **`role: 'sync'`** — konkurriert nur innerhalb einer *explizit* gesetzten
+  `group` (z. B. `peer:<fingerprint>`) nach `metric` (niedriger gewinnt,
+  Gleichstand → alle Wege). Ohne Gruppe (Standard) werden alle Sync-Routen
+  unabhängig voneinander genutzt — sicherer Default, keine stillschweigend
+  verlorenen Daten nur weil zwei Channels zufällig dasselbe Topic bedienen.
+
+`Qu.connect()` ist rückwärtskompatibel um `role`/`group`/`metric`
+erweitert — ohne diese Parameter identisches Verhalten wie zuvor.
+
+**WebRTC** (`src/network/transports/webrtc-browser.js`, minimal: nur
+Datenkanal, Perfect-Negotiation-Muster) ist eine weitere Channel-
+Implementierung, kein Ersatz für den Relay — der Relay bleibt zwingend
+für Signaling (SDP/ICE-Weiterleitung nach Fingerprint, `relay/relay.mjs`)
+und als Storage-Mirror. `src/network/webrtc-peer-manager.js`
+orchestriert: Verbindungsaufbau über einen bestehenden Signaling-Channel,
+danach **erneuter QU-Handshake über den neuen Datenkanal** (WebRTC/DTLS
+verschlüsselt, beweist aber keine Identität — das übernimmt weiterhin
+unser Challenge-Response), erst danach Freigabe für Replication.
+
+`qu.webrtc(signalingChannel)` liefert einen `PeerConnectionManager`;
+`.connectDirect(fingerprint, { pushTopics, group, metric })` baut eine
+Direktverbindung auf. Primärer Anwendungsfall: Weg zu einer Node ohne
+Relay (Ausfall oder bewusst gewünscht) — spätere Audio/Video-Erweiterung
+liegt auf derselben `RTCPeerConnection` (zusätzliche Tracks), ist aber
+noch nicht gebaut.
+
+**Ehrlicher Hinweis zur Testabdeckung:** Router, die Signaling-Weiterleitung
+im Relay (inkl. Schutz vor gefälschtem Absender) und die
+Router-Integration in `DefaultReplication`/`Qu.connect()` sind vollständig
+automatisiert getestet — alles davon steht hinter dem bestehenden
+`Channel`-Contract und lässt sich mit Loopback-Channels prüfen, ganz ohne
+echtes WebRTC. `webrtc-channel-browser.mjs` selbst (echte
+`RTCPeerConnection`-APIs) kann in dieser Umgebung nicht automatisiert
+getestet werden (kein Browser, kein WebRTC in Node ohne natives Binding) —
+sorgfältig nach dem MDN-Referenzmuster gebaut, aber ein echter Test in
+einem echten Browser steht noch aus.
+
+## Debug-Ausgabe: Listener statt Build-Schritt
+
+QU hat bewusst keinen Build-/Minify-Schritt (§2) — "im Prod-Build entfernte
+Debug-Aufrufe" hätte genau das eingeführt. Stattdessen: `debug(scope, event,
+data)` (`src/core/debug.js`) ist bei null Listenern ein reiner
+`Set.size`-Check, praktisch kostenlos. `onDebug(fn)` registriert einen
+Listener, `enableConsoleDebug({ filter? })` ist die mitgelieferte
+Konsolen-Ausgabe — identisch nutzbar in Node (Relay) und Browser (Demo).
+
+- **Relay:** standardmäßig an (`QU_DEBUG=0` zum Abschalten,
+  `QU_DEBUG_SCOPE=relay,files` zum Filtern).
+- **Live-Chat:** standardmäßig an, zusätzlich als sichtbares Panel auf der
+  Seite selbst (nicht nur Konsole) — `?debug=0` zum Abschalten.
+- Instrumentiert: `Runtime.ingest()` (accept/reject/noop),
+  `DefaultReplication` (push/sync), `DefaultFileTransfer`
+  (manifest/chunk-Anfragen), der Relay (Verbindungen, Spiegelung), beide
+  WebSocket-Channel-Implementierungen (jede Nachricht rein/raus).
+
+**Zwei echte Bugs dabei gefunden und behoben** (Auslöser: Bilder im Chat
+ließen Nachrichten "verschwinden"):
+
+1. **Unhandled Promise Rejection konnte den ganzen Relay-Prozess töten.**
+   `DefaultReplication#handleMessage` und `DefaultFileTransfer#handleMessage`
+   sind `async`, wurden aber über `Set.forEach()` aufgerufen, ohne dass
+   jemand die Rejection abfängt — in Node killt das standardmäßig den
+   gesamten Prozess (alle Verbindungen, nicht nur eine). Ein abgelehnter
+   Push (z. B. eine fehlgeschlagene Signaturprüfung) reichte aus. Fix: ein
+   gemeinsames `safeInvoke()` in allen drei Channel-Implementierungen fängt
+   jetzt jeden Listener-Fehler ab, plus explizites Error-Handling direkt an
+   den betroffenen Stellen.
+2. **Der WebSocket-Server prüfte nie das FIN-Bit** und kannte keine
+   Fortsetzungs-Frames (Opcode `0x0`) — eine fragmentierte Nachricht hätte
+   nur ihr erstes, unvollständiges Fragment geparst (meist ungültiges JSON,
+   still verworfen) und jedes weitere Fragment ignoriert. Behoben durch
+   echte Frame-Reassemblierung; mit echten, manuell konstruierten
+   mehrteiligen WS-Frames getestet, nicht nur angenommen.
+
+## Tests (CLI)
+
+```
+npm test
+```
+
+Nutzt Node's eingebauten Test-Runner (`node --test`), keine externe
+Test-Bibliothek. Jede Datei unter `test/` behandelt einen Themenbereich
+(Core, Identity, Session, Spaces/ACL, Replication, Files) statt einer
+einzigen großen Assertion-Liste.
+
+## Demo
+
+```
+npm run demo
+```
+
+Ein durchgängiges, 14-Schritte-Szenario mit zwei simulierten Geräten (Alice,
+Bob): Identitäten, öffentliche Profile, eine Inbox, ein gemeinsamer
+Chat-Space, reziproker Sync, Live-Push, ein geteilter Dateianhang — **und
+zwei absichtlich fehlschlagende Sicherheits-Demos** (fremdes Schreiben wird
+abgelehnt, ein manipulierter Datei-Chunk wird verworfen), damit die
+Rechte-/Integritätsgarantien nicht nur behauptet, sondern sichtbar geprüft
+werden.
+
+Die Logik steht **einmal** in `demo/steps.mjs` (Titel, Erklärung, der
+tatsächlich ausgeführte Code, die Ausführung selbst) und wird von zwei
+dünnen Presentern dargestellt:
+- `demo/chat-demo.mjs` — Terminal-Ausgabe (`npm run demo`)
+- `demo/browser-demo.mjs` — visuelle Karten im Browser (`/demo/index.html`
+  nach `npm start`): Chat-Bubbles, eine Datei-Karte, Schlüssel-Wert-Grids,
+  und rot/grün markierte Ablehnungs-Boxen für die Sicherheits-Schritte.
+
+Beide zeigen zu jedem Schritt den echten Code daneben — zum Nachvollziehen
+und Lernen gedacht, nicht als Test (dafür siehe unten).
+
+## Kernprinzipien (Kurzfassung — Details im Whitepaper)
+
+- **Ein Schreibpfad:** `Runtime.ingest()` — lokal signierte und remote
+  empfangene QuBits durchlaufen identisch Verify + ACL, kein Sonderfall.
+- **Fingerprint = hash(publicKey):** Identitäts-Spoofing ist kryptographisch
+  ausgeschlossen, nicht nur unwahrscheinlich.
+- **Rechte sind an Spaces gebunden**, nicht an einzelne Pfade oder
+  Nachrichten — ein Manifest pro Space.
+- **Zwei Schreibmodi, keine Konvention:** `publish(id, ...)` ist ein
+  benanntes, veränderliches Register (LWW); `append(collectionId, ...)`
+  namensraumisiert die ID automatisch nach Schreiber-Fingerprint, damit
+  unabhängige Schreiber in einer geteilten Sammlung (Chat, Kommentare)
+  strukturell nie kollidieren können — ohne ACL-Sonderbehandlung.
+- **Core sieht nie Klartext:** Ver-/Entschlüsselung passiert ausschließlich
+  in `Session`.
+- **Store ist die Offline-Queue:** keine separate Outbox-Datenstruktur;
+  reziproker Sync entleert beide Richtungen bei Reconnect.
+- **Alles Optionale ist ein Plugin:** Storage-Adapter jenseits von
+  Memory/Null, Network (Replication/Transporte/Routing), Referenzen/
+  Dateien, Spaces-ACL-Resolver und Chat sind austauschbar, docken über
+  `qu.use(...)` an oder sind ganz ohne Fassade direkt aufrufbar, und
+  benutzen ausschließlich die öffentliche `Runtime`/`Session`/`Qu`-API —
+  der Core kennt keines von ihnen (siehe
+  [Core, Storage, Network, Data](#core-storage-network-data--wie-die-plugins-zusammenspielen)).
+
+## Status
+
+109 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
+Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
+`LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter` (neu,
+Browser-only) sind wie `webrtc-channel-browser.mjs` nicht per CLI testbar —
+kein Browser, keine `localStorage`/`indexedDB`-Globals in Node; ein echter
+Test im Browser-Testlauf (`test/index.html`) steht für diese drei noch aus.
+Offen: SQLite-Adapter für `StorageAdapter`/`FileStorageAdapter`
+(mechanisch, kein Architekturrisiko).

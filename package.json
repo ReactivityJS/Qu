@@ -1,0 +1,16 @@
+{
+  "name": "qu-core",
+  "version": "0.4.0",
+  "description": "QU — a small, event-driven, Zero-Trust framework for local and distributed applications. Vanilla JavaScript, no runtime dependencies.",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test",
+    "demo": "node demo/chat-demo.mjs"
+  },
+  "license": "UNLICENSED"
+}
