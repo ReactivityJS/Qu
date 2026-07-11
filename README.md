@@ -120,28 +120,35 @@ test/
   qu.test.mjs               Tests für die Qu-Fassade
   chat.test.mjs               Tests für das Chat-Modul (inkl. Kollisionssicherheit, Presence, Lesebestätigungen)
   relay.test.mjs               End-to-End gegen den echten WebSocket-Relay (native WebSocket-Clients, kein Loopback)
+  references.test.mjs            obj://, key://, file://, Tiefenlimit, Zyklenschutz
   *.test.mjs                node:test — je Datei ein weiterer Themenbereich
   browser-shim/             node:test/node:assert-Ersatz für den Browser
   index.html                 dieselben Tests, im Browser (via Import-Map)
+docs/lab/                    interaktives Lab — der primäre Weg, QU im Browser
+                            selbst auszuprobieren (siehe eigener Abschnitt unten)
+  index.html                 Navigation + vier Abschnitte, je ein "Ausführen"-Button
+  render.mjs                  DOM-Rendering für Schritt-Karten (Code-Block + Ergebnis)
+  lab-runner.mjs                generischer Schritt-Executor
+  labs/
+    01-local-identity.mjs        Identität anlegen/speichern/laden, Nutzdaten löschen,
+                                User löschen — echt in localStorage, kein Mock
+    02-local-spaces.mjs           strikter Core-Default vs. Spaces-Plugin, zwei lokale
+                                User, Schreibrecht gewähren
+    03-storage.mjs                  fünf Storage-Adapter am selben Contract, inkl.
+                                LocalStorage/SessionStorage/IndexedDB — echter
+                                Browser-Test, nicht nur node --check
+    04-network-relay.mjs             echter WebSocket-Relay, Live-Push, reziproker
+                                Sync, Datei-Mirroring
 examples/
-  01-local-user.mjs          ein Qu, kein Netzwerk (node examples/01-local-user.mjs)
-  02-two-clients.mjs           Handshake, Push, reziproker Sync über Loopback-Channel
-  03-todo-list.html/.mjs         teilbare Liste: Space + Link + FP-basiertes Schreibrecht
-  04-webrtc.html/.mjs              Direktverbindung zu einem Fingerprint, Audio/Video
-  todo-lib.mjs                    Logik getrennt von der UI, per node --test prüfbar
-  index.html                       Übersichtsseite
-demo/
-  steps.mjs                 Schritt-Definitionen: Titel, Erklärung, Code, Ausführung — die einzige Logikquelle
-  run-steps.mjs               generischer Runner (führt aus, fängt erwartete/unerwartete Fehler ab)
-  chat-demo.mjs                 Terminal-Presenter (npm run demo)
-  browser-demo.mjs               visueller Presenter (Chat-Bubbles, Datei-Karten, Ablehnungs-Boxen)
-  index.html                       lädt browser-demo.mjs
-  live-chat.mjs                     echte Mehrbenutzer-Chat-UI (WebSocket-Relay, Presence, Lesebestätigungen)
-  live-chat.html                     lädt live-chat.mjs
+  todo-lib.mjs               Logik einer teilbaren ToDo-Liste, getrennt von jeder UI
+  todo-lib.test.mjs            node:test dafür — Space + Link + FP-basiertes Schreibrecht
 relay/
   ws-server.mjs              minimaler RFC-6455-WebSocket-Server, keine Abhängigkeit
   relay.mjs                    createRelay() — universeller QU-Relay-Kern, kein App-/Node-Bezug
   node-ws-bridge.mjs            Node-spezifische Brücke: http.Server-Upgrades → attachChannel()
+archive/                     alte UI-Demos (live-chat, browser-demo, die vier
+                            examples/0X-*.mjs/.html) — ersetzt durch docs/lab/,
+                            nicht länger gepflegt, nur als Referenz aufbewahrt
 ```
 
 ## Core, Storage, Network, Data — wie die Plugins zusammenspielen
@@ -240,11 +247,11 @@ selbst keine QU-Logik, ruft nur `server/static-server.mjs` und
 `relay/node-ws-bridge.mjs` (Node-Transport) auf) auf `http://localhost:8787`. Von dort aus über
 `index.html` erreichbar:
 
-- **Demo** (`/demo/index.html`) — dieselbe `chat-demo.mjs` wie `npm run demo`,
-  Konsolen-Ausgabe im Browser statt im Terminal.
-- **Live-Chat** (`/demo/live-chat.html`) — echter WebSocket-Relay, mehrere
-  Browser/Tabs gegen denselben Server, Presence + Lesebestätigungen +
-  Anhang-Metadaten (siehe unten).
+- **Interaktives Lab** (`/docs/lab/index.html`) — der primäre Einstieg zum
+  Selbst-Ausprobieren: vier Abschnitte (Identität, Spaces/ACL, Storage-
+  Adapter, Netzwerk/Relay/Mirror), je ein "Ausführen"-Button, echte
+  Objekte auf `window` für die Konsole danach (siehe eigener Abschnitt
+  unten).
 - **Tests** (`/test/index.html`) — dieselben `test/*.test.mjs`-Dateien wie
   `npm test`, unverändert; eine Import-Map leitet nur `node:test` und
   `node:assert/strict` auf einen kleinen Browser-Shim um
@@ -433,30 +440,39 @@ Test-Bibliothek. Jede Datei unter `test/` behandelt einen Themenbereich
 (Core, Identity, Session, Spaces/ACL, Replication, Files) statt einer
 einzigen großen Assertion-Liste.
 
-## Demo
+## Interaktives Lab (`docs/lab/`)
 
 ```
-npm run demo
+npm start
+# dann /docs/lab/index.html öffnen
 ```
 
-Ein durchgängiges, 14-Schritte-Szenario mit zwei simulierten Geräten (Alice,
-Bob): Identitäten, öffentliche Profile, eine Inbox, ein gemeinsamer
-Chat-Space, reziproker Sync, Live-Push, ein geteilter Dateianhang — **und
-zwei absichtlich fehlschlagende Sicherheits-Demos** (fremdes Schreiben wird
-abgelehnt, ein manipulierter Datei-Chunk wird verworfen), damit die
-Rechte-/Integritätsgarantien nicht nur behauptet, sondern sichtbar geprüft
-werden.
+Der primäre Weg, QU im Browser selbst auszuprobieren — ersetzt die alten
+Terminal-/Einzelseiten-Demos (jetzt in `archive/`, nicht mehr gepflegt).
+Vier eigenständige Abschnitte, jeder per eigenem "Ausführen"-Button
+startbar, jeder mit dem exakt gezeigten Code (keine narrative Annäherung):
 
-Die Logik steht **einmal** in `demo/steps.mjs` (Titel, Erklärung, der
-tatsächlich ausgeführte Code, die Ausführung selbst) und wird von zwei
-dünnen Presentern dargestellt:
-- `demo/chat-demo.mjs` — Terminal-Ausgabe (`npm run demo`)
-- `demo/browser-demo.mjs` — visuelle Karten im Browser (`/demo/index.html`
-  nach `npm start`): Chat-Bubbles, eine Datei-Karte, Schlüssel-Wert-Grids,
-  und rot/grün markierte Ablehnungs-Boxen für die Sicherheits-Schritte.
+1. **Identität** — anlegen, in `localStorage` speichern, wieder laden
+   (simulierter Reload), Nutzdaten löschen (Identität bleibt), User löschen
+   (Schlüsselpaar weg). Echter `LocalStorageAdapter`, kein Mock.
+2. **Spaces & Mehrbenutzer-ACL** — der strikte Core-Default (nur der eigene
+   User-Space) live scheitern sehen, dann das Spaces-Plugin: zwei lokale
+   User auf einer Runtime, Schreibrecht verweigert → gewährt → erfolgreich.
+3. **Storage-Adapter** — fünf austauschbare Backends am selben Contract,
+   inklusive `LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter`
+   — der erste echte Browser-Test dieser drei (vorher nur `node --check`).
+4. **Netzwerk** — derselbe echte WebSocket-Relay, der diese Seite
+   ausliefert: Handshake, Live-Push, reziproker Sync für einen später
+   verbindenden Client, Datei-Mirroring (ein Client lädt eine Datei vom
+   Relay, nachdem der Original-Uploader schon getrennt hat).
 
-Beide zeigen zu jedem Schritt den echten Code daneben — zum Nachvollziehen
-und Lernen gedacht, nicht als Test (dafür siehe unten).
+Jeder Abschnitt hängt seine zentralen Objekte an `window` (z.B. `window.qu`
+nach Abschnitt 1, `window.quLab.network.alice` immer) — zum Weiterprobieren
+in der echten Browser-Konsole nach dem Klick, nicht nur zum Zusehen.
+
+`examples/todo-lib.mjs` (+ `todo-lib.test.mjs`) bleibt separat aktiv: reine
+Bibliothekslogik einer teilbaren ToDo-Liste (Space + Link + FP-basiertes
+Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Kernprinzipien (Kurzfassung — Details im Whitepaper)
 

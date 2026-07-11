@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Interaktives Lab</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <main>
+    <a class="back" href="/index.html">&larr; Zurück</a>
+    <h1>QU — Interaktives Lab</h1>
+    <p class="lede">
+      Jeder Abschnitt ist eigenständig per "Ausführen"-Button startbar — der gezeigte Code-Block
+      ist exakt der Code, der auch läuft (keine narrative Annäherung). Öffne die Browser-Konsole:
+      jeder Abschnitt hängt seine zentralen Objekte an <code>window</code>, zum direkten Herumprobieren
+      nach dem Klick.
+    </p>
+
+    <div class="lab-toolbar-global">
+      <button id="reset-all">🗑 Alle Lab-Daten zurücksetzen (localStorage + sessionStorage + IndexedDB)</button>
+    </div>
+
+    <div id="sections"></div>
+  </main>
+
+  <script type="module">
+    import { renderSection } from './render.mjs';
+    import { runSteps } from './lab-runner.mjs';
+    import { identitySteps, spacesSteps, storageSteps, networkSteps } from './labs/index.mjs';
+
+    const sectionsEl = document.getElementById('sections');
+    // One ctx per section (not shared across sections) — each section is
+    // self-contained and sets up everything it needs in its own first
+    // step, so a cross-section shared ctx would only risk stale/confusing
+    // `window.*` aliases between sections without adding capability.
+    window.quLab = {}; // Konsole: quLab.identity.qu, quLab.spaces.owner, quLab.network.alice, ...
+
+    const sections = [
+      {
+        id: 'identity',
+        title: '1 · Lokal offline: Identität',
+        description: 'User anlegen, in localStorage speichern, wieder laden, Nutzdaten löschen (nicht den User), User löschen.',
+        consoleHint: 'window.qu nach Schritt 1',
+        steps: identitySteps,
+      },
+      {
+        id: 'spaces',
+        title: '1.2 · Lokal offline: Spaces & Mehrbenutzer-ACL',
+        description: 'Der strikte Core-Default (nur dein eigener User-Space), dann das Spaces-Plugin: geteilter Space, zwei lokale User, Schreibrecht gewähren.',
+        consoleHint: 'window.owner, window.bob nach Schritt 2',
+        steps: spacesSteps,
+      },
+      {
+        id: 'storage',
+        title: '1.3 · Lokal offline: Storage-Adapter',
+        description: 'Derselbe StorageAdapter-Contract, fünf austauschbare Backends — inklusive der drei Browser-only-Adapter, die außerhalb eines echten Browsers nicht automatisiert testbar sind.',
+        steps: storageSteps,
+      },
+      {
+        id: 'network',
+        title: '2 · Remote: Relay, Replikation, Mirror',
+        description: 'Derselbe echte WebSocket-Relay, der diese Seite ausliefert — Handshake, Live-Push, reziproker Sync für später verbindende Clients, und Datei-Mirroring (der Relay spiegelt Chunks proaktiv, solange der Uploader verbunden ist).',
+        consoleHint: 'window.aliceNet / window.bobNet / window.carolNet nach den jeweiligen Schritten',
+        steps: networkSteps,
+      },
+    ];
+
+    for (const section of sections) {
+      const ctx = {};
+      window.quLab[section.id] = ctx;
+      sectionsEl.appendChild(renderSection(section, (onStep) => runSteps(section.steps, onStep, ctx)));
+    }
+
+    document.getElementById('reset-all').addEventListener('click', () => {
+      const labKeys = Object.keys(localStorage).filter((k) => k.startsWith('qu-lab'));
+      labKeys.forEach((k) => localStorage.removeItem(k));
+      const sessionKeys = Object.keys(sessionStorage).filter((k) => k.startsWith('qu-lab'));
+      sessionKeys.forEach((k) => sessionStorage.removeItem(k));
+      indexedDB.deleteDatabase('qu-lab-storage-demo');
+      location.reload();
+    });
+  </script>
+</body>
+</html>

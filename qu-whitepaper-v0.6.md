@@ -671,7 +671,7 @@ Räume mit vielen Teilnehmern (die bleiben sinnvoll relay-vermittelt, schon
 weil "Broadcast an alle Subscriber" strukturell ein Stern-, kein
 Vollvermaschungs-Problem ist). Audio/Video ist als Erweiterung auf
 derselben `RTCPeerConnection` vorgesehen (zusätzliche Media-Tracks statt
-einer zweiten Verbindung pro Medientyp) — siehe `examples/04-webrtc.html`
+einer zweiten Verbindung pro Medientyp) — siehe `archive/examples/04-webrtc.html` (archiviert) bzw. das interaktive Lab (`docs/lab/`) für ein gepflegtes Netzwerk-Beispiel
 für ein minimales, kommentiertes Beispiel.
 
 ## 11. File-Handling — Modul, referenzimplementiert **[v0.4]**

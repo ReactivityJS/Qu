@@ -9,8 +9,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "test": "node --test",
-    "demo": "node demo/chat-demo.mjs"
+    "test": "node --test"
   },
   "license": "UNLICENSED"
 }
