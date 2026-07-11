@@ -116,6 +116,17 @@ src/
                           Space ist beschreibbar
     chat.js                  Räume, Nachrichten, Anhänge, Presence, Lesebestätigungen
                           (auf append()+publish() aufgebaut), createChatPlugin
+  ui/
+    bindings.js               viewKey/viewObject (one-way) + bindKey/bindObject
+                          (two-way) — die reaktiven UI-Primitive, auf denen
+                          jede Lab-Ansicht aufbaut: nichts als qu.on() +
+                          Render-Callback, unmount = off(). DOM-Library-
+                          agnostisch (kein document.* hier drin, Callers
+                          liefern die Element-Glue). Echo-Schutz beim
+                          Two-Way-Binding: Schreiben unterbleibt bei
+                          identischem Wert, Re-Render unterbleibt bei
+                          identischem (id, ts) statt Wertevergleich — siehe
+                          Doku-Kommentar in der Datei.
 test/
   qu.test.mjs               Tests für die Qu-Fassade
   chat.test.mjs               Tests für das Chat-Modul (inkl. Kollisionssicherheit, Presence, Lesebestätigungen)
@@ -140,8 +151,11 @@ docs/lab/                    interaktives Lab — der primäre Weg, QU im Browse
     04-network-relay.mjs             echter WebSocket-Relay, Live-Push, reziproker
                                 Sync, Datei-Mirroring
     05-references-practice.mjs        obj://key://file:// an einem Beispiel;
-                                mountLibraryView() ist die reaktive Live-Ansicht
-                                (qu.on(..., {initial:true}), kein Refresh-Button)
+                                mountLibraryView() ist die reaktive Live-Ansicht,
+                                gebaut auf src/ui/bindings.js: viewObject() für
+                                die Liste, bindKey() für ein zweiseitig
+                                gebundenes Notizfeld je Eintrag (tippen
+                                schreibt sofort, kein Speichern-Knopf)
 examples/
   todo-lib.mjs               Logik einer teilbaren ToDo-Liste, getrennt von jeder UI
   todo-lib.test.mjs            node:test dafür — Space + Link + FP-basiertes Schreibrecht
@@ -471,14 +485,20 @@ startbar, jeder mit dem exakt gezeigten Code (keine narrative Annäherung):
 5. **Referenzen in der Praxis** — eine kleine Kontakt-/Dateibibliothek:
    `obj://` baut die Liste, `key://` verweist auf eine Kategorie, `file://`
    auf einen echten Datei-Upload (`<input type="file">`, keine synthetischen
-   Bytes). Die Liste ist **durchgängig reaktiv** — sie hängt an genau einem
-   `qu.on(prefix + '/**', cb, { initial: true })`, nicht an einem
-   "Neu laden"-Knopf: `initial: true` liefert beim Mounten zuerst, was schon
-   da ist, danach kommt jede Änderung (neuer Eintrag, neuer Upload) über
-   dieselbe Subscription herein. Kein Lab-Abschnitt mit einer Liste/Live-
-   Ansicht sollte künftig anders gebaut werden — Snapshot-nach-Klick ist nur
-   für einmalige Diagnose-Schritte richtig (siehe Abschnitt 5, Schritt 4,
-   der genau diesen Kontrast explizit zeigt).
+   Bytes). Liste **und** Notizfeld sind **durchgängig reaktiv**, beide auf
+   `src/ui/bindings.js` gebaut statt auf Hand-verdrahtetem `qu.on(...)`:
+   `viewObject()` für die Liste (`initial: true` liefert beim Mounten
+   zuerst, was schon da ist, danach kommt jede Änderung — neuer Eintrag,
+   neuer Upload — über dieselbe Subscription herein) und `bindKey()` für
+   ein zweiseitig gebundenes Notizfeld je Eintrag: Tippen schreibt sofort
+   in eine eigene Leaf-QuBit (`<eintragId>/note`), kein Speichern-Knopf,
+   und ein Echo-Schutz verhindert sowohl unnötige Schreibvorgänge bei
+   identischem Wert als auch ein Selbst-Überschreiben des Cursors beim
+   Tippen (Vergleich über `(id, ts)`, nicht über den Wert). Kein
+   Lab-Abschnitt mit einer Liste/Live-Ansicht oder einem editierbaren Feld
+   sollte künftig anders gebaut werden — Snapshot-nach-Klick ist nur für
+   einmalige Diagnose-Schritte richtig (siehe Abschnitt 5, Schritt 4, der
+   genau diesen Kontrast explizit zeigt).
 
 Jeder Abschnitt hängt seine zentralen Objekte an `window` (z.B. `window.qu`
 nach Abschnitt 1, `window.quLab.network.alice` immer) — zum Weiterprobieren
@@ -515,7 +535,7 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Status
 
-109 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+117 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
 CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
 Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
 `LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter` (neu,

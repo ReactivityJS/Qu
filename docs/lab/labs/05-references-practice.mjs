@@ -4,15 +4,17 @@
 //   - key://<id>       jeder Eintrag verweist auf eine Kategorie-QuBit
 //   - file://<id>       jeder Eintrag kann einen echten Datei-Upload referenzieren
 //
-// WICHTIG: die Liste unten ist eine echte Live-Ansicht, kein Snapshot nach
-// einem Klick. Sie hängt an genau einem qu.on(prefix + '/**', cb,
-// { initial: true }) — `initial: true` liefert zuerst, was schon da ist,
-// danach jede Änderung live, ohne dass irgendwer manuell neu laden muss.
-// Das ist bewusst der EINZIGE Weg, wie diese Liste sich aktualisiert; es
-// gibt keinen separaten "refresh"-Aufruf nach dem Absenden des Formulars.
+// Die Liste UND die Notiz je Eintrag sind echte Live-Ansichten, kein
+// Snapshot nach einem Klick — gebaut auf src/ui/bindings.js:
+//   - viewObject() für die Liste (one-way: qu.on(prefix + '/*', cb,
+//     { initial: true }) pro Kind-QuBit)
+//   - bindKey() für die Notiz (two-way: derselbe Mechanismus PLUS ein
+//     Schreib-Listener zurück, mit Echo-Schutz nach (id, ts) statt
+//     Wert-Vergleich beim Rendern, und Wert-Vergleich vor dem Schreiben)
+// Es gibt an keiner Stelle einen "Neu laden"-Aufruf.
 import {
   Qu, MemoryFileStorageAdapter, createReferenceHandlerPlugin, createFileHandlerPlugin,
-  objRef, keyRef, resolveReference,
+  objRef, keyRef, resolveReference, viewObject, bindKey,
 } from '../../../src/index.js';
 import { el } from '../render.mjs';
 
@@ -81,7 +83,7 @@ await qu.publish(\`\${base}/entries/\${id}\`, {
   {
     id: 'one-shot-snapshot',
     title: '4 · Zum Vergleich: eine einmalige Momentaufnahme (nicht reaktiv)',
-    description: 'resolveReference() mit obj:// liefert genau EINMAL den aktuellen Stand — nützlich, wenn eine App wirklich nur einen Snapshot braucht. Die Live-Ansicht unten macht das NICHT so: sie nutzt qu.on() und bleibt danach dauerhaft aktuell.',
+    description: 'resolveReference() mit obj:// liefert genau EINMAL den aktuellen Stand — nützlich, wenn eine App wirklich nur einen Snapshot braucht. Die Live-Ansicht unten macht das NICHT so: sie nutzt viewObject()/bindKey() (src/ui/bindings.js) und bleibt danach dauerhaft aktuell.',
     code: `const snapshot = await resolveReference(qu, objRef(\`\${base}/entries\`), { asArray: true });`,
     kind: 'info',
     async run(ctx) {
@@ -97,7 +99,7 @@ function formatCategory(qu, categoryRef, targetEl) {
 }
 
 function renderAvatar(qu, avatarRef, fileHandler, targetEl) {
-  if (!avatarRef) return;
+  if (!avatarRef) { targetEl.textContent = ''; return; }
   targetEl.textContent = 'Datei wird geladen …';
   resolveReference(qu, avatarRef, { fileHandler }).then((bytes) => {
     const blob = new Blob([bytes]);
@@ -111,8 +113,12 @@ function renderAvatar(qu, avatarRef, fileHandler, targetEl) {
 /**
  * Die reaktive Live-Ansicht: Formular (Name + Kategorie + optionale Datei)
  * schreibt neue Einträge; die Liste selbst wird NIE manuell neu geladen —
- * jede Änderung kommt ausschließlich über die eine qu.on()-Subscription
- * herein, initial:true holt beim Mounten ab, was schon da ist.
+ * jede Änderung kommt ausschließlich über viewObject()s eine Subscription
+ * herein. Jeder Eintrag bekommt außerdem ein zweiseitig gebundenes
+ * Notiz-Feld (bindKey) — als eigene Leaf-QuBit unter dem Eintrag, tippen
+ * schreibt sofort, kein Speichern-Knopf, und die Änderung eines zweiten
+ * Tabs/Fensters auf demselben Eintrag würde hier genauso ankommen wie ein
+ * frischer Eintrag.
  */
 export function mountLibraryView(container, ctx) {
   const { qu, base, fileStorage, fileHandler } = ctx;
@@ -147,8 +153,8 @@ export function mountLibraryView(container, ctx) {
       });
       nameInput.value = '';
       fileInput.value = '';
-      // Kein manuelles Nachladen der Liste hier — die on()-Subscription
-      // unten liefert genau dieses publish() von selbst.
+      // Kein manuelles Nachladen der Liste hier — viewObject() unten
+      // erhält genau dieses publish() von selbst.
     } finally {
       submitBtn.disabled = false;
     }
@@ -156,28 +162,33 @@ export function mountLibraryView(container, ctx) {
 
   const list = el('ul', { class: 'lib-list' });
   const empty = el('p', { class: 'step-desc', text: 'Noch keine Einträge — leg den ersten über das Formular an.' });
-
   container.append(form, empty, list);
 
-  const nodes = new Map(); // entry id -> <li>
-
-  const off = qu.on(`${base}/entries/**`, (q) => {
-    empty.hidden = true;
-    let li = nodes.get(q.id);
-    if (!li) {
-      li = el('li', { class: 'lib-entry' });
-      nodes.set(q.id, li);
+  const offView = viewObject(qu, `${base}/entries`, {
+    createItem(q) {
+      empty.hidden = true;
+      const li = el('li', { class: 'lib-entry' });
+      const nameEl = el('span', { class: 'lib-name' });
+      const metaEl = el('span', { class: 'lib-meta' });
+      const fileAreaEl = el('div', { class: 'lib-file-area' });
+      const noteInput = el('textarea', {
+        class: 'lib-note', rows: '2',
+        placeholder: 'Live-Notiz zu diesem Eintrag — direkt tippen, kein Speichern-Knopf',
+      });
+      li.append(nameEl, metaEl, fileAreaEl, noteInput);
       list.appendChild(li);
-    }
-    li.textContent = '';
-    li.appendChild(el('span', { class: 'lib-name', text: q.value.name }));
-    const meta = el('span', { class: 'lib-meta' });
-    li.appendChild(meta);
-    formatCategory(qu, q.value.category, meta);
-    const fileArea = el('div', { class: 'lib-file-area' });
-    li.appendChild(fileArea);
-    renderAvatar(qu, q.value.avatar, fileHandler, fileArea);
-  }, { initial: true });
+      // Two-way, einmal pro Eintrag verdrahtet — unabhängig vom
+      // Render-Zyklus der Liste selbst (die Notiz ist eine eigene Leaf-
+      // QuBit, `${entryId}/note`, kein Feld des Eintrags-Objekts).
+      bindKey(qu, `${q.id}/note`, noteInput);
+      return { nameEl, metaEl, fileAreaEl };
+    },
+    render(item, value) {
+      item.nameEl.textContent = value.name;
+      formatCategory(qu, value.category, item.metaEl);
+      renderAvatar(qu, value.avatar, fileHandler, item.fileAreaEl);
+    },
+  });
 
-  return () => { off(); nodes.clear(); };
+  return () => { offView(); };
 }

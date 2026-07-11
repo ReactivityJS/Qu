@@ -78,3 +78,10 @@ export {
   setPresence, getPresence, onPresenceChange, startHeartbeat,
   createChatPlugin,
 } from './modules/chat.js';
+
+// UI bindings — reactive view/binding primitives (viewKey/viewObject are
+// one-way, bindKey/bindObject add local edit write-back). DOM-library-
+// agnostic: no document.* calls in here, safe in the barrel like
+// everything else that only *references* browser APIs inside function
+// bodies (see note at the top of this file).
+export { viewKey, viewObject, bindKey, bindObject } from './ui/bindings.js';
