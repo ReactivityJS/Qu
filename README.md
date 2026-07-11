@@ -61,6 +61,209 @@ Beispiel). Die darunterliegenden Bausteine (`QuRuntime`, `QuSession`,
 `QuStore`, …) bleiben für fortgeschrittene Fälle direkt nutzbar —
 `qu.runtime` ist die Fluchttür dorthin.
 
+## Grundkonzepte an Beispielen
+
+Baut die Kernkonzepte in der Reihenfolge auf, in der man sie beim Einsatz von
+QU tatsächlich braucht — von der Identität bis zum Gesamtbild "QuStore als
+geteilte, entfernte Datenbank". Jeder Code-Block ist copy-paste-lauffähig
+(Node-Konsole oder Browser-Konsole nach dem Laden von `src/index.js`).
+
+### 1. Identität
+
+Eine Identität ist ein ECDSA/ECDH-Schlüsselpaar; der `fingerprint`
+(`hash(publicSigningKey)`) ist zugleich die Adresse deines eigenen Spaces
+(`~<fingerprint>`) — Identität und Adressierung sind dieselbe Sache, kein
+zwei getrennte Konzepte.
+
+```js
+import { Qu } from './src/index.js';
+
+const alice = await Qu.create();                    // neues Schlüsselpaar
+console.log(alice.fingerprint, alice.userSpaceId);   // z.B. "3e19cdff…", "~3e19cdff…"
+
+const keys = await alice.exportKeys();               // { signPub, signPriv, encPub, encPriv } — z.B. in localStorage speichern
+const aliceAgain = await Qu.create({ identity: keys }); // dieselbe Identität später wieder laden, gleicher Fingerprint
+
+const visitor = await Qu.create({ guest: true });    // echte, aber rein lesende Identität — jede Schreib-Methode wirft sofort
+```
+
+### 2. Schreiben: der eigene Context per Default, ein anderer Context nur mit Erlaubnis
+
+Ohne jedes Plugin gilt der strikte Core-Default (`core/identity-acl.js`):
+**nur der eigene User-Space ist beschreibbar**, sonst nirgends. Keine
+Konfiguration, sondern eine strukturelle Tatsache — nur du kannst je eine
+gültige Signatur für `writer = <dein Fingerprint>` erzeugen.
+
+```js
+await alice.publish(`${alice.userSpaceId}/status`, 'online'); // eigener Context — geht immer
+await alice.publish('irgendein/anderer/pfad', 'x');             // ein anderer Context — wirft: [ACL] Write denied
+```
+
+Um in einem **anderen** Context zu schreiben — einem geteilten Space, oder
+dem Space einer anderen Person — muss dieser Context dich explizit als
+`writer` listen. Das übernimmt das Spaces-Plugin:
+
+```js
+import { createSpacesPlugin } from './src/index.js';
+
+// Für dieses Beispiel teilen sich alice und bob einen Prozess (eine
+// Runtime) — der einfachste Fall, um writers/readers zu zeigen, ohne
+// gleich Netzwerk/Sync mit hereinzunehmen (das kommt in Abschnitt 3 + 5).
+const bob = await Qu.create({ runtime: alice.runtime });
+alice.use(createSpacesPlugin());
+const roomId = await alice.createSpace({ writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] });
+
+await alice.publish(`${roomId}/msg1`, 'hallo');   // erlaubt, weil roomId's Manifest alice als writer listet
+await bob.publish(`${roomId}/msg2`, 'hi zurück'); // erlaubt, gleicher Grund
+```
+
+`publish(id, value)` überschreibt (LWW, benanntes Register); `append(collectionId,
+value)` hängt automatisch `/${fingerprint}/${ts}` an — für Sammlungen mit
+mehreren unabhängigen Schreibern (Chat, Kommentare), die strukturell nie
+kollidieren können:
+
+```js
+await alice.append(`${roomId}/msgs`, { text: 'erste Nachricht' }); // landet unter roomId/msgs/<alice-fp>/<ts>
+await bob.append(`${roomId}/msgs`, { text: 'zweite Nachricht' });   // eigener Namensraum, keine Kollision möglich
+```
+
+### 3. Sync, Mirror, Relay
+
+Alles bisherige lief rein lokal (`MemoryAdapter`, kein Netzwerk-Code
+geladen). Für geräteübergreifenden Zugriff auf denselben Space:
+`createNetworkPlugin()` + ein `Channel` + `qu.connect()`.
+
+```js
+import { createNetworkPlugin, createWebSocketChannel } from './src/index.js';
+
+alice.use(createNetworkPlugin());
+const channel = createWebSocketChannel('wss://mein-relay/relay');
+await channel.connect();
+const repl = await alice.connect(channel, { pushTopics: [alice.userSpaceId] }); // beweist zuerst den Fingerprint (Handshake), verdrahtet danach Replication
+
+await repl.sync({ topic: alice.userSpaceId, since: 0 }); // reziprok: die Gegenseite fragt automatisch zurück — ein Aufruf leert beide Richtungen
+```
+
+`pushTopics` sind die Präfixe, für die neu eintreffende QuBits sofort live
+weitergeleitet werden. Ein **Relay** (`relay/relay.mjs`) ist dieselbe "eine
+Runtime, viele Channels"-Architektur wie jede andere QU-Instanz, nur als
+Server-Prozess betrieben — kennt weder Chat noch irgendeine konkrete
+Anwendung. `role: 'mirror'` (statt `role: 'sync'`) an `qu.connect()`
+markiert eine Verbindung als bedingungslose Storage-Kopie, die keine
+Routing-Optimierung je wegoptimieren darf — typischerweise die Verbindung zu
+genau diesem Relay:
+
+```js
+await alice.connect(channel, { role: 'mirror', pushTopics: [alice.userSpaceId] }); // alles, was alice schreibt, geht bedingungslos zum Relay
+```
+
+Ein Relay mit einem durablen `StorageAdapter` (z.B. Filesystem) UND
+`role: 'mirror'` ergibt zusammen einen **Storage-Mirror**: eine entfernte,
+dauerhafte Kopie deines Spaces, die auch dann online bleibt, wenn dein
+eigenes Gerät offline ist.
+
+### 4. Arten von Events
+
+Ein "Event" in QU ist ein QuBit, das über `on()` zugestellt wird — zwei
+unabhängige Dimensionen bestimmen, was mit ihm passiert:
+
+**Ort — lokal oder remote-shared:**
+- **Lokal**: kein Network-Plugin installiert/verbunden — `publish()`/`append()` bleibt auf diesem Prozess/Tab.
+- **Remote-shared**: `createNetworkPlugin()` + `qu.connect()` — derselbe `publish()`/`on()`-Code, jetzt zusätzlich über `pushTopics` an verbundene Peers weitergereicht (Abschnitt 3).
+
+**Dauerhaftigkeit — vier Stufen, alle über denselben `StorageAdapter`-Contract austauschbar:**
+| Adapter | Übersteht Reload? | Übersteht Tab-Schließen/Neustart? | Typischer Einsatz |
+|---|---|---|---|
+| `MemoryAdapter` (Core-Default) | ❌ | ❌ | Tests, Demos, rein session-lange Daten |
+| `SessionStorageAdapter` (Browser) | ✅ | ❌ | Formular-Entwurf, der einen Reload übersteht |
+| `LocalStorageAdapter` / `IndexedDBAdapter` (Browser) | ✅ | ✅ | echte Nutzdaten im Browser |
+| `node-fs`-Adapter (Node, nicht im Barrel, siehe `adapters/node-fs.js`) | ✅ | ✅ | Server-/Relay-seitige Persistenz |
+
+Ganz am flüchtigen Ende, noch vor `MemoryAdapter`, gibt es zwei bewusst
+unterschiedliche Mechanismen:
+- **`NullAdapter`-Mount**: ein *echtes* QuBit — signiert, ACL-geprüft, live
+  gepusht und dispatcht wie jedes andere — nur die Storage-Ebene verwirft es
+  sofort (`get`/`getAll` liefern immer leer). Ein später (oder nach
+  `initial: true`) hinzukommender Listener sieht es nie. Für reine
+  Event-Bus-Mounts (Presence, Live-Ticker), die trotzdem den vollen
+  Zero-Trust-Schreibpfad durchlaufen sollen.
+- **`runtime.emit(topic, payload)`**: kein QuBit überhaupt — unsigniert,
+  kein ACL-Check, kein Store-Write. Für modul-interne Lifecycle-Signale
+  (z.B. `sync.complete`), nicht für Nutzdaten.
+
+Storage-Wahl ist reine Konfiguration am `QuStore`-Mount, unabhängig von allem anderen:
+```js
+import { Qu, QuStore, LocalStorageAdapter, SessionStorageAdapter } from './src/index.js';
+
+const fluechtig = await Qu.create();                                                          // Memory, Default
+const proSitzung = await Qu.create({ store: new QuStore([{ prefix: '', adapter: new SessionStorageAdapter() }]) });
+const dauerhaft  = await Qu.create({ store: new QuStore([{ prefix: '', adapter: new LocalStorageAdapter() }]) });
+```
+
+**Listener:** `on(pattern, callback, { initial?, once? })` — `initial: true`
+liefert erst alles bereits Passende, danach laufend Neues (kein manuelles
+`query()` + `on()` mehr nötig); `once: true` liefert nur den aktuellen
+Stand, keine laufende Subscription.
+
+### 5. Trigger & Listen: Events auslösen und darauf reagieren
+
+Die Kombinationen aus Abschnitt 4 an einem durchgehenden Beispiel — derselbe
+`on()`/`publish()`-Code für jede:
+
+```js
+// Lokal + Memory (Standard)
+const qu = await Qu.create();
+qu.on(`${qu.userSpaceId}/counter`, (q) => console.log('lokal:', q.value));
+await qu.publish(`${qu.userSpaceId}/counter`, 1);
+
+// Lokal + flüchtig (kein QuBit, kein Store, modul-intern)
+qu.runtime.on('lab.progress', (e) => console.log('flüchtig:', e.step)); // payload-Felder liegen direkt auf e, nicht unter e.payload
+qu.runtime.emit('lab.progress', { step: 3 });
+
+// Remote-shared: zwei GETRENNTE Runtimes (anders als bobs geteilte Runtime
+// in Abschnitt 2!), verbunden per Loopback-Channel — für einen echten
+// Relay createWebSocketChannel(url) statt createLoopbackChannelPair().
+// Absichtlich unter alice' EIGENEM User-Space (nicht roomId aus Abschnitt 2)
+// — der ist auf jeder Runtime strukturell gültig, ganz ohne Spaces-Plugin
+// oder eine erst noch zu synchronisierende Manifest-QuBit auf bobRemotes
+// Seite (siehe Abschnitt 2: fingerprint = hash(pubKey) macht "alice darf
+// unter ihrem eigenen Space schreiben" zu einer kryptographischen Tatsache,
+// die jede Runtime unabhängig selbst prüfen kann).
+import { createNetworkPlugin, createLoopbackChannelPair } from './src/index.js';
+
+const bobRemote = await Qu.create(); // eigene, unabhängige Runtime — nicht bob aus Abschnitt 2
+[alice, bobRemote].forEach((qu) => qu.use(createNetworkPlugin()));
+const { a, b } = createLoopbackChannelPair();
+await Promise.all([
+  alice.connect(a, { pushTopics: [alice.userSpaceId] }),
+  bobRemote.connect(b, { pushTopics: [alice.userSpaceId] }),
+]);
+
+bobRemote.on(`${alice.userSpaceId}/msg`, (q) => console.log('bei bob angekommen:', q.value)); // Listener zuerst registrieren
+await alice.publish(`${alice.userSpaceId}/msg`, 'hallo bob');                                  // kommt live bei bob an, ganz ohne dass bob je gefragt hat
+```
+
+### 6. QuStore als verteilte, geteilte DB
+
+Mit den obigen Bausteinen zusammengesetzt ergibt sich ein Bild, das über
+"Event-System" hinausgeht: QU ist eine **reaktive, verteilte Datenbank**,
+bei der jede klassische DB-Frage eine direkte Entsprechung hat:
+
+| Klassische DB-Frage | QU-Antwort |
+|---|---|
+| Was ist eine Zeile? | Ein QuBit (`{id, value, ts, writer, sig}`) — `publish()` = LWW-Register, `append()` = kollisionsfreier Sammlungs-Eintrag |
+| Wie stelle ich eine Anfrage? | `query(pattern)` — einmalig; `on(pattern, cb, {initial:true})` — dieselbe Anfrage, dauerhaft live |
+| Welche Storage-Engine? | Austauschbarer `StorageAdapter` — Memory/Session/Local/IndexedDB/Filesystem, identische API (Abschnitt 4) |
+| Wie repliziere ich zu einer entfernten Kopie? | `qu.connect()` + `pushTopics`/`role: 'mirror'` — derselbe Space, gespiegelt auf einen Relay-Prozess (Abschnitt 3) |
+| Wie sind Rechte modelliert? | Pro Space (nicht pro Tabelle/Zeile): ein Manifest mit `writers`/`readers`/`admins`, write-seitig als Middleware erzwungen (`runtime.ingest()`), read-seitig gefiltert (`filterForReader()`) |
+| Ordering-Garantie? | Hybrid-Logical-Clock (`runtime.nextTs()`) statt Wall-Clock — konsistente Ordering-Entscheidungen auch über mehrere Schreiber/Geräte hinweg |
+
+Ein Client, der lokal schreibt, ein Relay mit durablem Storage, und beliebig
+viele weitere Clients, die sich über `sync()`/Live-Push denselben Space
+teilen, bilden zusammen genau das: eine eventually-consistent, geteilte
+Datenbank, bei der "eine Query stellen" und "auf Änderungen lauschen"
+dieselbe Operation sind (`on()`), nicht zwei getrennte APIs.
+
 ## Projektstruktur
 
 ```

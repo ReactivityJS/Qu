@@ -28,6 +28,8 @@ import { QuRuntime, QuSession, QuIdentity, /* ... */ } from './src/index.js';
 11. [Replication-Modul](#replication-modul) — Sync
 12. [Files-Modul](#files-modul) — Datei-Transfer
 13. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
+14. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
+15. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`
 
 ---
 
@@ -693,4 +695,144 @@ await alice.sendMessage(roomId, {
 
 // Historie + live weiterhören in einem Aufruf, statt query() + on() von Hand zu kombinieren:
 bob.onMessage(roomId, (msg) => console.log(msg.writer, msg.value.text), { initial: true });
+```
+
+---
+
+## UI-Bindings-Modul
+
+Reaktive View-/Bindung-Primitive in reinem JS (`src/ui/bindings.js`) —
+DOM-Library-agnostisch (kein `document.*` in dieser Datei; `createItem`/
+`render`/Element-Get-Set kommen vom Aufrufer), fully unit-testbar mit
+Mock-Objekten statt einem echten Browser (siehe `test/ui-bindings.test.mjs`).
+Basis für das [UI-Components-Modul](#ui-components-modul) darunter — eine
+Component IST nichts als eine dieser Funktionen, aufgerufen aus
+`connectedCallback()`, mit dem zurückgegebenen `off()` in
+`disconnectedCallback()`.
+
+### `viewKey(qu, id, render)` → `() => void`
+One-way, ein einzelner QuBit. `render(value, qubit)` läuft einmal für den
+aktuellen Stand (via `on(id, cb, { initial: true })`), danach bei jeder
+Änderung. Dedupliziert über `(id, ts)`, nicht per Wertevergleich — dieselbe
+Idee wie `QuStore.put()`s Same-ts-Noop-Check.
+
+### `viewObject(qu, prefix, { createItem, render, key?, pattern? })` → `() => void`
+One-way, eine Sammlung. Jeder QuBit direkt unter `prefix` (Default-Pattern
+`${prefix}/*`, überschreibbar) bekommt einmalig `createItem(qubit)` (liefert
+ein beliebiges opakes "Item", typischerweise ein bereits eingefügtes
+DOM-Element) und danach bei jedem Update `render(item, value, qubit)`.
+`key(qubit)` bestimmt die Item-Identität (Default: `qubit.id`). Gleiches
+`(id, ts)`-Dedup pro Item wie `viewKey()`.
+
+### `bindKey(qu, id, element, { get?, set?, event?, onError? })` → `() => void`
+Two-way — derselbe Live-Render wie `viewKey()`, plus ein lokaler
+Edit-Listener, der zurückschreibt. `get`/`set`/`event` defaulten auf
+`<input>`/`<textarea>` (`.value`, Event `input`), sonst `.textContent`
+(funktioniert für contenteditable).
+
+Beide Hälften des Echo-Problems werden explizit geschützt, nie durch
+pauschales Unterdrücken:
+- **Schreib-Seite:** ein Edit, dessen Wert bereits dem bekannten lokalen
+  Wert entspricht, wird nie publiziert.
+- **Render-Seite:** das QuBit, das dieses Binding selbst gerade publiziert
+  hat, wird nicht erneut gerendert (würde Cursor/Selektion überschreiben)
+  — ein ANDERES Binding auf dieselbe `id` (anderer Tab, anderer Nutzer)
+  rendert weiterhin normal.
+
+Der `ts` des Publish wird vorab berechnet (`qu.runtime.nextTs()`) und mit
+eingehenden QuBits verglichen, statt erst nach `await qu.publish()` — die
+Runtime dispatcht synchron während `ingest()`, ein Vergleich erst nach
+`await` würde das eigene erste Echo verpassen. `onError(e)` (optional) läuft
+bei einem abgelehnten Write (z.B. ACL-Ablehnung); der Element-Wert wird dabei
+auf den vorherigen Stand zurückgesetzt.
+
+### `bindObject(qu, prefix, fields, opts?)` → `() => void`
+Two-way, mehrere Felder eines Datensatzes: ein `bindKey()` pro Feld, jedes
+Feld eine eigene Leaf-QuBit (`${prefix}/${field}`) — dieselbe "jedes Feld
+seine eigene Leaf-QuBit"-Form wie `Qu.publishProfile()`, damit zwei
+unabhängige Schreiber nie auf demselben LWW-Register kollidieren.
+`fields`: `{ [feldname]: element }`.
+
+```js
+import { viewObject, bindKey } from './src/index.js';
+
+const offList = viewObject(qu, `${qu.userSpaceId}/todos`, {
+  createItem: (q) => document.querySelector('ul').appendChild(document.createElement('li')),
+  render: (li, value) => { li.textContent = value.text; },
+});
+
+const input = document.querySelector('#note');
+const offBind = bindKey(qu, `${qu.userSpaceId}/note`, input); // tippen schreibt sofort, kein Speichern-Knopf
+
+// beim Unmount:
+offList();
+offBind();
+```
+
+---
+
+## UI-Components-Modul
+
+Deklarative Custom Elements über dem [UI-Bindings-Modul](#ui-bindings-modul)
+(`src/ui/components.js`) — `connectedCallback()`/`disconnectedCallback()`
+sind das `on()`/`off()`, das Aufrufer von `bindings.js` sonst von Hand
+verdrahten müssten. **Browser-only** (erweitert `HTMLElement` beim
+Modul-Laden, würde bei einem Node-Import sofort werfen) — bewusst **nicht**
+im Barrel `src/index.js`, direkt importieren:
+```js
+import '../../../src/ui/components.js'; // Seiteneffekt: registriert <qu-view>/<qu-bind>
+```
+
+Zwei Elemente, nicht vier: `<qu-bind>` ist `<qu-view>` plus Schreiben-zurück,
+eine überschriebene Methode statt eines zweiten Mechanismus. Es gibt
+deliberately kein drittes "Objekt"/"Liste"-Element — ein Datensatz mit
+mehreren unabhängig schreibbaren Feldern ist N Geschwister-Elemente mit
+gleichem `path`-Präfix und je eigenem `key` (dieselbe Philosophie wie
+`bindObject()`); eine Sammlung (Kind-QuBits unter einem Prefix aufzählen)
+hat kein deklaratives Gegenstück und bleibt `viewObject()` (JS) — siehe
+`docs/lab/labs/05-references-practice.mjs` für ein Beispiel, das beide
+Ebenen bewusst nebeneinander zeigt.
+
+### `<qu-view path="..." key?="..." attr?="...">`
+One-way.
+| Attribut | Pflicht | Beschreibung |
+|---|---|---|
+| `path` | ja | Die QuBit-ID — oder, falls `key` gesetzt ist, das ID-Präfix |
+| `key` | nein | Ergibt `${path}/${key}` als gebundene ID (eigene Leaf-QuBit) statt `path` selbst |
+| `attr` | nein | Welches DOM-Attribut/-Property den Wert trägt: `value`, `textContent`, `innerHTML`, `checked` (Schreib-Event `change`), oder ein beliebiges generisches HTML-Attribut (`href`, `src`, `class`, `data-*`, …). Default (`auto`/weggelassen): dieselbe Heuristik wie `bindKey()` selbst — `value` falls vorhanden, sonst `textContent` |
+
+**Zielelement:** ein eingewickeltes einzelnes Kind-Element, falls das
+Custom Element genau eines hat, sonst das Element selbst — kein `is="..."`
+nötig (fehlt in Safari):
+```html
+<qu-view path="alice/profile" key="avatar" attr="src"><img></qu-view>
+<qu-view path="alice/profile" key="bio"></qu-view> <!-- textContent, Element selbst als Ziel -->
+```
+
+### `<qu-bind path="..." key?="..." attr?="...">`
+Wie `<qu-view>`, plus Schreiben-zurück (`bindKey()` statt `viewKey()`).
+Löst bei einem abgelehnten Write (z.B. ACL-Ablehnung) ein `qu-error`-Event
+aus (`detail` = der Fehler, `bubbles: true`) und setzt den Element-Wert auf
+den vorherigen Stand zurück.
+
+**Qu-Instanz — nie global:** `.qu` als Property auf dem Element selbst oder
+einem Vorfahren (per DOM-Walk gefunden, funktioniert auch über einen
+Shadow-Root hinweg via `.host`). Muss gesetzt sein, BEVOR Nachfahren
+angehängt werden (`appendChild()` löst `connectedCallback()` synchron aus)
+— ein einmaliger Microtask-Retry fängt die "angehängt, `.qu` erst danach
+gesetzt"-Reihenfolge ab, bevor endgültig eine Fehlermeldung in die Konsole
+geht.
+
+```js
+import '../../../src/ui/components.js';
+
+const container = document.querySelector('#app');
+container.qu = qu; // einmal setzen, gilt für alle Nachfahren
+
+container.innerHTML = `
+  <qu-view path="${qu.userSpaceId}" key="name"></qu-view>
+  <qu-bind path="${qu.userSpaceId}" key="bio"><input></qu-bind>
+`;
+
+container.querySelector('qu-bind').addEventListener('qu-error', (e) => console.error(e.detail));
 ```
