@@ -54,6 +54,9 @@ export class QuSpace {
   toString() { return this.#id; }
   toJSON() { return this.#id; }
 
+  /** Escape hatch, same as qu.runtime — lets a QuSpace be passed anywhere a Qu instance was expected (e.g. src/ui/bindings.js's bindKey(), which needs runtime.nextTs() for its echo guard), not just to publish/get/query/on. */
+  get runtime() { return this.#session.runtime; }
+
   /** Falsy subpath (omitted or '') means the Space's own root id — the manifest, or wherever a root-level value would live. */
   #resolve(subpath) {
     return subpath ? `${this.#id}/${subpath}` : this.#id;

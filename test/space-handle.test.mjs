@@ -1,6 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu, QuSpace, QuStore, MemoryAdapter, NullAdapter, createSpacesPlugin } from '../src/index.js';
+import { Qu, QuSpace, QuStore, MemoryAdapter, NullAdapter, createSpacesPlugin, bindKey } from '../src/index.js';
+
+test('a QuSpace exposes .runtime, so ui/bindings.js\'s bindKey() (needs runtime.nextTs() for its echo guard) works when passed a QuSpace directly, not just a Qu instance', async () => {
+  const alice = await Qu.create();
+  assert.equal(alice.own.runtime, alice.runtime);
+
+  const listeners = new Map();
+  const input = {
+    value: '',
+    addEventListener(event, fn) { listeners.set(event, fn); },
+    removeEventListener() {},
+  };
+  const off = bindKey(alice.own, 'bio', input); // alice.own, not alice — this used to throw "Cannot read properties of undefined (reading 'nextTs')"
+  input.value = 'hello';
+  await listeners.get('input')();
+  assert.equal((await alice.own.get('bio')).value, 'hello');
+  off();
+});
 
 test('qu.own is a QuSpace bound to the User-Space, relative paths resolve under it', async () => {
   const alice = await Qu.create();
