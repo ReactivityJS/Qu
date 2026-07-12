@@ -174,7 +174,7 @@ bewusst außerhalb `core/` — importiert aus `modules/`/`network/`, was
 `qu.js` selbst nie darf (Schichttrennung).
 
 ### Replication (optionales Modul, hier bequem verdrahtet)
-`qu.connect(channel, { pushTopics?, role?, group?, metric? })` → `Promise<DefaultReplication>` —
+`qu.connect(channel, { pushTopics?, role?, group?, metric?, requireDirectWriter?, rateLimiter? })` → `Promise<DefaultReplication>` —
 führt zuerst `authenticateChannel()` aus, verdrahtet danach
 `DefaultReplication` mit dem bewiesenen Fingerprint. Das Replication-Objekt
 hat weiterhin `.sync()`/`.repair()`/`.snapshot()`/`.peerFingerprint`/`.close()`.
@@ -187,6 +187,12 @@ mitbestimmt. `qu.router` (lazy, bei erstem Zugriff erzeugt) und
 `qu.webrtc(signalingChannel, opts?)` (liefert einen
 `PeerConnectionManager`, siehe dort) — Details siehe
 [Router & WebRTC](#router-webrtc) weiter unten.
+
+`requireDirectWriter`/`rateLimiter` sind ebenfalls optional und additiv,
+betreffen aber nur **eingehende** `qu.push`-Nachrichten (nicht das oben
+beschriebene ausgehende Push-Routing) — siehe
+[Relay-Schutz: requireDirectWriter & rateLimiter](#relay-schutz-requiredirectwriter-ratelimiter)
+weiter unten.
 
 ### Router & WebRTC
 `Router` (`src/network/router.js`) entscheidet, welche Channels ein QuBit
@@ -213,6 +219,55 @@ Verbindung für Replication freigegeben wird — WebRTC/DTLS verschlüsselt,
 beweist aber keine Identität. Ausführliche Architektur-Diskussion (Rolle
 des Relays als Storage-Mirror, Routing- vs. Subscription-Frage) steht im
 Whitepaper.
+
+### Relay-Schutz: `requireDirectWriter` & `rateLimiter`
+Zwei unabhängige, additive Optionen auf `DefaultReplication` (Konstruktor,
+`ReplicationHub`, `qu.connect()`, `createRelay()` — dieselben Namen überall),
+die ausschließlich **eingehende** `qu.push`-Nachrichten einer einzelnen
+Verbindung betreffen. Beide standardmäßig aus (unverändertes Verhalten ohne
+sie); ausgehendes Push-Routing (`pushTopics`/ACL/Router) bleibt komplett
+unberührt.
+
+**`requireDirectWriter: true`** — akzeptiert einen `qu.push` nur, wenn
+`qubit.writer` exakt dem per Handshake bewiesenen Fingerprint DIESER
+Verbindung entspricht. Erzwingt eine strikte Stern-Topologie: dieser Relay
+hört einen Write ausschließlich direkt von seiner/seinem tatsächlichen
+Verfasser:in, nie über eine dritte Partei weitergeleitet. Eine Signatur
+macht Fälschung ohnehin unmöglich — hier geht es darum, WER einer
+bestimmten Verbindung einen Write übergeben darf, nicht um Authentizität.
+**Bewusst kein Core-Default:** eine legitime Mesh-/Gossip-Topologie (ein
+Client, der etwas von einem WebRTC-Peer gelernt hat, an die eigene
+Mirror-Verbindung zum Relay weiterreicht) braucht genau den Fall
+`writer !== peerFingerprint` — das darf nicht kaputtgehen, nur weil ein
+Relay diese striktere Policy für sich selbst wählt.
+
+**`rateLimiter`** — eine `createRateLimiter({ maxPerWindow?, windowMs?, maxTrackedKeys? })`-Instanz
+(`network/rate-limiter.js`, gleitendes Zeitfenster pro Schlüssel, Default
+100 Writes/Sekunde) oder jedes kompatible `{ allow(key) => boolean }`.
+Schlüssel ist `qubit.writer` (Fallback: `peerFingerprint`, dann die
+Channel-Id) — ein flutender Peer verbraucht nie das Budget eines anderen.
+Speicher bleibt begrenzt (`maxTrackedKeys`, Default 1000 — ältester Eintrag
+weicht, dieselbe Technik wie `DefaultReplication`s eigener
+Echo-Vermeidungs-Cache).
+
+```js
+import { createRateLimiter } from './src/index.js';
+
+const limiter = createRateLimiter({ maxPerWindow: 100, windowMs: 1000 });
+await qu.connect(channel, { requireDirectWriter: true, rateLimiter: limiter });
+```
+
+`createRelay({ requireDirectWriter?, rateLimiter? })` (`relay/relay.mjs`)
+reicht beide Optionen identisch an jede über `attachChannel()` angehängte
+Verbindung durch. Das Demo-Deployment (`index.js`) hat `rateLimiter`
+**standardmäßig aktiv** (200/Sekunde, `QU_RATE_LIMIT_MAX`/
+`QU_RATE_LIMIT_WINDOW_MS` einstellbar, `QU_RATE_LIMIT=0` schaltet komplett
+ab) — anders als z. B. `QU_ENABLE_TEST_ENDPOINT` (aus per Default, weil der
+Endpunkt selbst erst eine echte Aktion auslöst) ist hier das UNgeschützte
+`ingest()` das eigentliche Risiko, also ist "an" der sichere Standard.
+`requireDirectWriter` bleibt aus (`QU_REQUIRE_DIRECT_WRITER=1` zum
+Aktivieren) — eine Topologie-Entscheidung, die ein Deployment bewusst
+treffen muss, keine, die man sich versehentlich einfängt.
 
 ### Files (optionales Modul, hier bequem verdrahtet)
 `qu.shareFile(id, bytes, opts)` → wie [`publishFile()`](#files-modul), Session

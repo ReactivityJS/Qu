@@ -52,6 +52,8 @@ export class DefaultReplication {
   #recentlyFromPeer = new Map(); // `${id}|${ts}` -> true, bounded LRU-ish de-echo cache
   #pushTopics;
   #router;
+  #requireDirectWriter;
+  #rateLimiter;
 
   constructor(runtime, channel, {
     getACL = async () => null,
@@ -59,6 +61,13 @@ export class DefaultReplication {
     repairWindowMs = 5 * 60 * 1000,
     pushTopics = [],
     router = null, // optional — see core/router.js. Unset: identical behaviour to before the Router existed.
+    // Both opt-in, both about INCOMING `qu.push` only — see #handleMessage.
+    // Neither changes outgoing behavior (still governed by ACL/pushTopics/
+    // Router as before), and neither is on unless the caller asks for it —
+    // existing callers (Qu.connect(), a bare `new DefaultReplication()`)
+    // keep today's behavior unchanged.
+    requireDirectWriter = false, // true: only accept a push whose qubit.writer is THIS channel's own proven peerFingerprint — rejects relayed/forwarded qubits, enforcing a star topology where the Relay only ever hears a write from its actual author. A qubit's signature already makes forgery impossible either way; this is about WHO may hand a given write to this particular connection, not about authenticity.
+    rateLimiter = null, // a createRateLimiter() instance (network/rate-limiter.js), or any `{ allow(key) => boolean }`. Keyed by the incoming qubit's writer (falls back to peerFingerprint, then the channel id, for the rare anonymous/unsigned case) — one peer flooding writes never starves another peer's budget.
   } = {}) {
     this.#runtime = runtime;
     this.#channel = assertChannel(channel);
@@ -68,6 +77,8 @@ export class DefaultReplication {
     this.#repairWindowMs = repairWindowMs;
     this.#pushTopics = pushTopics;
     this.#router = router;
+    this.#requireDirectWriter = requireDirectWriter;
+    this.#rateLimiter = rateLimiter;
     this.#off = channel.onMessage((msg) => this.#handleMessage(msg));
     if (pushTopics.length) this.#offPush = this.#runtime.on('**', (q) => this.#maybePush(q));
   }
@@ -114,6 +125,14 @@ export class DefaultReplication {
 
   async #handleMessage(msg) {
     if (msg.type === 'qu.push') {
+      if (this.#requireDirectWriter && msg.qubit?.writer !== this.#peerFingerprint) {
+        debug('replication', 'push-rejected-not-direct-writer', { id: msg.qubit?.id, writer: msg.qubit?.writer, peerFingerprint: this.#peerFingerprint });
+        return;
+      }
+      if (this.#rateLimiter && !this.#rateLimiter.allow(msg.qubit?.writer ?? this.#peerFingerprint ?? this.#channelId)) {
+        debug('replication', 'push-rejected-rate-limited', { id: msg.qubit?.id, writer: msg.qubit?.writer });
+        return;
+      }
       this.#rememberFromPeer(msg.qubit);
       try {
         await this.#runtime.ingest(msg.qubit);

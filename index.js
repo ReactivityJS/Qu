@@ -17,7 +17,7 @@ import { startServer } from './server/static-server.mjs';
 import { createTestRoutes } from './server/test-runner.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
-import { QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug } from './src/index.js';
+import { QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter } from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
 
@@ -63,6 +63,26 @@ const store = new QuStore([
   { prefix: 'signal/', adapter: new NullAdapter() },
 ]);
 const fileStorage = persistent ? new FileSystemFileStorageAdapter(path.join(dataDir, 'files')) : new MemoryFileStorageAdapter();
-const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'] });
+
+// Incoming-push protection (network/replication/default.js). Rate limiting
+// is ON by default with a generous per-fingerprint budget — unlike
+// QU_ENABLE_TEST_ENDPOINT (opt-in because it triggers real work per
+// request), an unprotected `ingest()` from any reachable client is the
+// actual risk here, so the safe default is "on", not "off". `QU_RATE_LIMIT=0`
+// disables it entirely (e.g. for trusted-only/offline test setups);
+// `QU_RATE_LIMIT_MAX`/`QU_RATE_LIMIT_WINDOW_MS` tune it.
+// `QU_REQUIRE_DIRECT_WRITER=1` opts into the stricter star-topology check
+// (rejects any push whose signer isn't the connection it arrived on) — off
+// by default, because it's a topology decision a deployment must choose
+// deliberately (it would break a legitimate client relaying what it
+// learned from a WebRTC peer onward to this relay).
+const rateLimitMax = Number(process.env.QU_RATE_LIMIT_MAX) || 200;
+const rateLimiter = process.env.QU_RATE_LIMIT === '0' ? null : createRateLimiter({
+  maxPerWindow: rateLimitMax,
+  windowMs: Number(process.env.QU_RATE_LIMIT_WINDOW_MS) || 1000,
+});
+const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
+
+const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'], requireDirectWriter, rateLimiter });
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
 
