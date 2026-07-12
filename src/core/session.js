@@ -3,6 +3,7 @@ import { encryptFor, decryptWith } from './crypto.js';
 import { filterForReader } from './acl.js';
 import { debug } from './debug.js';
 import { subscribeWithOptions } from './subscribe-with-options.js';
+import { spaceIdOf, userSpaceId, isReservedProfilePath } from './space.js';
 
 const ECDH_ALG = { name: 'ECDH', namedCurve: 'P-256' };
 
@@ -48,21 +49,75 @@ export class QuSession {
   get identity() { return this.#identity; }
   get runtime() { return this.#runtime; }
 
-  /** Learn another identity's ECDH public key out-of-band, so this Session can encrypt data *for* them. (Signature verification never needs this — fingerprint = hash(pubKey) is enough.) */
+  /** Learn another identity's ECDH public key out-of-band, so this Session can encrypt data *for* them. (Signature verification never needs this — fingerprint = hash(pubKey) is enough.) Takes precedence over a published `~<fp>/epub` if both are known. */
   async trustPeer(fingerprint, encPubJwk) {
     this.#peers.set(fingerprint, await crypto.subtle.importKey('jwk', encPubJwk, ECDH_ALG, true, []));
+  }
+
+  /**
+   * `encryptFor` omitted entirely (not `null`/`[]` — those are an explicit
+   * opt-out) on a write into a Space whose CURRENT `readers` list is
+   * something other than `['*']` defaults to encrypting for exactly that
+   * list (plus the writer itself, so a sender can always read their own
+   * write even if the manifest's `readers` doesn't happen to include them).
+   * Nothing changes for the common case: without the Spaces plugin (or with
+   * a public Space), `getACL()` always reports `readers: ['*']`, so this is
+   * a no-op there — encryption stays exactly what a caller asks for, same
+   * as before. Manifest writes and the reserved profile leaves
+   * (`~<fp>/pub|epub|alias`, core/space.js) are excluded structurally: a
+   * manifest holds the ACL/routing decisions THIS logic itself depends on
+   * (encrypting it would blind every future `getACL()` call, including this
+   * one), and encrypting your own public key would make it undiscoverable
+   * to exactly the peers who need it to decrypt anything from you at all.
+   */
+  async #defaultRecipients(id) {
+    if (!this.#getACL || !this.fingerprint) return null;
+    if (id === spaceIdOf(id) || isReservedProfilePath(id)) return null;
+    const acl = await this.#getACL(id);
+    const readers = acl?.readers;
+    if (!readers || readers.includes('*')) return null;
+    return [...new Set([...readers, this.fingerprint])];
+  }
+
+  /**
+   * Resolves one recipient's ECDH public key: self (own identity), a peer
+   * already known via `trustPeer()`, or — the fallback that makes default
+   * group-encryption actually usable without every sender manually
+   * `trustPeer()`-ing every reader first — their self-published
+   * `~<fp>/epub` (core/space.js's reserved profile leaf, always readable
+   * regardless of that Space's own `readers` list, see
+   * modules/spaces.js). A raw `runtime.get()` here, not `this.get()`: this
+   * is an internal crypto-material lookup for a recipient the CALLER is
+   * already entitled to address (they're on the target Space's `readers`
+   * list), not a general "read anyone's profile" read path — read-ACL on
+   * the recipient's own Space is irrelevant to it. Resolved keys are
+   * cached in `#peers` exactly like an explicit `trustPeer()` call.
+   */
+  async #resolveRecipientKey(fingerprint) {
+    if (fingerprint === this.fingerprint) return { fingerprint, ecdhPublicKey: this.#identity.encryptionKey };
+    let key = this.#peers.get(fingerprint);
+    if (!key) {
+      const q = await this.#runtime.get(`${userSpaceId(fingerprint)}/epub`);
+      if (q?.value) {
+        try {
+          key = await crypto.subtle.importKey('jwk', q.value, ECDH_ALG, true, []);
+          this.#peers.set(fingerprint, key);
+        } catch (e) {
+          debug('session', 'epub-import-failed', { fingerprint, error: e.message });
+        }
+      }
+    }
+    if (!key) throw new Error(`[Session] Unknown ECDH public key for recipient "${fingerprint}" — call trustPeer() first, or have them publish it (Qu#publishProfile()).`);
+    return { fingerprint, ecdhPublicKey: key };
   }
 
   async publish(id, plainValue, { ts, encryptFor: recipients, refs } = {}) {
     id = String(id); // tolerate anything with a sensible toString() (e.g. QuSpace), not just plain strings
     let value = plainValue;
+    if (recipients === undefined) recipients = await this.#defaultRecipients(id);
     if (recipients && recipients.length) {
       if (!this.#identity) throw new Error('[Session] Cannot encrypt without an identity');
-      const targets = recipients.map((fp) => {
-        const key = fp === this.fingerprint ? this.#identity.encryptionKey : this.#peers.get(fp);
-        if (!key) throw new Error(`[Session] Unknown ECDH public key for recipient "${fp}" — call trustPeer() first`);
-        return { fingerprint: fp, ecdhPublicKey: key };
-      });
+      const targets = await Promise.all(recipients.map((fp) => this.#resolveRecipientKey(fp)));
       value = await encryptFor(targets, plainValue);
     }
 

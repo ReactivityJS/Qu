@@ -168,6 +168,26 @@ await room.get('msgs').set({ text: 'erste Nachricht' });  // landet unter room/m
 await bob.get(`${room}/msgs`).set({ text: 'zweite Nachricht' }); // eigener Namensraum, keine Kollision möglich
 ```
 
+**Verschlüsselung ist der Default, sobald ein Space nicht öffentlich lesbar
+ist.** Setzt du `readers` auf eine konkrete Liste statt `['*']` (wie oben
+bei `room`, falls dessen Manifest das so anlegt), verschlüsselt jedes
+`put()`/`set()` in diesem Space automatisch für genau diese Leser — ganz
+ohne `encryptFor` selbst angeben zu müssen. Voraussetzung: jedes Mitglied
+veröffentlicht einmal sein eigenes Profil, damit die anderen seinen
+Verschlüsselungs-Key finden:
+
+```js
+await alice.publishProfile({ alias: 'Alice' }); // einmalig — jedes Mitglied für sich
+await bob.publishProfile({ alias: 'Bob' });
+
+await room.get('msgs').set({ text: 'geheim' }); // automatisch für alle `room`-Leser verschlüsselt
+```
+
+Explizit im Klartext bleiben (auch in einem eingeschränkten Space):
+`opts.encryptFor = null`. Details, inklusive was strukturell nie verschlüsselt
+wird (das Space-Manifest selbst, die drei reservierten Profil-Felder), stehen
+in [API.md](./API.md#sessionpublishid-value-opts).
+
 ### 3. Sync, Mirror, Relay
 
 Alles bisherige lief rein lokal (`MemoryAdapter`, kein Netzwerk-Code
