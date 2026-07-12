@@ -56,12 +56,12 @@ const qu = (await Qu.create())
     id: 'categories',
     title: '2 · Kategorien anlegen (Ziele für key://)',
     description: 'Zwei feste QuBits, auf die Einträge später per key:// verweisen — genau wie ein Foreign Key auf eine kleine Lookup-Tabelle.',
-    code: `await qu.publish(\`\${base}/categories/work\`, { label: 'Arbeit' });
-await qu.publish(\`\${base}/categories/personal\`, { label: 'Privat' });`,
+    code: `await qu.get(\`\${base}/categories/work\`).put({ label: 'Arbeit' });
+await qu.get(\`\${base}/categories/personal\`).put({ label: 'Privat' });`,
     kind: 'info',
     async run(ctx) {
       for (const cat of CATEGORIES) {
-        await ctx.qu.publish(`${ctx.base}/categories/${cat.id}`, { label: cat.label });
+        await ctx.qu.get(`${ctx.base}/categories/${cat.id}`).put({ label: cat.label });
       }
       return { Kategorien: CATEGORIES.map((c) => c.label).join(', ') };
     },
@@ -71,7 +71,7 @@ await qu.publish(\`\${base}/categories/personal\`, { label: 'Privat' });`,
     title: '3 · Einen ersten Eintrag anlegen (vor der Live-Ansicht)',
     description: 'Absichtlich VOR dem Mounten der Live-Ansicht unten geschrieben — zeigt, dass initial:true bestehende Daten genauso liefert wie künftige. Die Live-Ansicht unten zeigt diesen Eintrag, ohne dass sie je explizit danach gefragt hat.',
     code: `const id = crypto.randomUUID();
-await qu.publish(\`\${base}/entries/\${id}\`, {
+await qu.get(\`\${base}/entries/\${id}\`).put({
   name: 'Erster Eintrag (vor der Live-Ansicht angelegt)',
   category: keyRef(\`\${base}/categories/work\`),
   avatar: null,
@@ -80,7 +80,7 @@ await qu.publish(\`\${base}/entries/\${id}\`, {
     kind: 'info',
     async run(ctx) {
       const id = crypto.randomUUID();
-      await ctx.qu.publish(`${ctx.base}/entries/${id}`, {
+      await ctx.qu.get(`${ctx.base}/entries/${id}`).put({
         name: 'Erster Eintrag (vor der Live-Ansicht angelegt)',
         category: keyRef(`${ctx.base}/categories/work`),
         avatar: null,
@@ -158,7 +158,7 @@ export function mountLibraryView(container, ctx) {
         const { fileRef } = await qu.shareFile(`${base}/files/${id}`, bytes, { name: file.name, mime: file.type, fileStorage });
         avatar = fileRef;
       }
-      await qu.publish(`${base}/entries/${id}`, {
+      await qu.get(`${base}/entries/${id}`).put({
         name: nameInput.value.trim(),
         category: keyRef(`${base}/categories/${categorySelect.value}`),
         avatar,
@@ -177,7 +177,7 @@ export function mountLibraryView(container, ctx) {
   const empty = el('p', { class: 'step-desc', text: 'Noch keine Einträge — leg den ersten über das Formular an.' });
   container.append(form, empty, list);
 
-  const offView = viewObject(qu, `${base}/entries`, {
+  const offView = viewObject(qu.get(`${base}/entries`), {
     createItem(q) {
       empty.hidden = true;
       const li = el('li', { class: 'lib-entry' });

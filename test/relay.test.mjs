@@ -32,10 +32,10 @@ test('two independent WebSocket clients exchange a chat message via the real rel
   const replA = await alice.connect(chA, { pushTopics: ['qu-demo-room/'] });
   const replB = await bob.connect(chB, { pushTopics: ['qu-demo-room/'] });
 
-  await sendMessage(alice, 'qu-demo-room', { text: 'hello over a real socket' });
+  await sendMessage(alice.get('qu-demo-room'), { text: 'hello over a real socket' });
   await wait(100);
 
-  const bobView = await listMessages(bob, 'qu-demo-room');
+  const bobView = await listMessages(bob.get('qu-demo-room'));
   assert.equal(bobView.length, 1);
   assert.equal(bobView[0].value.text, 'hello over a real socket');
   assert.equal(bobView[0].writer, alice.fingerprint);
@@ -56,7 +56,7 @@ test('a third, later-connecting client syncs existing room history from the rela
   const chA = createWebSocketChannel(url);
   await chA.connect();
   const replA = await alice.connect(chA, { pushTopics: ['qu-demo-room/'] });
-  await sendMessage(alice, 'qu-demo-room', { text: 'already here before carol joins' });
+  await sendMessage(alice.get('qu-demo-room'), { text: 'already here before carol joins' });
   await wait(50);
 
   const carol = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
@@ -65,7 +65,7 @@ test('a third, later-connecting client syncs existing room history from the rela
   const replC = await carol.connect(chC, { pushTopics: ['qu-demo-room/'] });
   await replC.sync({ topic: 'qu-demo-room', since: 0 });
 
-  const carolView = await listMessages(carol, 'qu-demo-room');
+  const carolView = await listMessages(carol.get('qu-demo-room'));
   assert.equal(carolView.length, 1);
   assert.equal(carolView[0].value.text, 'already here before carol joins');
 
@@ -106,9 +106,9 @@ test('createWebSocketChannel().isOpen() reflects real connection state, and reco
   assert.equal(chA.isOpen(), true);
   replA = await alice.connect(chA, { pushTopics: ['qu-demo-room/'] });
 
-  await sendMessage(alice, 'qu-demo-room', { text: 'back online without a reload' });
+  await sendMessage(alice.get('qu-demo-room'), { text: 'back online without a reload' });
   await wait(150);
-  const bobView = await listMessages(bob, 'qu-demo-room');
+  const bobView = await listMessages(bob.get('qu-demo-room'));
   assert.ok(bobView.some((m) => m.value.text === 'back online without a reload'));
 
   replA.close();

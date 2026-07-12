@@ -18,6 +18,11 @@
 // Recommended entry point for most applications:
 export { Qu } from './qu.js';
 
+// Ready-made `plugins` combinations for `Qu.create({ plugins })` — see
+// src/presets.js. Lives outside qu.js itself (Core must never import
+// modules/network — see that file's own doc comment for why).
+export { QU_PRESETS } from './presets.js';
+
 // Underlying primitives — still directly usable for advanced composition.
 export { QuRuntime } from './core/runtime.js';
 export { QuStore } from './core/store.js';

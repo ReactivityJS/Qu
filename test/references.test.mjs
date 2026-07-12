@@ -26,8 +26,8 @@ test('isReference()/parseReference() recognize obj://, key://, file:// and rejec
 test('key:// resolves to the pointed-at QuBit\'s value', async () => {
   const qu = await Qu.create();
   const base = qu.userSpaceId;
-  await qu.publish(`${base}/users/alice`, { name: 'Alice' });
-  await qu.publish(`${base}/posts/1`, { title: 'hello', author: keyRef(`${base}/users/alice`) });
+  await qu.get(`${base}/users/alice`).put({ name: 'Alice' });
+  await qu.get(`${base}/posts/1`).put({ title: 'hello', author: keyRef(`${base}/users/alice`) });
 
   const post = await qu.get(`${base}/posts/1`);
   const resolved = await resolveValue(qu, post.value);
@@ -43,9 +43,9 @@ test('key:// to a missing path resolves to undefined, not an error', async () =>
 test('obj:// collects direct children into an object keyed by their last path segment', async () => {
   const qu = await Qu.create();
   const base = qu.userSpaceId;
-  await qu.publish(`${base}/table/row-a`, { name: 'Apple' });
-  await qu.publish(`${base}/table/row-b`, { name: 'Banana' });
-  await qu.publish(`${base}/table/row-a/not-a-direct-child`, { ignored: true }); // deeper than one segment — must not appear
+  await qu.get(`${base}/table/row-a`).put({ name: 'Apple' });
+  await qu.get(`${base}/table/row-b`).put({ name: 'Banana' });
+  await qu.get(`${base}/table/row-a/not-a-direct-child`).put({ ignored: true }); // deeper than one segment — must not appear
 
   const rows = await resolveReference(qu, objRef(`${base}/table`));
   assert.deepEqual(rows, {
@@ -57,9 +57,9 @@ test('obj:// collects direct children into an object keyed by their last path se
 test('obj:// with asArray sorts by segment into a plain array — this is how lists/tables are built', async () => {
   const qu = await Qu.create();
   const base = qu.userSpaceId;
-  await qu.publish(`${base}/list/0002`, { text: 'second' });
-  await qu.publish(`${base}/list/0001`, { text: 'first' });
-  await qu.publish(`${base}/list/0003`, { text: 'third' });
+  await qu.get(`${base}/list/0002`).put({ text: 'second' });
+  await qu.get(`${base}/list/0001`).put({ text: 'first' });
+  await qu.get(`${base}/list/0003`).put({ text: 'third' });
 
   const items = await resolveReference(qu, objRef(`${base}/list`), { asArray: true });
   assert.deepEqual(items.map((i) => i.text), ['first', 'second', 'third']);
@@ -68,9 +68,9 @@ test('obj:// with asArray sorts by segment into a plain array — this is how li
 test('maxDepth bounds how far cascading refs are followed — beyond budget, a ref is left as the raw string', async () => {
   const qu = await Qu.create();
   const base = qu.userSpaceId;
-  await qu.publish(`${base}/a`, { next: keyRef(`${base}/b`) });
-  await qu.publish(`${base}/b`, { next: keyRef(`${base}/c`) });
-  await qu.publish(`${base}/c`, { value: 'leaf' });
+  await qu.get(`${base}/a`).put({ next: keyRef(`${base}/b`) });
+  await qu.get(`${base}/b`).put({ next: keyRef(`${base}/c`) });
+  await qu.get(`${base}/c`).put({ value: 'leaf' });
 
   const shallow = await resolveReference(qu, keyRef(`${base}/a`), { maxDepth: 1 });
   assert.equal(shallow.next, `key://${base}/b`, 'depth budget exhausted after resolving "a" itself — "b" must stay unresolved');
@@ -85,8 +85,8 @@ test('maxDepth bounds how far cascading refs are followed — beyond budget, a r
 test('a reference cycle resolves to the raw ref string instead of hanging', async () => {
   const qu = await Qu.create();
   const base = qu.userSpaceId;
-  await qu.publish(`${base}/x`, { next: keyRef(`${base}/y`) });
-  await qu.publish(`${base}/y`, { next: keyRef(`${base}/x`) }); // points back at x
+  await qu.get(`${base}/x`).put({ next: keyRef(`${base}/y`) });
+  await qu.get(`${base}/y`).put({ next: keyRef(`${base}/x`) }); // points back at x
 
   const resolved = await resolveReference(qu, keyRef(`${base}/x`), { maxDepth: 10 });
   assert.deepEqual(resolved, { next: { next: `key://${base}/x` } }, 'the second time "x" is reached it is already in the seen-set, so it is left unresolved');
@@ -95,8 +95,8 @@ test('a reference cycle resolves to the raw ref string instead of hanging', asyn
 test('resolveValue() walks arrays and nested objects, resolving every ref found inside', async () => {
   const qu = await Qu.create();
   const base = qu.userSpaceId;
-  await qu.publish(`${base}/items/1`, { label: 'one' });
-  await qu.publish(`${base}/items/2`, { label: 'two' });
+  await qu.get(`${base}/items/1`).put({ label: 'one' });
+  await qu.get(`${base}/items/2`).put({ label: 'two' });
 
   const value = { title: 'my list', entries: [keyRef(`${base}/items/1`), keyRef(`${base}/items/2`)], meta: { first: keyRef(`${base}/items/1`) } };
   const resolved = await resolveValue(qu, value);
@@ -108,7 +108,7 @@ test('resolveValue() walks arrays and nested objects, resolving every ref found 
 test('file:// delegates to the supplied fileHandler instead of returning the raw manifest', async () => {
   const qu = await Qu.create();
   const manifestId = `${qu.userSpaceId}/manifests/f1`;
-  await qu.publish(manifestId, { name: 'f.txt', chunks: ['deadbeef'] });
+  await qu.get(manifestId).put({ name: 'f.txt', chunks: ['deadbeef'] });
   const fakeFileHandler = { resolveFileRef: async (_qu, ref) => `bytes-for:${ref}` };
 
   const resolved = await resolveReference(qu, fileRef(manifestId), { fileHandler: fakeFileHandler });
@@ -118,7 +118,7 @@ test('file:// delegates to the supplied fileHandler instead of returning the raw
 test('file:// without a fileHandler falls back to the raw manifest QuBit\'s value', async () => {
   const qu = await Qu.create();
   const manifestId = `${qu.userSpaceId}/manifests/f1`;
-  await qu.publish(manifestId, { name: 'f.txt', chunks: ['deadbeef'] });
+  await qu.get(manifestId).put({ name: 'f.txt', chunks: ['deadbeef'] });
   const resolved = await resolveReference(qu, fileRef(manifestId));
   assert.deepEqual(resolved, { name: 'f.txt', chunks: ['deadbeef'] });
 });
@@ -126,8 +126,8 @@ test('file:// without a fileHandler falls back to the raw manifest QuBit\'s valu
 test('createReferenceHandlerPlugin(): qu.use() attaches resolveReference()/resolveValue() sugar with the given defaults', async () => {
   const qu = await Qu.create();
   const base = qu.userSpaceId;
-  await qu.publish(`${base}/table/a`, { n: 1 });
-  await qu.publish(`${base}/table/b`, { n: 2 });
+  await qu.get(`${base}/table/a`).put({ n: 1 });
+  await qu.get(`${base}/table/b`).put({ n: 2 });
   assert.equal(typeof qu.resolveReference, 'undefined', 'must not exist before use()');
 
   qu.use(createReferenceHandlerPlugin({ maxDepth: 1, asArray: true }));

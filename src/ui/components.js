@@ -68,14 +68,14 @@
 // "appended, then wired up next line" ordering before giving up for real.
 //
 // `.qu` doesn't have to be a Qu instance — anything duck-typed the same way
-// works, in particular a QuSpace (core/space-handle.js: qu.own/qu.space(id)):
+// works, in particular a QuSpace (core/space-handle.js: qu.own/qu.get(id)):
 // `container.qu = alice.own` scopes every descendant's `path` relative to
 // that Space instead of the whole store. This is what <qu-list> below uses
 // to give each stamped item its own relative context automatically.
 //
 // <qu-list path="..."> is the declarative form of viewObject() — one
 // <template> child, cloned once per child QuBit under `path`, each clone's
-// `.qu` set to `qu.space(<that item's own id>)` so <qu-view>/<qu-bind>
+// `.qu` set to `qu.get(<that item's own id>)` so <qu-view>/<qu-bind>
 // elements *inside* the template can address that item's fields with a
 // plain `key`, no id math:
 //
@@ -161,34 +161,33 @@ export class QuViewElement extends HTMLElement {
       return;
     }
     // `path` may be omitted if the current .qu context has its own `.id`
-    // (a QuSpace, e.g. one <qu-list> stamped per item via qu.space(itemId))
+    // (a QuSpace, e.g. one <qu-list> stamped per item via qu.get(itemId))
     // — omitted then means "let that context resolve `key` itself", so a
     // <template> full of <qu-view key="...">/<qu-bind key="..."> never has
     // to repeat the item's id at all. A plain Qu instance has no `.id`, so
     // `path` stays required there exactly as before.
     //
-    // NOT the same as building `${qu.id}/${key}` here and handing THAT to
-    // qu.on()/qu.publish() — a QuSpace resolves whatever it's given
-    // relative to itself already, so pre-resolving here too would prefix
-    // qu.id twice. Whenever `path` IS given, on the other hand, it's handed
-    // through as-is: a plain Qu ignores relative resolution entirely (its
-    // `on()`/`publish()` never do it — unchanged, tested behavior), while a
-    // QuSpace context resolves an explicit `path` relative to itself
-    // exactly once, same as it would for `key` alone.
+    // This falls straight out of get()'s own navigation semantics — no
+    // separate relative/absolute logic needed here at all: `qu.get(x)`
+    // treats `x` as absolute on a plain Qu instance, but relative to itself
+    // when `qu` is already a QuSpace (e.g. one <qu-list> item's context) —
+    // exactly once, whether `x` is `pathAttr` or `key`. Chaining `.get(key)`
+    // after `.get(pathAttr)` composes the same way for the `path`+`key` case.
     const pathAttr = this.getAttribute('path');
     const key = this.getAttribute('key');
-    let fullPath;
+    let node;
     if (pathAttr !== null) {
-      fullPath = key ? `${pathAttr}/${key}` : pathAttr;
+      node = qu.get(pathAttr);
+      if (key) node = node.get(key);
     } else if (qu.id !== undefined) {
-      fullPath = key ?? '';
+      node = key ? qu.get(key) : qu;
     } else {
       console.error(`[${this.tagName.toLowerCase()}] missing "path" attribute (and the current .qu context has no implicit id to fall back to)`, this);
       return;
     }
     const target = resolveTarget(this);
     const io = resolveIO(this.getAttribute('attr'));
-    this._off = this._start(qu, fullPath, target, io);
+    this._off = this._start(node, target, io);
   }
 
   _unmount() {
@@ -196,14 +195,14 @@ export class QuViewElement extends HTMLElement {
     this._off = null;
   }
 
-  _start(qu, fullPath, target, { set }) {
-    return viewKey(qu, fullPath, (value) => set(target, value));
+  _start(node, target, { set }) {
+    return viewKey(node, (value) => set(target, value));
   }
 }
 
 export class QuBindElement extends QuViewElement {
-  _start(qu, fullPath, target, { get, set, event }) {
-    return bindKey(qu, fullPath, target, {
+  _start(node, target, { get, set, event }) {
+    return bindKey(node, target, {
       get, set, event,
       onError: (e) => this.dispatchEvent(new CustomEvent('qu-error', { detail: e, bubbles: true })),
     });
@@ -239,22 +238,23 @@ export class QuListElement extends HTMLElement {
     const template = this.querySelector('template');
     if (!template) { console.error('[qu-list] missing a <template> child to stamp per item', this); return; }
 
+    const node = qu.get(path);
+
     // Matches leaf fields at any depth under an item, not just direct
     // children of `path` — an item exists the moment ANY of its fields is
     // written, no separate "root" QuBit at `${path}/<itemId>` itself
     // required. `itemIdOf()` extracts just the item's own id segment from
     // whichever leaf field happened to be seen (first, for a brand new
     // item; on every subsequent write, for grouping).
-    const itemIdOf = (qubitId) => qubitId.slice(path.length + 1).split('/')[0];
+    const itemIdOf = (qubitId) => qubitId.slice(node.id.length + 1).split('/')[0];
 
-    this._off = viewObject(qu, path, {
-      pattern: `${path}/**`,
+    this._off = viewObject(node, {
+      deep: true,
       key: (q) => itemIdOf(q.id),
       createItem: (q) => {
-        const itemId = `${path}/${itemIdOf(q.id)}`;
         const clone = template.content.cloneNode(true);
         const roots = [...clone.children];
-        for (const el of roots) el.qu = qu.space(itemId); // each item's own fields, relative to its own id — see class doc
+        for (const el of roots) el.qu = node.get(itemIdOf(q.id)); // each item's own fields, relative to its own id — see class doc
         this.appendChild(clone);
         return roots;
       },

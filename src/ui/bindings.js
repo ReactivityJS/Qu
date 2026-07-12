@@ -1,9 +1,15 @@
 // UI bindings: the reactive-component layer the interactive Lab's views
 // (docs/lab/labs/05-references-practice.mjs) build on. Pure DOM contract,
-// zero framework, zero vdom — a "view" is nothing more than qu.on()'s live
-// delivery wired to a render callback, and unmounting it is nothing more
-// than that subscription's own unsubscribe. A "binding" (two-way) is the
-// same view plus a local edit listener that writes back.
+// zero framework, zero vdom — a "view" is nothing more than a node's live
+// on()/map() delivery wired to a render callback, and unmounting it is
+// nothing more than that subscription's own unsubscribe. A "binding"
+// (two-way) is the same view plus a local edit listener that writes back.
+//
+// Every function here takes an already-navigated node (`qu.get(id)`, see
+// core/space-handle.js) instead of a `(qu, id)` pair — one fewer parameter,
+// composes directly with the rest of the get/put/set/on/map API: a caller
+// writes `viewKey(qu.get(id), render)` or `bindKey(alice.own.get('bio'),
+// input)`.
 //
 // Deliberately DOM-library-agnostic: nothing here calls document.* —
 // `createItem`/`render`/element get-set are all supplied by the caller, so
@@ -16,7 +22,7 @@
 // separate mechanism.
 
 /**
- * One-way, a single QuBit: `render(value, qubit)` runs once for whatever's
+ * One-way, a single node: `render(value, qubit)` runs once for whatever's
  * already there (if anything — `initial: true`), then again on every
  * future change. Dedup is by (id, ts), not deep value equality — the same
  * idea QuStore.put()'s same-ts-noop check and DefaultReplication's
@@ -24,9 +30,9 @@
  * identifies "this exact write", cheaper and more precise than
  * re-comparing values on every delivery.
  */
-export function viewKey(qu, id, render) {
+export function viewKey(node, render) {
   let lastTs = null;
-  return qu.on(id, (q) => {
+  return node.on((q) => {
     if (q.ts === lastTs) return;
     lastTs = q.ts;
     render(q.value, q);
@@ -34,22 +40,22 @@ export function viewKey(qu, id, render) {
 }
 
 /**
- * One-way, a collection: every QuBit directly under `prefix` (one segment
- * further by default — the same "direct children only" shape data/
- * references.js's obj:// uses; pass a different `pattern` for anything
- * else) gets its own item via `createItem(qubit)` (called once, the first
- * time that key is seen) and `render(item, value, qubit)` (called on
- * first render and every update). `key(qubit)` picks the item identity
- * (default: `qubit.id`). Same (id, ts)-per-item dedup as viewKey.
+ * One-way, a collection: every QuBit directly under `node` (or, with
+ * `deep: true`, at any depth — the shape a `set()`-based collection like
+ * chat messages needs, since it namespaces two segments deep) gets its own
+ * item via `createItem(qubit)` (called once, the first time that key is
+ * seen) and `render(item, value, qubit)` (called on first render and every
+ * update). `key(qubit)` picks the item identity (default: `qubit.id`).
+ * Same (id, ts)-per-item dedup as viewKey.
  *
  * `createItem`'s return value is opaque to this function — typically a
  * DOM element the caller has already inserted into a container, but
  * nothing here assumes that; a caller that just wants the raw qubits
  * (e.g. to feed a table library) can return whatever it likes.
  */
-export function viewObject(qu, prefix, { createItem, render, key = (q) => q.id, pattern = `${prefix}/*` }) {
+export function viewObject(node, { createItem, render, key = (q) => q.id, deep = false }) {
   const items = new Map(); // key -> { item, ts }
-  const off = qu.on(pattern, (q) => {
+  const off = node.map((q) => {
     const k = key(q);
     let entry = items.get(k);
     if (entry && entry.ts === q.ts) return;
@@ -59,7 +65,7 @@ export function viewObject(qu, prefix, { createItem, render, key = (q) => q.id, 
     }
     entry.ts = q.ts;
     render(entry.item, q.value, q);
-  }, { initial: true });
+  }, { deep, initial: true });
   return () => { off(); items.clear(); };
 }
 
@@ -72,8 +78,8 @@ export const DEFAULT_ELEMENT_IO = {
 };
 
 /**
- * Two-way, a single QuBit: the same live render as viewKey, plus a local
- * edit listener that publishes back. `event`/`get`/`set` default to
+ * Two-way, a single node: the same live render as viewKey, plus a local
+ * edit listener that writes back. `event`/`get`/`set` default to
  * `<input>`/`<textarea>` (`.value`) or fall back to `.textContent` (works
  * for a contenteditable) — override for anything else.
  *
@@ -82,29 +88,29 @@ export const DEFAULT_ELEMENT_IO = {
  * trade one class of bug for another — genuinely-remote changes must
  * still come through):
  *   - write-side: an edit whose value already equals what's known locally
- *     is never published — no pointless write, no wasted clock tick.
- *   - render-side: the qubit THIS binding itself just published must not
+ *     is never written — no pointless write, no wasted clock tick.
+ *   - render-side: the qubit THIS binding itself just wrote must not
  *     re-render (would stomp the input's cursor/selection with a value it
  *     already has) — a DIFFERENT binding to the SAME id (another open
  *     tab, another user) still re-renders normally; only the originating
  *     one skips its own echo.
  *
- * The publish's `ts` is computed up front (`qu.runtime.nextTs()`) and
+ * The write's `ts` is computed up front (`node.runtime.nextTs()`) and
  * compared against incoming qubits, rather than compared only after
- * `qu.publish()` resolves — Runtime dispatches to subscribers
+ * `node.put()` resolves — Runtime dispatches to subscribers
  * *synchronously* during `ingest()` (see core/runtime.js), before the
- * `publish()` promise chain has even returned to this function, so
- * recording the ts only after `await qu.publish()` would miss its own
- * first echo. `onError`, if given, is called (and the local value
- * optimistically reverted) if the write itself is rejected (e.g. an ACL
- * denial) — the element's displayed value rolls back to what it was
- * before the edit rather than silently keeping an unsaved value.
+ * `put()` promise chain has even returned to this function, so recording
+ * the ts only after `await node.put()` would miss its own first echo.
+ * `onError`, if given, is called (and the local value optimistically
+ * reverted) if the write itself is rejected (e.g. an ACL denial) — the
+ * element's displayed value rolls back to what it was before the edit
+ * rather than silently keeping an unsaved value.
  */
-export function bindKey(qu, id, element, { get = DEFAULT_ELEMENT_IO.get, set = DEFAULT_ELEMENT_IO.set, event = DEFAULT_ELEMENT_IO.event, onError } = {}) {
+export function bindKey(node, element, { get = DEFAULT_ELEMENT_IO.get, set = DEFAULT_ELEMENT_IO.set, event = DEFAULT_ELEMENT_IO.event, onError } = {}) {
   let lastValue;
   let lastOwnTs = null;
 
-  const off = qu.on(id, (q) => {
+  const off = node.on((q) => {
     if (q.ts === lastOwnTs) return; // our own write echoing back — already reflected locally
     lastValue = q.value;
     set(element, q.value);
@@ -115,10 +121,10 @@ export function bindKey(qu, id, element, { get = DEFAULT_ELEMENT_IO.get, set = D
     if (value === lastValue) return; // identical value — nothing to write
     const previous = lastValue;
     lastValue = value;
-    const ts = qu.runtime.nextTs();
-    lastOwnTs = ts; // before publish(), not after — see class doc on why
+    const ts = node.runtime.nextTs();
+    lastOwnTs = ts; // before put(), not after — see class doc on why
     try {
-      await qu.publish(id, value, { ts });
+      await node.put(value, { ts });
     } catch (e) {
       lastValue = previous;
       lastOwnTs = null;
@@ -133,13 +139,12 @@ export function bindKey(qu, id, element, { get = DEFAULT_ELEMENT_IO.get, set = D
 
 /**
  * Two-way, multiple fields of one logical record: one bindKey() per field,
- * each its own leaf QuBit (`${prefix}/${field}`) — the same "individual
- * leaf QuBits, not one combined object" shape `qu.js`'s `publishProfile()`
- * already uses, so each field is independently writable/readable/ACL'able,
- * and two people editing different fields of the same record never
- * collide on one LWW register. `fields`: `{ [fieldName]: element }`.
+ * each its own leaf QuBit (`node.get(field)`) — individual leaf QuBits, not
+ * one combined object, so each field is independently writable/readable/
+ * ACL'able, and two people editing different fields of the same record
+ * never collide on one LWW register. `fields`: `{ [fieldName]: element }`.
  */
-export function bindObject(qu, prefix, fields, opts = {}) {
-  const offs = Object.entries(fields).map(([field, element]) => bindKey(qu, `${prefix}/${field}`, element, opts));
+export function bindObject(node, fields, opts = {}) {
+  const offs = Object.entries(fields).map(([field, element]) => bindKey(node.get(field), element, opts));
   return () => offs.forEach((off) => off());
 }

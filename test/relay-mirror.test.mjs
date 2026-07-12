@@ -89,7 +89,7 @@ test('chat data survives a relay restart when given a data directory', async () 
   const chA = createWebSocketChannel(`ws://127.0.0.1:${first.port}/relay`);
   await chA.connect();
   const replA = await alice.connect(chA, { pushTopics: ['qu-demo-room/'] });
-  await sendMessage(alice, 'qu-demo-room', { text: 'still here after a restart' });
+  await sendMessage(alice.get('qu-demo-room'), { text: 'still here after a restart' });
   await wait(100);
   await closeAll(first.server, chA);
 
@@ -101,7 +101,7 @@ test('chat data survives a relay restart when given a data directory', async () 
   const replB = await bob.connect(chB, { pushTopics: ['qu-demo-room/'] });
   await replB.sync({ topic: 'qu-demo-room', since: 0 });
 
-  const view = await listMessages(bob, 'qu-demo-room');
+  const view = await listMessages(bob.get('qu-demo-room'));
   assert.ok(view.some((m) => m.value.text === 'still here after a restart'));
 
   await closeAll(second.server, chB);
@@ -124,8 +124,8 @@ test('the signal/ mount dispatches live but is never persisted, not even across 
   const replB = await bob.connect(chB, { pushTopics: ['signal/'] });
 
   let bobSawIt = false;
-  bob.on('signal/**', () => { bobSawIt = true; });
-  await alice.publish('signal/webrtc-offer', { sdp: 'v=0 ephemeral offer' });
+  bob.get('signal').map(() => { bobSawIt = true; }, { deep: true });
+  await alice.get('signal/webrtc-offer').put({ sdp: 'v=0 ephemeral offer' });
   await wait(100);
   assert.equal(bobSawIt, true, 'signal/ still dispatches live to a currently-connected peer');
 
@@ -161,17 +161,17 @@ test('sending a large multi-chunk image through the real relay does not break su
   // camera photo would.
   const bigImage = new Uint8Array(3_000_000);
   const { manifestId } = await alice.shareFile('qu-demo-room/files/photo', bigImage, { name: 'photo.jpg', mime: 'image/jpeg', fileStorage: aliceFiles });
-  await alice.append('qu-demo-room/msgs', { text: 'here is a photo' }, { refs: [manifestId] });
+  await alice.get('qu-demo-room/msgs').set({ text: 'here is a photo' }, { refs: [manifestId] });
 
   await wait(400); // give the relay time to start mirroring a file this size
 
-  const bobViewAfterImage = await listMessages(bob, 'qu-demo-room');
+  const bobViewAfterImage = await listMessages(bob.get('qu-demo-room'));
   assert.ok(bobViewAfterImage.some((m) => m.value.text === 'here is a photo'), 'the message accompanying the image must still arrive');
 
   // The actual regression: does a plain follow-up message still get through?
-  await alice.append('qu-demo-room/msgs', { text: 'follow-up after the image' });
+  await alice.get('qu-demo-room/msgs').set({ text: 'follow-up after the image' });
   await wait(200);
-  const bobViewAfterFollowup = await listMessages(bob, 'qu-demo-room');
+  const bobViewAfterFollowup = await listMessages(bob.get('qu-demo-room'));
   assert.ok(bobViewAfterFollowup.some((m) => m.value.text === 'follow-up after the image'), 'a message sent after a large image must still arrive — this is the reported bug');
 
   replA.close();
