@@ -18,6 +18,20 @@ function deepEqualImpl(a, b) {
   return false;
 }
 
+// A plain string second argument to rejects()/throws() is a fail message
+// (matching node:assert/strict's own disambiguation — it actually throws a
+// TypeError if you pass a bare string as the error matcher, precisely to
+// avoid this ambiguity); a RegExp/constructor is an error matcher instead.
+function isMatcher(x) {
+  return x instanceof RegExp || typeof x === 'function';
+}
+
+function matchesError(error, matcher) {
+  if (matcher instanceof RegExp) return matcher.test(error?.message ?? String(error));
+  if (typeof matcher === 'function') return error instanceof matcher;
+  return true;
+}
+
 const assert = {
   ok(value, message) {
     if (!value) fail(message || `Expected a truthy value, got ${value}`);
@@ -31,14 +45,32 @@ const assert = {
   deepEqual(actual, expected, message) {
     if (!deepEqualImpl(actual, expected)) fail(message || 'Expected deep equality');
   },
-  async rejects(fnOrPromise, message) {
-    let threw = false;
+  match(value, regex, message) {
+    if (!regex.test(value)) fail(message || `Expected "${value}" to match ${regex}`);
+  },
+  async rejects(fnOrPromise, errorOrMessage, maybeMessage) {
+    const matcher = isMatcher(errorOrMessage) ? errorOrMessage : undefined;
+    const message = matcher ? maybeMessage : errorOrMessage;
+    let thrown = null;
     try {
       await (typeof fnOrPromise === 'function' ? fnOrPromise() : fnOrPromise);
-    } catch {
-      threw = true;
+    } catch (e) {
+      thrown = e;
     }
-    if (!threw) fail(message || 'Expected the promise/function to reject, but it resolved');
+    if (!thrown) fail(message || 'Expected the promise/function to reject, but it resolved');
+    if (matcher && !matchesError(thrown, matcher)) fail(message || `Rejection did not match ${matcher}: ${thrown.message}`);
+  },
+  throws(fn, errorOrMessage, maybeMessage) {
+    const matcher = isMatcher(errorOrMessage) ? errorOrMessage : undefined;
+    const message = matcher ? maybeMessage : errorOrMessage;
+    let thrown = null;
+    try {
+      fn();
+    } catch (e) {
+      thrown = e;
+    }
+    if (!thrown) fail(message || 'Expected function to throw, but it did not');
+    if (matcher && !matchesError(thrown, matcher)) fail(message || `Thrown error did not match ${matcher}: ${thrown.message}`);
   },
   doesNotThrow(fn, message) {
     try {

@@ -18,14 +18,26 @@ const MIME = {
  * it just maps a URL path to a file on disk with the right Content-Type
  * (in particular .mjs/.js as text/javascript, so the browser accepts them
  * as ES modules) and refuses to serve anything outside `root`.
+ *
+ * `routes` (optional, default none) is the escape hatch for anything that
+ * isn't a static file — checked in order, before falling through to file
+ * serving. Deliberately kept out of this file's own knowledge: a route's
+ * `match(pathname)`/`handle(req, res)` are supplied by the caller (see
+ * index.js wiring in server/test-runner.mjs's createTestRoutes()), so this
+ * module stays generic and reusable rather than growing QU-specific
+ * endpoints of its own.
  */
-export function startServer({ root, port = 8787 } = {}) {
+export function startServer({ root, port = 8787, routes = [] } = {}) {
   const normalizedRoot = path.normalize(root);
 
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
       let reqPath = decodeURIComponent(url.pathname);
+
+      const route = routes.find((r) => r.match(reqPath));
+      if (route) { await route.handle(req, res); return; }
+
       if (reqPath === '/') reqPath = '/index.html';
 
       let filePath = path.normalize(path.join(normalizedRoot, reqPath));

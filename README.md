@@ -430,13 +430,28 @@ bleibt unverändert bestehen (Immutable Data), nur der Index "vergisst"
 ältere Einträge. Die Startseite abonniert nur diesen kleinen Index, nie
 `forum/*/posts/**`.
 
+**Lauffähiges Beispiel:** [`examples/forum-lib.mjs`](./examples/forum-lib.mjs)
+setzt genau dieses Muster (ein Segment, `YYYY-MM`) vollständig um —
+`createBoard`, `addPost`, `listPosts`, `onPosts`, `listBuckets`,
+`olderBucket` — inklusive Bucket-Index und kollisionssicherem gleichzeitigem
+Schreiben mehrerer Autoren; [`examples/forum-lib.test.mjs`](./examples/forum-lib.test.mjs)
+zeigt jede Garantie (Bucket-Isolation live wie beim Lesen, Dedup/Sortierung
+des Index, keine Kollision) als laufenden Test.
+
 ## Projektstruktur
 
 ```
-index.js                ← Server-Bootstrap (ruft nur server/static-server.mjs auf, kein QU-Code)
+index.js                ← Server-Bootstrap (verdrahtet server/static-server.mjs, server/test-runner.mjs
+                          und den Relay — kein QU-Datenmodell-Code selbst)
 index.html                ← Navigation zu Demo/Tests/Whitepaper/README/API (ebenfalls kein QU-Code)
 API.md                     vollständige Aufrufreferenz (Parameter, Rückgabewerte, Beispiele)
-server/static-server.mjs   generischer statischer Dateiserver
+server/static-server.mjs   generischer statischer Dateiserver (optionaler `routes`-Parameter als
+                          QU-agnostische Erweiterungsstelle, siehe server/test-runner.mjs)
+server/test-runner.mjs      /test/manifest.json (selbst-scannende Browser-vs-Node-Klassifizierung)
+                          + /test/run-node-tests (opt-in, siehe Abschnitt "Tests" unten)
+scripts/run-node-only.mjs   node:test-Runner für die Node-only-Dateien, als isolierter Kindprozess
+                          von server/test-runner.mjs aufgerufen; bewusst außerhalb test/, weil
+                          Node's `--test`-Discovery sonst diese Datei selbst als Testdatei anfasst
 assets/style.css            gemeinsames Stylesheet für alle Tooling-Seiten
 docs/view.html                generischer Markdown-Viewer (Whitepaper, README, API.md)
 src/
@@ -556,10 +571,12 @@ test/
   references.test.mjs            obj://, key://, file://, Tiefenlimit, Zyklenschutz
   *.test.mjs                node:test — je Datei ein weiterer Themenbereich
   browser-shim/             node:test/node:assert-Ersatz für den Browser
-  index.html                 dieselben Tests, im Browser (via Import-Map)
+  index.html                 vereinheitlichtes Test-Dashboard: browser-taugliche Dateien laufen
+                            direkt hier (via Import-Map), Node-only-Dateien optional serverseitig
+                            über server/test-runner.mjs — ein Ergebnis, eine Übersicht
 docs/lab/                    interaktives Lab — der primäre Weg, QU im Browser
                             selbst auszuprobieren (siehe eigener Abschnitt unten)
-  index.html                 Navigation + vier Abschnitte, je ein "Ausführen"-Button
+  index.html                 Navigation + fünf Abschnitte, je ein "Ausführen"-Button
   render.mjs                  DOM-Rendering für Schritt-Karten (Code-Block + Ergebnis)
   lab-runner.mjs                generischer Schritt-Executor
   labs/
@@ -585,6 +602,10 @@ docs/lab/                    interaktives Lab — der primäre Weg, QU im Browse
 examples/
   todo-lib.mjs               Logik einer teilbaren ToDo-Liste, getrennt von jeder UI
   todo-lib.test.mjs            node:test dafür — Space + Link + FP-basiertes Schreibrecht
+  forum-lib.mjs               Zeit-Sharding für wachsende Collections (Grundkonzepte, Abschnitt 7)
+                            lauffähig statt nur Prosa: Boards, Posts pro Zeit-Bucket, Bucket-Index
+  forum-lib.test.mjs           node:test dafür — Bucket-Isolation (live wie beim Lesen),
+                            Index-Dedup/-Sortierung, kollisionssicheres gleichzeitiges Schreiben
 relay/
   ws-server.mjs              minimaler RFC-6455-WebSocket-Server, keine Abhängigkeit
   relay.mjs                    createRelay() — universeller QU-Relay-Kern, kein App-/Node-Bezug
@@ -706,14 +727,26 @@ selbst keine QU-Logik, ruft nur `server/static-server.mjs` und
 `index.html` erreichbar:
 
 - **Interaktives Lab** (`/docs/lab/index.html`) — der primäre Einstieg zum
-  Selbst-Ausprobieren: vier Abschnitte (Identität, Spaces/ACL, Storage-
-  Adapter, Netzwerk/Relay/Mirror), je ein "Ausführen"-Button, echte
-  Objekte auf `window` für die Konsole danach (siehe eigener Abschnitt
-  unten).
+  Selbst-Ausprobieren: fünf Abschnitte (Identität, Spaces/ACL, Storage-
+  Adapter, Netzwerk/Relay/Mirror, Referenzen in der Praxis), je ein
+  "Ausführen"-Button, echte Objekte auf `window` für die Konsole danach
+  (siehe eigener Abschnitt unten).
 - **Tests** (`/test/index.html`) — dieselben `test/*.test.mjs`-Dateien wie
-  `npm test`, unverändert; eine Import-Map leitet nur `node:test` und
-  `node:assert/strict` auf einen kleinen Browser-Shim um
-  (`test/browser-shim/`).
+  `npm test`, unverändert, aber vollständig: die Dateiliste kommt live von
+  `/test/manifest.json` (der Server scannt `test/` bei jeder Anfrage neu,
+  keine von Hand gepflegte Liste, die veralten kann). Browser-taugliche
+  Dateien laufen über eine Import-Map auf einen kleinen Shim
+  (`test/browser-shim/`), gruppiert nach Datei mit Live-Ergebnissen. Die
+  restlichen (echtes `node:fs`/`node:http`/`node:net`, z. B. der
+  Relay-Test gegen einen echten WebSocket-Server) können nicht im Browser
+  laufen — der Server bietet optional an, sie selbst auszuführen und das
+  Ergebnis als JSON auszuliefern (`GET /test/run-node-tests`), damit auch
+  sie im selben Dashboard auftauchen. Aus, per Default: `QU_ENABLE_TEST_ENDPOINT=1`
+  beim Start setzen, um das zu aktivieren — ein Endpunkt, der bei jeder
+  Anfrage einen echten Testlauf auslöst, ist für lokale Entwicklung
+  unproblematisch, aber kein Endpunkt, den man ungeschützt öffentlich
+  erreichbar machen möchte (Ergebnisse werden 30s gecacht, damit wiederholte
+  Anfragen nicht wiederholt einen Lauf auslösen).
 - **Whitepaper**, **README**, **API-Referenz** (`/docs/view.html?file=...`)
   — ein generischer Markdown-Viewer, derselbe für alle drei Dokumente.
 
@@ -998,12 +1031,17 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Status
 
-128 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+135 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
 CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
 Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
-`LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter` (neu,
-Browser-only) sind wie `webrtc-channel-browser.mjs` nicht per CLI testbar —
-kein Browser, keine `localStorage`/`indexedDB`-Globals in Node; ein echter
-Test im Browser-Testlauf (`test/index.html`) steht für diese drei noch aus.
+Dieselben Fälle laufen auch im vereinheitlichten Browser-Dashboard
+(`test/index.html`, siehe [Abschnitt "Im Browser"](#im-browser-server-starten))
+— Node-only-Dateien (echtes `node:fs`/`node:net`) optional serverseitig
+mitgeliefert, sofern `QU_ENABLE_TEST_ENDPOINT=1` gesetzt ist.
+`LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter` (Browser-only)
+sind wie `webrtc-channel-browser.mjs` nicht per CLI testbar — kein Browser,
+keine `localStorage`/`indexedDB`-Globals in Node; ein eigener, automatisierter
+Testfall für diese drei im Browser-Dashboard steht noch aus (bisher nur
+manuell über Lab 3 geprüft).
 Offen: SQLite-Adapter für `StorageAdapter`/`FileStorageAdapter`
 (mechanisch, kein Architekturrisiko).

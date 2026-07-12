@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>QU — Tests (Browser)</title>
+  <title>QU — Tests (Browser + Server)</title>
   <link rel="stylesheet" href="/assets/style.css" />
   <script type="importmap">
     {
@@ -17,46 +17,134 @@
 <body>
   <main>
     <a class="back" href="/index.html">&larr; Zurück</a>
-    <h1>QU Testsuite (Browser)</h1>
-    <p class="lede">Dieselben <code>test/*.test.mjs</code>-Dateien wie <code>npm test</code> — unverändert, nur über eine Import-Map auf einen Browser-Shim statt <code>node:test</code>/<code>node:assert</code> umgeleitet.</p>
+    <h1>QU Testsuite</h1>
+    <p class="lede">
+      Dieselben <code>test/*.test.mjs</code>-Dateien wie <code>npm test</code> — unverändert. Die
+      Dateiliste kommt live von <code>/test/manifest.json</code> (der Server scannt <code>test/</code>
+      bei jeder Anfrage neu, keine von Hand gepflegte Liste, die veralten kann). Browser-taugliche
+      Dateien (kein <code>node:fs</code>/<code>node:http</code>/<code>node:net</code>) laufen hier
+      direkt über einen Import-Map-Shim; die restlichen laufen — falls der Server das erlaubt — echt
+      in Node auf dem Server und werden dazugeholt.
+    </p>
     <div id="summary">Läuft…</div>
-    <ul id="results"></ul>
+    <div id="groups"></div>
   </main>
 
   <script type="module">
-    import { runAll } from './browser-shim/test.mjs';
+    import { drain } from './browser-shim/test.mjs';
 
-    // Importing these registers their test() calls into the shim's queue —
-    // nothing runs yet, exactly like node:test's own behaviour.
-    await import('./core.test.mjs');
-    await import('./identity.test.mjs');
-    await import('./session.test.mjs');
-    await import('./spaces.test.mjs');
-    await import('./replication.test.mjs');
-    await import('./files.test.mjs');
-    await import('./qu.test.mjs');
-    await import('./chat.test.mjs');
-
-    const list = document.getElementById('results');
-    const summary = document.getElementById('summary');
+    const groupsEl = document.getElementById('groups');
+    const summaryEl = document.getElementById('summary');
     let pass = 0;
     let fail = 0;
 
-    await runAll((r) => {
+    function renderGroup(title, subtitle) {
+      const details = document.createElement('details');
+      details.open = true;
+      const summary = document.createElement('summary');
+      summary.innerHTML = `<strong>${title}</strong> <span class="lab-status">${subtitle ?? ''}</span>`;
+      const list = document.createElement('ul');
+      details.append(summary, list);
+      groupsEl.appendChild(details);
+      return { summary, list };
+    }
+
+    function renderResult(list, r) {
       const li = document.createElement('li');
       li.className = r.pass ? 'pass' : 'fail';
-      li.textContent = `${r.pass ? '✓' : '✗'} ${r.name} (${r.ms.toFixed(1)} ms)`;
+      const ms = r.ms ?? r.duration ?? 0;
+      li.textContent = `${r.pass ? '✓' : '✗'} ${r.name} (${ms.toFixed(1)} ms)`;
       if (!r.pass) {
         const pre = document.createElement('pre');
-        pre.textContent = r.error?.stack || String(r.error);
+        pre.textContent = r.error?.stack || r.error || String(r.error);
         li.appendChild(pre);
       }
       list.appendChild(li);
       r.pass ? pass++ : fail++;
-      summary.textContent = `${pass} bestanden, ${fail} fehlgeschlagen`;
-    });
+      summaryEl.textContent = `${pass} bestanden, ${fail} fehlgeschlagen`;
+    }
 
-    summary.textContent += ' — fertig.';
+    function updateGroupStatus(summary, groupPass, groupFail) {
+      summary.querySelector('.lab-status').textContent = `${groupPass}/${groupPass + groupFail} bestanden`;
+      summary.querySelector('.lab-status').className = `lab-status ${groupFail ? 'warn' : 'ok'}`;
+    }
+
+    async function runBrowserFile(file) {
+      const { summary, list } = renderGroup(file, 'läuft…');
+      let groupPass = 0;
+      let groupFail = 0;
+      try {
+        await import(`./${file}`); // registers this file's test() calls into the shim's queue
+        await drain((r) => {
+          renderResult(list, r);
+          r.pass ? groupPass++ : groupFail++;
+          updateGroupStatus(summary, groupPass, groupFail);
+        });
+      } catch (e) {
+        // A file that throws on import itself (rather than in a test) — e.g.
+        // an accidental Node-only import the manifest's own heuristic missed
+        // — is reported as one failed entry instead of silently vanishing.
+        renderResult(list, { name: `[Import fehlgeschlagen] ${file}`, pass: false, ms: 0, error: e });
+        groupFail++;
+        updateGroupStatus(summary, groupPass, groupFail);
+      }
+      if (groupPass === 0 && groupFail === 0) summary.querySelector('.lab-status').textContent = 'keine Tests gefunden';
+    }
+
+    async function runServerFiles() {
+      const { summary, list } = renderGroup('Server (Node-only)', 'wird angefragt…');
+      try {
+        const res = await fetch('/test/run-node-tests');
+        const body = await res.json();
+        if (!res.ok) {
+          const li = document.createElement('li');
+          li.className = 'fail';
+          li.textContent = body.error === 'disabled'
+            ? `Server-seitige Tests sind deaktiviert: ${body.message}`
+            : `Fehler: ${body.message ?? res.statusText}`;
+          list.appendChild(li);
+          summary.querySelector('.lab-status').textContent = body.error === 'disabled' ? 'deaktiviert' : 'Fehler';
+          summary.querySelector('.lab-status').className = 'lab-status warn';
+          return;
+        }
+        // Sub-group by source file within the server section, same as the browser groups.
+        const byFile = new Map();
+        for (const r of body.results) {
+          if (!byFile.has(r.file)) byFile.set(r.file, []);
+          byFile.get(r.file).push(r);
+        }
+        let groupPass = 0;
+        let groupFail = 0;
+        for (const [file, results] of byFile) {
+          const fileLi = document.createElement('li');
+          fileLi.innerHTML = `<strong>${file}</strong>`;
+          const subList = document.createElement('ul');
+          fileLi.appendChild(subList);
+          list.appendChild(fileLi);
+          for (const r of results) {
+            renderResult(subList, r);
+            r.pass ? groupPass++ : groupFail++;
+          }
+        }
+        updateGroupStatus(summary, groupPass, groupFail);
+      } catch (e) {
+        const li = document.createElement('li');
+        li.className = 'fail';
+        li.textContent = `Server nicht erreichbar oder Antwort ungültig: ${e.message}`;
+        list.appendChild(li);
+        summary.querySelector('.lab-status').textContent = 'nicht erreichbar';
+        summary.querySelector('.lab-status').className = 'lab-status warn';
+      }
+    }
+
+    const manifest = await fetch('/test/manifest.json').then((r) => r.json());
+
+    for (const file of manifest.browserSafe) {
+      await runBrowserFile(file);
+    }
+    await runServerFiles();
+
+    summaryEl.textContent += ` — fertig. (${manifest.nodeOnly.length} Node-only-Datei(en) laufen serverseitig, sofern erlaubt.)`;
   </script>
 </body>
 </html>
