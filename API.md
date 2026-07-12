@@ -87,6 +87,8 @@ eine async Fabrikmethode nicht passt.
 | `qu.isGuest` | `boolean` | — |
 | `qu.userSpaceId` | `string \| null` | `"~" + fingerprint` |
 | `qu.exportKeys()` | `Promise<ExportedKeys \| null>` | Für persistente Speicherung der Identität |
+| `qu.publishProfile({ alias? })` | `Promise<Qu>` | Veröffentlicht `pub`/`epub`/`alias` unter `qu.own` — siehe [Profil](#profil-qupublishprofile-qureadprofilefingerprint) unten |
+| `qu.readProfile(fingerprint)` | `Promise<{fingerprint,pub,epub,alias}>` | Liest ein fremdes (oder das eigene) Profil, `alias` fällt auf `fingerprint` zurück |
 
 ### Daten: `qu.get(id)` → `QuSpace`
 Der einzige Daten-Einstiegspunkt — ein an `id` gebundener Node (siehe
@@ -116,19 +118,35 @@ Datei (Chunking+Manifest statt einem rohen Byte-Wert) — **wenn** ein
 siehe [Files-Modul](#files-modul)); ohne FileHandler wirft `put()` bei
 Datei-Bytes klar, statt sie still als opaken Wert zu schreiben.
 
-### Profil — einzelne Felder direkt unter der User-Space-Root
-**Kein** `~<fp>/profile`-Objekt — jedes Feld eine eigene Leaf-QuBit direkt
-unter `~<fp>`, dem User-Space selbst. Keine eigene Methode dafür nötig,
-nur `qu.own`:
+### Profil — `qu.publishProfile()` / `qu.readProfile(fingerprint)`
+**Kein** `~<fp>/profile`-Objekt — drei reservierte Leaf-QuBits direkt unter
+`~<fp>`, dem User-Space selbst (`core/space.js`s `RESERVED_PROFILE_PATHS`):
+`pub` (Signier-Public-Key, JWK), `epub` (ECDH-Public-Key, JWK), `alias`
+(Anzeigename). Alle drei sind **strukturell immer öffentlich lesbar** —
+selbst wenn der Owner die `readers`-Liste des eigenen User-Space über ein
+Manifest einschränkt (`modules/spaces.js`) — sonst könnte niemand mehr
+herausfinden, wie man diesem Owner überhaupt etwas verschlüsselt Adressiertes
+schicken soll. Geschrieben werden dürfen sie weiterhin nur vom Owner selbst
+(oder einem im eigenen Manifest ausdrücklich autorisierten Mit-Schreiber) —
+die reservierten Pfade lockern nur das *Lesen*, nicht das *Schreiben*.
+
+`qu.publishProfile({ alias? })` schreibt `pub`/`epub` (und `alias`, falls
+angegeben) in einem Rutsch; `qu.readProfile(fingerprint)` liest alle drei
+zurück, `alias` fällt dabei auf den Fingerprint selbst zurück, falls nie
+einer veröffentlicht wurde:
 
 ```js
-await alice.own.get('pub').put(alice.fingerprint);
-await alice.own.get('alias').put('alice');
-await alice.own.get('epub').put((await alice.exportKeys()).encPub);
+await alice.publishProfile({ alias: 'alice' });
 
-const aliceProfile = bob.get(userSpaceId(alice.fingerprint));
-const alias = (await aliceProfile.get('alias')).value; // 'alice'
+const seenByBob = await bob.readProfile(alice.fingerprint);
+// { fingerprint, pub, epub, alias: 'alice' }
 ```
+
+`publishProfile()` ist auch die praktische Voraussetzung für die
+Default-Verschlüsselung von `session.publish()`/`node.put()`/`node.set()`
+(siehe [`QuSession`](#qusession) unten) — ein Sender, der einen Empfänger
+noch nicht per `trustPeer()` kennt, löst dessen `~<fp>/epub` automatisch
+selbst auf.
 
 ### Spaces & Space-Nodes
 `qu.own` → `QuSpace` — gebunden an den eigenen User-Space (`qu.get(qu.userSpaceId)`), immer verfügbar, kein Plugin nötig.
@@ -475,10 +493,40 @@ Core bewusst nicht kennt.
 |---|---|---|---|
 | `opts.ts` | `number` | `runtime.nextTs()` | expliziter Zeitstempel |
 | `opts.refs` | `string[]` | — | Referenzen auf andere QuBit-IDs (Listen, Anhänge, Space-Links) — Teil der Signatur |
-| `opts.encryptFor` | `string[]` | — | Fingerprints der Empfänger; verschlüsselt `value` vor dem Signieren (ECDH+HKDF+AES-256-GCM) |
+| `opts.encryptFor` | `string[] \| null \| undefined` | — | Fingerprints der Empfänger; verschlüsselt `value` vor dem Signieren (ECDH+HKDF+AES-256-GCM). `undefined` (Parameter weggelassen) löst den **Default** unten aus; `null`/`[]` schreibt explizit im Klartext |
 
 Signiert (falls `identity` gesetzt), dann `runtime.ingest()`.
 **Rückgabe:** wie `runtime.ingest()`.
+
+**Default-Verschlüsselung an alle Reader eines Space:** wird `encryptFor`
+komplett weggelassen (nicht `null`/`[]` — das sind ein bewusstes Opt-out) UND
+ist `getACL` gesetzt (jede über `Qu` erzeugte Session hat das), wird die
+`readers`-Liste des Ziel-Space live nachgeschlagen (`getACL(id)`). Ist sie
+etwas anderes als `['*']`, wird automatisch genau für diese Leser (plus den
+Schreiber selbst, falls nicht ohnehin enthalten) verschlüsselt — Empfänger,
+deren Schlüssel noch nicht per `trustPeer()` bekannt sind, werden dafür
+automatisch über ihr veröffentlichtes `~<fp>/epub` aufgelöst (siehe
+[`qu.publishProfile()`](#profil-qupublishprofile-qureadprofilefingerprint)).
+Ohne Spaces-Plugin oder mit `readers: ['*']` ist `getACL()` immer
+`{readers: ['*']}` — der Default ist dort ein reines No-op, unverändertes
+Verhalten. Zwei Ausnahmen, unabhängig vom `readers`-Wert: das Space-Manifest
+selbst (`id === spaceId`, sonst könnte `getACL()` sich nicht mehr selbst
+lesen) und die drei reservierten Profil-Leaves (`~<fp>/pub|epub|alias`) sind
+niemals Teil dieses Defaults — beide müssen strukturell im Klartext bleiben.
+Ein fehlender Empfänger-Key wirft einen klaren Fehler (`Unknown ECDH public
+key for recipient "…"`) statt still im Klartext zu schreiben.
+
+```js
+// readers: ['*'] (Default) — encryptFor bleibt komplett ungenutzt, wie bisher.
+await qu.get(publicRoomId).get('msgs').set({ text: 'hallo' });
+
+// readers: [alice.fp, bob.fp] — automatisch für genau diese beiden verschlüsselt,
+// sobald beide zuvor publishProfile() aufgerufen haben.
+await qu.get(privateRoomId).get('msgs').set({ text: 'geheim' });
+
+// Bewusst im Klartext, auch in einem eingeschränkten Space:
+await qu.get(privateRoomId).get('meta').put({ createdAt: Date.now() }, { encryptFor: null });
+```
 
 ### `session.append(collectionId, value, opts?)`
 Wie `publish()`, aber hängt zuerst `/${identity.fingerprint}/${ts}` an
@@ -797,14 +845,24 @@ get/put/set/map-Kombination.
 **Synchron** (wie `qu.createSpace()`, das es aufruft — siehe
 [`QuSpace`](#quspace) dazu, warum). `readers` defaultet auf
 `memberFingerprints` (nur Mitglieder lesen). Für einen öffentlich lesbaren
-Raum explizit `readers: ['*']` übergeben. `room.ready` abwarten, bevor
-andere Mitglieder sofort mitschreiben sollen.
+Raum explizit `readers: ['*']` übergeben.
+
+Diese eingeschränkte `readers`-Liste ist genau der Fall, der
+`session.publish()`s Default-Verschlüsselung auslöst (siehe
+[`session.publish()`](#sessionpublishid-value-opts)): jede Nachricht/jeder
+Anhang in einem so erzeugten Raum wird automatisch für alle Mitglieder
+verschlüsselt, sofern niemand explizit `encryptFor` übergibt. Voraussetzung:
+**jedes Mitglied ruft vor der ersten Nachricht einmal
+[`qu.publishProfile()`](#profil-qupublishprofile-qureadprofilefingerprint)
+auf** — sonst schlägt das Verschlüsseln mit einem klaren Fehler fehl, weil
+der Sender den ECDH-Key eines Mitglieds nicht auflösen kann. `room.ready`
+abwarten, bevor andere Mitglieder sofort mitschreiben sollen.
 
 ### `sendMessage(space, { text, attachments?, encryptFor? })`
 | Parameter | Typ | Beschreibung |
 |---|---|---|
 | `attachments` | `{ bytes, name, mime, fileStorage }[]` | Jeder Anhang wird über `put()` geschrieben (Datei-Auto-Detect, chunked+manifested — siehe [`QuSpace`](#quspace)), kollisionssicher adressiert wie Nachrichten selbst, und per `refs` an die Nachricht gehängt — Foto, Video und beliebige Datei unterscheiden sich nur im `mime`-Feld. |
-| `encryptFor` | `string[]` | Wie bei `put()` — für Ende-zu-Ende-verschlüsselte Räume. |
+| `encryptFor` | `string[] \| null` | Explizit übersteuern. Weggelassen greift der Default aus `session.publish()` — bei einem Raum mit eingeschränkten `readers` also bereits automatisch verschlüsselt, ohne dass diese Funktion selbst etwas dafür tun muss. |
 
 Ruft intern `space.get('msgs').set({ text }, { refs, encryptFor })` auf.
 

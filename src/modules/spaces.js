@@ -1,4 +1,4 @@
-import { spaceIdOf, isUserSpaceId, fingerprintOfUserSpace, randomSpaceId } from '../core/space.js';
+import { spaceIdOf, isUserSpaceId, fingerprintOfUserSpace, randomSpaceId, isReservedProfilePath } from '../core/space.js';
 
 /**
  * The Spaces plugin: replaces the Core's zero-config default ACL
@@ -43,9 +43,14 @@ export function createSpaceACLResolver(runtime) {
       const admins = new Set(m?.admins ?? []);
       writers.add(owner);
       admins.add(owner); // structural guarantee: never lockable
+      // Same "cannot be locked out" precedent, applied to reads: pub/epub/alias
+      // (core/space.js's RESERVED_PROFILE_PATHS) must stay discoverable by
+      // everyone even if this owner restricts their Space's `readers`
+      // elsewhere — otherwise nobody could ever encrypt a message *to* them.
+      const readers = isReservedProfilePath(id) ? ['*'] : (m?.readers ?? ['*']);
       return {
         writers: isManifestWrite ? [...admins] : [...writers],
-        readers: m?.readers ?? ['*'],
+        readers,
       };
     }
 

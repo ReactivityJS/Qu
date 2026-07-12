@@ -36,6 +36,10 @@ test('a message id containing another writer\'s fingerprint does not change the 
 test('1:1 chat: two members can exchange messages, a third party cannot read them', async () => {
   const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
+  // A restricted (non-'*') readers list, which this room has, auto-encrypts
+  // every message for exactly those readers (core/session.js) — each member
+  // publishes their own key first, the same way a real app onboarding flow would.
+  await Promise.all([alice, bob].map((qu) => qu.publishProfile()));
 
   const room = createChatRoom(alice, [alice.fingerprint, bob.fingerprint], { readers: [alice.fingerprint, bob.fingerprint] });
   await room.ready;
@@ -52,6 +56,7 @@ test('group chat: three members can all write, order is preserved by timestamp',
   const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
   const carol = await Qu.create({ runtime: alice.runtime });
+  await Promise.all([alice, bob, carol].map((qu) => qu.publishProfile()));
   const room = createChatRoom(alice, [alice.fingerprint, bob.fingerprint, carol.fingerprint]);
   await room.ready;
 
@@ -67,6 +72,7 @@ test('group chat: three members can all write, order is preserved by timestamp',
 test('an image attachment round-trips via refs + File-Handling, addressed the same collision-safe way as messages', async () => {
   const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
+  await Promise.all([alice, bob].map((qu) => qu.publishProfile()));
   const room = createChatRoom(alice, [alice.fingerprint, bob.fingerprint]);
   await room.ready;
   const fileStorage = new MemoryFileStorageAdapter();
@@ -88,6 +94,7 @@ test('an image attachment round-trips via refs + File-Handling, addressed the sa
 test('read receipts: a per-reader LWW slot, keyed by verified writer not by path', async () => {
   const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
+  await Promise.all([alice, bob].map((qu) => qu.publishProfile()));
   const room = createChatRoom(alice, [alice.fingerprint, bob.fingerprint]);
   await room.ready;
   const { qubit: m1 } = await sendMessage(room, { text: 'hi' });
@@ -101,6 +108,7 @@ test('read receipts: a per-reader LWW slot, keyed by verified writer not by path
 test('presence: online while heartbeating, offline after an explicit stop, stale entries are not reported online', async () => {
   const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
+  await Promise.all([alice, bob].map((qu) => qu.publishProfile()));
   const room = createChatRoom(alice, [alice.fingerprint, bob.fingerprint]);
   await room.ready;
 

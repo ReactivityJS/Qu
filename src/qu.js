@@ -193,6 +193,46 @@ export class Qu {
   async trustPeer(fingerprint, encPubKeyJwk) { return this.#session.trustPeer(fingerprint, encPubKeyJwk); }
 
   /**
+   * Publishes this identity's public keys (and optionally a display
+   * `alias`) under the three reserved leaves every User-Space structurally
+   * supports (`~<fp>/pub`, `~<fp>/epub`, `~<fp>/alias` — core/space.js).
+   * Needs no plugin: these are plain writes into your own always-writable
+   * Space (core/identity-acl.js). This is what makes `encryptFor`'s default
+   * (core/session.js) usable without every sender first having to
+   * `trustPeer()` every recipient by hand — a sender who doesn't already
+   * know a recipient's key falls back to reading it here. `pub`/`epub` are
+   * always publicly readable regardless of any restricted `readers` list
+   * you set on your own Space (modules/spaces.js) — encrypting your own
+   * public key would make it undiscoverable to exactly the peers who need
+   * it to decrypt anything from you at all.
+   */
+  async publishProfile({ alias } = {}) {
+    if (this.#guest) throw new Error('[Qu] Guest-Sessions haben kein Schreibrecht (versucht: publishProfile).');
+    const [pub, epub] = await Promise.all([
+      this.identity.exportPublicSigningKey(),
+      crypto.subtle.exportKey('jwk', this.identity.encryptionKey),
+    ]);
+    const writes = [this.own.get('pub').put(pub), this.own.get('epub').put(epub)];
+    if (alias !== undefined) writes.push(this.own.get('alias').put(alias));
+    await Promise.all(writes);
+    return this;
+  }
+
+  /**
+   * Reads another identity's (or your own) published profile — the read
+   * side of `publishProfile()`. `alias` falls back to the fingerprint
+   * itself when nobody ever published one, so a caller can always show
+   * *something* without a separate null-check. Requires no plugin, same as
+   * `publishProfile()` — `pub`/`epub`/`alias` are always readable
+   * (core/space.js, modules/spaces.js).
+   */
+  async readProfile(fingerprint) {
+    const space = this.get(userSpaceId(fingerprint));
+    const [pub, epub, alias] = await Promise.all([space.get('pub'), space.get('epub'), space.get('alias')]);
+    return { fingerprint, pub: pub?.value ?? null, epub: epub?.value ?? null, alias: alias?.value ?? fingerprint };
+  }
+
+  /**
    * A node bound to `id` — get/put/set/on/map relative to it (see
    * core/space-handle.js). Works for any Space/path you know: your own,
    * another user's ("~<their-fp>"), a generic Space (its UUID), or any

@@ -42,6 +42,8 @@ export {
   userSpaceId,
   fingerprintOfUserSpace,
   randomSpaceId,
+  isReservedProfilePath,
+  RESERVED_PROFILE_PATHS,
 } from './core/space.js';
 export { assertValidPattern } from './core/pattern.js';
 
