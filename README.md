@@ -20,15 +20,21 @@ import { Qu } from './src/index.js';
 
 ## Quickstart
 
+Fünf Verben, ein Objekt-Typ — an GunDB angelehnt (`gun.get(key).put(x)`/
+`.on(cb)`), aber an QUs signiertem, ACL-geprüftem Schreibmodell:
+`get` navigiert (synchron, keine I/O), `put`/`set`/`on`/`map` lesen/
+schreiben/beobachten:
+
 ```js
 const alice = await Qu.create();
-await alice.publish(`${alice.userSpaceId}/chat/room1/msg1`, { text: 'hello' });
-alice.on(`${alice.userSpaceId}/chat/room1/**`, (qubit) => console.log(qubit.value));
+alice.own.get('status').on((q) => console.log(q.value));   // live beobachten
+await alice.own.get('status').put('online');                // schreiben (LWW)
+console.log((await alice.own.get('status')).value);         // 'online' — await liest
 ```
 
-Ohne jedes Plugin ist nur dein eigener `~<fingerprint>`-Space beschreibbar
-(`core/identity-acl.js`) — für geteilte, generische Spaces (Chat-Räume,
-ToDo-Listen, …) `qu.use(createSpacesPlugin())`.
+Ohne jedes Plugin ist nur dein eigener `~<fingerprint>`-Space (`qu.own`)
+beschreibbar (`core/identity-acl.js`) — für geteilte, generische Spaces
+(Chat-Räume, ToDo-Listen, …) `qu.use(createSpacesPlugin())`.
 
 `Qu` ist die empfohlene Fassade — sie erzeugt (oder importiert) eine
 Identität und verdrahtet Runtime/Store/Session im Hintergrund,
@@ -37,20 +43,20 @@ zusammensetzen muss. **Der Core selbst ist local-only/offline**: ohne
 weiteres Zutun landet alles im `MemoryAdapter`, es wird kein Netzwerk-Code
 geladen. Netzwerk (Replication/Transporte/Routing), Storage jenseits von
 Memory/Null, und Referenz-/Datei-Handling sind Plugins — angedockt über
-`qu.use(...)`:
+`qu.use(...)`, oder gebündelt über ein Preset:
 
 ```js
-import { Qu, createNetworkPlugin, createFileHandlerPlugin, MemoryFileStorageAdapter } from './src/index.js';
+import { Qu, QU_PRESETS, createFileHandlerPlugin, MemoryFileStorageAdapter } from './src/index.js';
 
-const alice = await Qu.create();
-alice.use(createNetworkPlugin());                                    // qu.connect()/qu.router/qu.webrtc()
-alice.use(createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })); // qu.shareFile()/qu.resolveFileRef()
+const alice = await Qu.create({ plugins: QU_PRESETS.network }); // Spaces + Network in einem
+alice.use(createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })); // Datei-Auto-Detect für put()
 ```
 
-Jedes Plugin ist auch ohne `use()` direkt nutzbar — `sendMessage(qu, spaceId, opts)`
-aus `modules/chat.js` etwa funktioniert unverändert ohne dass irgendetwas
-"installiert" wurde; `use()` fügt nur `qu.sendMessage(spaceId, opts)`-Sugar
-hinzu, für wer sie will. Siehe [Core, Storage, Network, Data](#core-storage-network-data--wie-die-plugins-zusammenspielen) unten.
+Jedes Plugin ist auch ohne `use()` direkt nutzbar — `sendMessage(space, opts)`
+aus `modules/chat.js` etwa nimmt einfach einen bereits navigierten Node
+entgegen, ganz ohne dass irgendetwas "installiert" wurde; `use()` fügt nur
+`qu.sendMessage(spaceId, opts)`-Sugar hinzu, für wer sie will. Siehe
+[Core, Storage, Network, Data](#core-storage-network-data--wie-die-plugins-zusammenspielen) unten.
 
 **Nächster Schritt: `examples/`** — drei kurze, fokussierte Beispiele
 (lokaler User, zwei verbundene Clients, teilbare ToDo-Liste), deutlich
@@ -95,25 +101,33 @@ Konfiguration, sondern eine strukturelle Tatsache — nur du kannst je eine
 gültige Signatur für `writer = <dein Fingerprint>` erzeugen.
 
 ```js
-await alice.publish(`${alice.userSpaceId}/status`, 'online'); // eigener Context — geht immer
-await alice.publish('irgendein/anderer/pfad', 'x');             // ein anderer Context — wirft: [ACL] Write denied
+await alice.own.get('status').put('online'); // eigener Context — geht immer
+await alice.get('irgendein/anderer/pfad').put('x'); // ein anderer Context — wirft: [ACL] Write denied
 ```
 
 **`qu.own`** ist derselbe eigene Context, nur ohne `${alice.userSpaceId}/`
-bei jedem Aufruf auszuschreiben — ein `QuSpace`-Handle, das jeden Pfad
-relativ zu genau diesem Space auflöst (`publish`/`append`/`get`/`query`/
-`on`, gleiche Signaturen, nur ohne den Präfix):
+bei jedem Aufruf auszuschreiben — ein `QuSpace`-Node, der jeden Pfad
+relativ zu genau diesem Space auflöst. `qu.get(id)` selbst navigiert nur
+(synchron, keine I/O); erst `.put()`/`.set()`/`.on()`/`.map()` oder ein
+`await` lösen tatsächlich etwas aus:
 
 ```js
-await alice.own.publish('status', 'online'); // exakt dieselbe QuBit wie oben
-console.log((await alice.own.get('status')).value); // 'online'
+alice.own.get('status')          // Node, gebunden an `${alice.userSpaceId}/status` — noch keine I/O
+console.log((await alice.own.get('status')).value); // 'online' — await liest den aktuellen Wert
 ```
 
 Um in einem **anderen** Context zu schreiben — einem geteilten Space, oder
 dem Space einer anderen Person — muss dieser Context dich explizit als
 `writer` listen. Das übernimmt das Spaces-Plugin. `qu.createSpace(opts)`
-liefert direkt ein `QuSpace`-Handle für den neuen Space zurück (statt nur
-die rohe Id) — Anlegen und erstes Schreiben laufen über dasselbe Objekt:
+liefert **synchron** (wie `get()`) direkt einen `QuSpace`-Node für den
+neuen Space zurück (statt nur die rohe Id) — Anlegen und erstes Schreiben
+laufen über dasselbe Objekt. Synchron ist hier kein Stil-Detail: `QuSpace`
+ist thenable (siehe unten), und `await` auf ein `async` `createSpace()`
+würde den Node bis zum Manifest-Wert hindurchreichen statt ihn selbst zu
+liefern — dieselbe "kein await navigiert, await liest"-Regel wie überall
+sonst. Das Manifest wird im Hintergrund geschrieben; `space.ready` ist das
+Promise DIESES Writes, falls eine echte Bestätigung gebraucht wird (ein
+bloßes `await space` ist nur ein Read und kann dem Write vorauslaufen):
 
 ```js
 import { createSpacesPlugin } from './src/index.js';
@@ -123,10 +137,11 @@ import { createSpacesPlugin } from './src/index.js';
 // gleich Netzwerk/Sync mit hereinzunehmen (das kommt in Abschnitt 3 + 5).
 const bob = await Qu.create({ runtime: alice.runtime });
 alice.use(createSpacesPlugin());
-const room = await alice.createSpace({ writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] });
+const room = alice.createSpace({ writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] });
+await room.ready; // auf das Manifest warten, bevor bob gleich mitschreibt
 
-await room.publish('msg1', 'hallo');              // erlaubt, weil room's Manifest alice als writer listet
-await bob.publish(`${room}/msg2`, 'hi zurück');   // room funktioniert auch weiterhin wie ein roher String — ${room} interpoliert zur Id
+await room.get('msg1').put('hallo');              // erlaubt, weil room's Manifest alice als writer listet
+await bob.get(`${room}/msg2`).put('hi zurück');   // room funktioniert auch weiterhin wie ein roher String — ${room} interpoliert zur Id
 ```
 
 Einen bereits bekannten Space **laden** (statt neu anzulegen) — egal ob
@@ -134,23 +149,23 @@ dein eigener, der einer anderen Person (`~<ihr-fingerprint>`), oder ein
 geteilter Raum, dessen Id z. B. über einen Link ankam:
 
 ```js
-const bobsSpace = alice.space(bob.userSpaceId);        // ~<bob-fp> — liest, was bob öffentlich freigegeben hat
-const sameRoomAgain = bob.space(room.id);                // dieselbe room-Id, jetzt aus bobs Sicht
+const bobsSpace = alice.get(bob.userSpaceId);   // ~<bob-fp> — liest, was bob öffentlich freigegeben hat
+const sameRoomAgain = bob.get(room.id);          // dieselbe room-Id, jetzt aus bobs Sicht
 ```
 
-`qu.space(id)` selbst prüft nichts — es baut nur das Handle. Jeder
-tatsächliche `publish`/`get`/`query`/`on`-Aufruf darüber wird exakt so
-ACL-geprüft, wie ein direkter `qu.publish(id, ...)`-Aufruf es auch wäre;
-`qu.own` ist nichts als `qu.space(qu.userSpaceId)`.
+`qu.get(id)` selbst prüft nichts — es baut nur den Node. Jeder tatsächliche
+`put`/`set`/`on`/`map`/`await`-Aufruf darüber wird exakt so ACL-geprüft,
+wie derselbe Aufruf mit dem vollen Pfad direkt auf `qu` es auch wäre;
+`qu.own` ist nichts als `qu.get(qu.userSpaceId)`.
 
-`publish(id, value)` überschreibt (LWW, benanntes Register); `append(collectionId,
-value)` hängt automatisch `/${fingerprint}/${ts}` an — für Sammlungen mit
-mehreren unabhängigen Schreibern (Chat, Kommentare), die strukturell nie
+`put(value)` überschreibt (LWW, benanntes Register); `set(value)` hängt
+automatisch `/${fingerprint}/${ts}` an — für Sammlungen mit mehreren
+unabhängigen Schreibern (Chat, Kommentare), die strukturell nie
 kollidieren können:
 
 ```js
-await room.append('msgs', { text: 'erste Nachricht' });  // landet unter room/msgs/<alice-fp>/<ts>
-await bob.append(`${room}/msgs`, { text: 'zweite Nachricht' }); // eigener Namensraum, keine Kollision möglich
+await room.get('msgs').set({ text: 'erste Nachricht' });  // landet unter room/msgs/<alice-fp>/<ts>
+await bob.get(`${room}/msgs`).set({ text: 'zweite Nachricht' }); // eigener Namensraum, keine Kollision möglich
 ```
 
 ### 3. Sync, Mirror, Relay
@@ -191,14 +206,14 @@ eigenes Gerät offline ist.
 ### 4. Arten von Events
 
 Diese Matrix ist eine der zentralen Kernideen von QU, nicht nur eine
-Konfigurationsoption unter vielen: **jedes** `publish()`/`append()` ist ein
+Konfigurationsoption unter vielen: **jedes** `put()`/`set()` ist ein
 Event, und genau zwei unabhängige Dimensionen legen vollständig fest, was
 mit ihm passiert — es gibt keine dritte, versteckte Form. Ein "Event" in QU
-ist schlicht ein QuBit, das über `on()` zugestellt wird:
+ist schlicht ein QuBit, das über `on()`/`map()` zugestellt wird:
 
 **Ort — lokal oder remote-shared:**
-- **Lokal**: kein Network-Plugin installiert/verbunden — `publish()`/`append()` bleibt auf diesem Prozess/Tab.
-- **Remote-shared**: `createNetworkPlugin()` + `qu.connect()` — derselbe `publish()`/`on()`-Code, jetzt zusätzlich über `pushTopics` an verbundene Peers weitergereicht (Abschnitt 3).
+- **Lokal**: kein Network-Plugin installiert/verbunden — `put()`/`set()` bleibt auf diesem Prozess/Tab.
+- **Remote-shared**: `createNetworkPlugin()` + `qu.connect()` — derselbe `put()`/`on()`-Code, jetzt zusätzlich über `pushTopics` an verbundene Peers weitergereicht (Abschnitt 3).
 
 **Dauerhaftigkeit — vier Stufen, alle über denselben `StorageAdapter`-Contract austauschbar:**
 | Adapter | Übersteht Reload? | Übersteht Tab-Schließen/Neustart? | Typischer Einsatz |
@@ -246,32 +261,40 @@ const qu = await Qu.create({
 ```
 Ebenso `Qu.create({ plugins })` — Sugar für eine `use()`-Schleife direkt
 nach dem Anlegen, für Apps, die Spaces/Files/Referenzen/Network immer dabei
-haben wollen, ohne eine separate `use()`-Kette zu schreiben:
+haben wollen, ohne eine separate `use()`-Kette zu schreiben. `src/presets.js`
+bündelt gängige Kombinationen als `QU_PRESETS`:
+
 ```js
-import { Qu, createSpacesPlugin, createFileHandlerPlugin, MemoryFileStorageAdapter } from './src/index.js';
+import { Qu, QU_PRESETS, createFileHandlerPlugin, MemoryFileStorageAdapter } from './src/index.js';
 
 const qu = await Qu.create({
-  plugins: [createSpacesPlugin(), createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })],
+  plugins: [...QU_PRESETS.spaces, createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })],
 });
+// oder direkt eines der drei fertigen Presets:
+//   QU_PRESETS.local   — [] (Core-Default, nur zur Symmetrie benannt)
+//   QU_PRESETS.spaces  — [createSpacesPlugin()]
+//   QU_PRESETS.network — [createSpacesPlugin(), createNetworkPlugin()]
 ```
 Beide Optionen sind rein additiv — `Qu.create()` ganz ohne sie verhält sich
 exakt wie bisher, komplett lokal, keine Plugins geladen.
 
-**Listener:** `on(pattern, callback, { initial?, once? })` — `initial: true`
-liefert erst alles bereits Passende, danach laufend Neues (kein manuelles
-`query()` + `on()` mehr nötig); `once: true` liefert nur den aktuellen
-Stand, keine laufende Subscription.
+**Live beobachten:** `node.on(callback, { initial?, once? })` (dieser eine
+Node) bzw. `node.map(callback, { deep?, initial?, once? })` (seine Kinder,
+`deep: true` für Sammlungen, die zwei Segmente tief namensraumisieren wie
+`set()`) — `initial: true` (bei `map()` der Default) liefert erst alles
+bereits Passende, danach laufend Neues; `once: true` liefert nur den
+aktuellen Stand, keine laufende Subscription.
 
 ### 5. Trigger & Listen: Events auslösen und darauf reagieren
 
 Die Kombinationen aus Abschnitt 4 an einem durchgehenden Beispiel — derselbe
-`on()`/`publish()`-Code für jede:
+`on()`/`put()`-Code für jede:
 
 ```js
 // Lokal + Memory (Standard)
 const qu = await Qu.create();
-qu.on(`${qu.userSpaceId}/counter`, (q) => console.log('lokal:', q.value));
-await qu.publish(`${qu.userSpaceId}/counter`, 1);
+qu.own.get('counter').on((q) => console.log('lokal:', q.value));
+await qu.own.get('counter').put(1);
 
 // Lokal + flüchtig (kein QuBit, kein Store, modul-intern)
 qu.runtime.on('lab.progress', (e) => console.log('flüchtig:', e.step)); // payload-Felder liegen direkt auf e, nicht unter e.payload
@@ -296,8 +319,8 @@ await Promise.all([
   bobRemote.connect(b, { pushTopics: [alice.userSpaceId] }),
 ]);
 
-bobRemote.on(`${alice.userSpaceId}/msg`, (q) => console.log('bei bob angekommen:', q.value)); // Listener zuerst registrieren
-await alice.publish(`${alice.userSpaceId}/msg`, 'hallo bob');                                  // kommt live bei bob an, ganz ohne dass bob je gefragt hat
+bobRemote.get(`${alice.userSpaceId}/msg`).on((q) => console.log('bei bob angekommen:', q.value)); // Listener zuerst registrieren
+await alice.get(`${alice.userSpaceId}/msg`).put('hallo bob');                                     // kommt live bei bob an, ganz ohne dass bob je gefragt hat
 ```
 
 ### 6. QuStore als verteilte, geteilte DB
@@ -308,43 +331,149 @@ bei der jede klassische DB-Frage eine direkte Entsprechung hat:
 
 | Klassische DB-Frage | QU-Antwort |
 |---|---|
-| Was ist eine Zeile? | Ein QuBit (`{id, value, ts, writer, sig}`) — `publish()` = LWW-Register, `append()` = kollisionsfreier Sammlungs-Eintrag |
-| Wie stelle ich eine Anfrage? | `query(pattern)` — einmalig; `on(pattern, cb, {initial:true})` — dieselbe Anfrage, dauerhaft live |
+| Was ist eine Zeile? | Ein QuBit (`{id, value, ts, writer, sig}`) — `put()` = LWW-Register, `set()` = kollisionsfreier Sammlungs-Eintrag |
+| Wie stelle ich eine Anfrage? | `node.map(cb, {once:true})` — einmalig; `node.map(cb, {initial:true})` (Default) — dieselbe Anfrage, dauerhaft live |
 | Welche Storage-Engine? | Austauschbarer `StorageAdapter` — Memory/Session/Local/IndexedDB/Filesystem, identische API (Abschnitt 4) |
 | Wie repliziere ich zu einer entfernten Kopie? | `qu.connect()` + `pushTopics`/`role: 'mirror'` — derselbe Space, gespiegelt auf einen Relay-Prozess (Abschnitt 3) |
 | Wie sind Rechte modelliert? | Pro Space (nicht pro Tabelle/Zeile): ein Manifest mit `writers`/`readers`/`admins`, write-seitig als Middleware erzwungen (`runtime.ingest()`), read-seitig gefiltert (`filterForReader()`) |
-| Wie adressiere ich relativ statt jedes Mal den vollen Pfad? | `QuSpace` (`qu.own`, `qu.space(id)`, `qu.createSpace()`) — ein Handle, an einen Space gebunden, `publish`/`get`/`query`/`on` relativ dazu (Abschnitt 2) |
+| Wie adressiere ich relativ statt jedes Mal den vollen Pfad? | `QuSpace` (`qu.own`, `qu.get(id)`, `qu.createSpace()`) — ein Node, an einen Space gebunden, `put`/`set`/`on`/`map` relativ dazu, gleichzeitig thenable (`await node` liest) (Abschnitt 2) |
 | Ordering-Garantie? | Hybrid-Logical-Clock (`runtime.nextTs()`) statt Wall-Clock — konsistente Ordering-Entscheidungen auch über mehrere Schreiber/Geräte hinweg |
 
 Ein Client, der lokal schreibt, ein Relay mit durablem Storage, und beliebig
 viele weitere Clients, die sich über `sync()`/Live-Push denselben Space
 teilen, bilden zusammen genau das: eine eventually-consistent, geteilte
 Datenbank, bei der "eine Query stellen" und "auf Änderungen lauschen"
-dieselbe Operation sind (`on()`), nicht zwei getrennte APIs.
+dieselbe Operation sind (`map()`), nicht zwei getrennte APIs.
+
+### 7. Datenstruktur für wachsende Collections (z. B. ein Forum)
+
+`node.map(cb, { deep: true })`/`**` liefert IMMER die komplette Treffermenge
+— es gibt (bewusst, siehe Abschnitt 6) kein Limit/Offset im Core. Für eine
+Collection, die strukturell nur eine überschaubare Größe erreichen kann
+(z. B. die Liste der Boards eines Forums), ist das genau richtig. Für eine
+Collection, die UNBEGRENZT wächst (die Posts *innerhalb* eines aktiven
+Boards), ist `board.get('posts').map(cb, { deep: true })` ein Problem, das
+mit der Zeit nur schlimmer wird — Board-weise splitten reicht allein nicht,
+weil das nur die Anzahl der Boards begrenzt, nicht die Anzahl der Posts in
+einem einzelnen (populären) Board.
+
+**Die Regel: nie `map()`/`**` auf eine strukturell unbegrenzte Ebene
+anwenden — die ID-Struktur so wählen, dass jede Ebene, die tatsächlich
+abonniert wird, von Natur aus begrenzt ist.** Der Standard-Trick dafür ist
+Zeit-Sharding: Posts nicht flach unter `posts/<postId>` ablegen, sondern
+zusätzlich nach einem Zeit-Bucket gruppiert. Ein Client abonniert dann nie
+"alle Posts, für immer", sondern gezielt den aktuellen Bucket:
+
+```js
+const board = qu.get(`forum/${boardId}`);
+const currentBucket = new Date().toISOString().slice(0, 7); // "2026-07"
+board.get('posts').get(currentBucket).map(renderPost, { deep: true }); // nur dieser Monat
+```
+
+**Zwei gleichwertige Modelle, je nach erwarteter Datenmenge:**
+
+| Modell | Beispiel-Id | Wann |
+|---|---|---|
+| Ein Segment (Bucket als String) | `posts/2026-07/<postId>` | Standardfall — Granularität (Jahr/Monat/Woche/Tag) ist frei wählbar PRO Collection, ohne die Pfadtiefe zu ändern |
+| Mehrere Segmente (ein Level pro Kalendereinheit) | `posts/2026/07/12/<postId>` | Wenn quer über Zeiträume mit `*` gefiltert werden soll (z. B. "jeder Juli, alle Jahre": `posts/*/07/*`) |
+
+**Wichtige Regel, unabhängig vom gewählten Modell: die Anzahl der
+Datums-Segmente muss innerhalb EINER Collection immer identisch sein** —
+nicht `posts/2026-07/x` neben `posts/2026/07/x` im selben Board mischen.
+Sonst passt kein `*`/`**`-Pattern mehr konsistent auf die ganze Collection,
+und der Bucket-Index (unten) kann Buckets nicht mehr eindeutig sortieren.
+Beide Modelle — ein Segment, mehrere Segmente, oder auch gar kein
+Zeit-Segment (für strukturell kleine Collections wie die Boardliste selbst)
+— sind gültig; welches passt, hängt von App und erwarteter Datenmenge ab.
+
+ISO-Format (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`) hat einen konkreten Vorteil
+gegenüber jedem anderen Format: lexikographische String-Sortierung ist
+gleichzeitig chronologische Sortierung (`"2026-07" < "2026-08"`) — nützlich
+für den Bucket-Index unten, ganz ohne Datums-Parsing.
+
+**`*` matcht genau ein Segment, überall — auch mittig, ohne Sonderfall:**
+`posts/*/07/*` (jeder Juli, jedes Jahr, jeder Tag) funktioniert exakt wie
+erwartet. **`**` dagegen ist nur als LETZTES Segment eines Patterns gültig**
+(`assertValidPattern()`, `core/pattern.js`, wird von `query()` UND
+`on()`/`map()` durchgesetzt) — ein Pattern wie `posts/**/01` wirft jetzt
+einen klaren Fehler, statt bei `query()` korrekt zu filtern, aber bei einer
+laufenden `on()`/`map()`-Subscription still ALLES unter `posts/` zu liefern
+(ein vorher existierender, stiller Split-Brain-Bug zwischen den beiden
+Matching-Engines).
+
+**"Ältere laden" ohne Pagination-Primitiv im Core:** ein kleiner, expliziter
+Bucket-Index reicht — beim ersten Post eines neuen Buckets mitschreiben:
+```js
+// Bei jedem ersten Post eines neuen Buckets:
+await board.get('bucket-index').set({ bucket: currentBucket });
+
+// "Ältere laden": Index einmalig lesen, nächstälteren Bucket gezielt nachladen
+const rows = await board.get('bucket-index').session.query(`${board.id}/bucket-index/**`);
+const buckets = [...new Set(rows.map((q) => q.value.bucket))].sort();
+const older = buckets[buckets.indexOf(currentBucket) - 1];
+if (older) board.get('posts').get(older).map(renderPost, { deep: true, once: true });
+```
+"Eine Seite laden" wird so zu "einen Bucket laden" — Pagination als
+Datenmodell-Muster statt als Core-Feature.
+
+**Bonus: dasselbe Muster begrenzt auch Netzwerk-Traffic.** `pushTopics`/
+`sync({ topic })` sind präfixbasiert (Abschnitt 3) — mit Zeit-Buckets kann
+das Sync-Topic `forum/board1/posts/2026-07/` sein, sodass auch über das
+Netz nur der aktuelle Monat übertragen wird, nicht das ganze Board.
+
+**Für "neueste Posts über alle Boards" (Startseite):** Zeit-Sharding allein
+hilft hier nicht (Cross-Board-Aggregation). Dafür eine bewusst
+denormalisierte, gedeckelte Index-Collection (`forum/recent-index/<postId>`),
+beim Schreiben eines Posts zusätzlich dort eingetragen und von der App auf
+z. B. die letzten 100 Einträge begrenzt gehalten — der ursprüngliche Post
+bleibt unverändert bestehen (Immutable Data), nur der Index "vergisst"
+ältere Einträge. Die Startseite abonniert nur diesen kleinen Index, nie
+`forum/*/posts/**`.
+
+**Lauffähiges Beispiel:** [`examples/forum-lib.mjs`](./examples/forum-lib.mjs)
+setzt genau dieses Muster (ein Segment, `YYYY-MM`) vollständig um —
+`createBoard`, `addPost`, `listPosts`, `onPosts`, `listBuckets`,
+`olderBucket` — inklusive Bucket-Index und kollisionssicherem gleichzeitigem
+Schreiben mehrerer Autoren; [`examples/forum-lib.test.mjs`](./examples/forum-lib.test.mjs)
+zeigt jede Garantie (Bucket-Isolation live wie beim Lesen, Dedup/Sortierung
+des Index, keine Kollision) als laufenden Test.
 
 ## Projektstruktur
 
 ```
-index.js                ← Server-Bootstrap (ruft nur server/static-server.mjs auf, kein QU-Code)
+index.js                ← Server-Bootstrap (verdrahtet server/static-server.mjs, server/test-runner.mjs
+                          und den Relay — kein QU-Datenmodell-Code selbst)
 index.html                ← Navigation zu Demo/Tests/Whitepaper/README/API (ebenfalls kein QU-Code)
 API.md                     vollständige Aufrufreferenz (Parameter, Rückgabewerte, Beispiele)
-server/static-server.mjs   generischer statischer Dateiserver
+server/static-server.mjs   generischer statischer Dateiserver (optionaler `routes`-Parameter als
+                          QU-agnostische Erweiterungsstelle, siehe server/test-runner.mjs)
+server/test-runner.mjs      /test/manifest.json (selbst-scannende Browser-vs-Node-Klassifizierung)
+                          + /test/run-node-tests (opt-in, siehe Abschnitt "Tests" unten)
+scripts/run-node-only.mjs   node:test-Runner für die Node-only-Dateien, als isolierter Kindprozess
+                          von server/test-runner.mjs aufgerufen; bewusst außerhalb test/, weil
+                          Node's `--test`-Discovery sonst diese Datei selbst als Testdatei anfasst
 assets/style.css            gemeinsames Stylesheet für alle Tooling-Seiten
 docs/view.html                generischer Markdown-Viewer (Whitepaper, README, API.md)
 src/
   index.js              ← einziger öffentlicher Einstiegspunkt der Bibliothek
                           (Core + Memory/Null-Adapter + alle Plugin-Factories —
                           kein node:fs, kein Browser-only-Code zwingend geladen)
-  qu.js                   Qu — schlanke Fassade: Identity/Session/publish+append+
-                          get+query+on, qu.own/qu.space(id) (QuSpace-Handles),
-                          generisches qu.use(plugin), qu.setACLResolver() (der
-                          Erweiterungspunkt, den createSpacesPlugin() nutzt),
+  qu.js                   Qu — schlanke Fassade: Identity/Session/qu.get(id)
+                          (liefert einen QuSpace-Node — get/put/set/on/map,
+                          gleichzeitig thenable), qu.own, generisches
+                          qu.use(plugin), qu.setACLResolver()/setPutHandler()
+                          (die Erweiterungspunkte, die createSpacesPlugin()
+                          bzw. createFileHandlerPlugin() nutzen),
                           Qu.create({ mounts?, plugins? }) als Sugar für einen
                           eigenen QuStore bzw. eine use()-Kette
+  presets.js                QU_PRESETS (local/spaces/network) — fertige
+                          plugins-Listen für Qu.create({ plugins }); liegt
+                          bewusst außerhalb core/ (importiert aus modules/
+                          und network/, was qu.js selbst nie darf)
   core/                  lokal, offline-sicher, keine Netzwerk-/Storage-Vendor-
                           Abhängigkeit: Pipeline, Runtime, Store (Adapter-Mounts),
                           Session, Identity, Space-Handle (QuSpace — an einen
-                          Space gebundenes publish/get/query/on, reine
+                          Space gebundenes get/put/set/on/map, reine
                           Adressierung, kein Policy-Entscheid), Clock,
                           Subscription Engine (Trie), Channel-Contract,
                           StorageAdapter-Contract, Space (String-Helfer),
@@ -379,17 +508,25 @@ src/
                           eigenes ~<fingerprint>) durch manifest-bewusste
                           Auflösung; ohne dieses Plugin existiert
                           qu.createSpace() gar nicht und kein generischer
-                          Space ist beschreibbar
+                          Space ist beschreibbar. qu.createSpace() ist
+                          synchron (liefert den Node sofort, wie get()) —
+                          das Manifest wird im Hintergrund geschrieben,
+                          space.ready ist dessen eigenes Promise
     chat.js                  Räume, Nachrichten, Anhänge, Presence, Lesebestätigungen
-                          (auf append()+publish() aufgebaut), createChatPlugin
+                          — jede Funktion nimmt einen bereits navigierten
+                          Space-Node entgegen und ist intern nur eine kurze
+                          get/put/set/map-Kombination; createChatPlugin
+                          hängt qu.sendMessage(spaceId, opts)-Sugar (etc.) an
   ui/
     bindings.js               viewKey/viewObject (one-way) + bindKey/bindObject
                           (two-way) — die reaktiven UI-Primitive, auf denen
-                          jede Lab-Ansicht aufbaut: nichts als qu.on() +
-                          Render-Callback, unmount = off(). DOM-Library-
-                          agnostisch (kein document.* hier drin, Callers
-                          liefern die Element-Glue). Echo-Schutz beim
-                          Two-Way-Binding: Schreiben unterbleibt bei
+                          jede Lab-Ansicht aufbaut: nichts als node.on()/
+                          node.map() + Render-Callback, unmount = off().
+                          Nehmen einen bereits navigierten Node entgegen
+                          (`viewKey(qu.get(id), render)`), kein (qu, id)-Paar
+                          mehr. DOM-Library-agnostisch (kein document.* hier
+                          drin, Callers liefern die Element-Glue). Echo-Schutz
+                          beim Two-Way-Binding: Schreiben unterbleibt bei
                           identischem Wert, Re-Render unterbleibt bei
                           identischem (id, ts) statt Wertevergleich — siehe
                           Doku-Kommentar in der Datei.
@@ -416,28 +553,30 @@ src/
                           `<qu-list path="...">` ist die deklarative Form
                           von viewObject() — ein `<template>`-Kind, geklont
                           pro Kind-QuBit, jeder Klon-Wurzel `.qu` auf
-                          `qu.space(<Item-Id>)` gesetzt, sodass `<qu-view
+                          `qu.get(<Item-Id>)` gesetzt, sodass `<qu-view
                           key>`/`<qu-bind key>` im Template ihre Felder ohne
                           Id-Wiederholung adressieren; deckt nur den
                           Leaf-per-Field-Fall ab (siehe API.md). Qu-Instanz
                           nie global: `.qu` als Property auf dem Element
                           oder einem Vorfahren, per DOM-Walk gefunden — auch
-                          ein QuSpace (`qu.own`/`qu.space(id)`), nicht nur
+                          ein QuSpace (`qu.own`/`qu.get(id)`), nicht nur
                           eine Qu-Instanz. Bewusst BROWSER-ONLY (erweitert
                           HTMLElement beim Modul-Laden), deshalb nicht im
                           Barrel `src/index.js`, direkt importieren.
 test/
   qu.test.mjs               Tests für die Qu-Fassade
-  space-handle.test.mjs         Tests für QuSpace (qu.own/qu.space()/createSpace()) und Qu.create({ mounts, plugins })
+  space-handle.test.mjs         Tests für QuSpace (qu.own/qu.get()/createSpace()) und Qu.create({ mounts, plugins })
   chat.test.mjs               Tests für das Chat-Modul (inkl. Kollisionssicherheit, Presence, Lesebestätigungen)
   relay.test.mjs               End-to-End gegen den echten WebSocket-Relay (native WebSocket-Clients, kein Loopback)
   references.test.mjs            obj://, key://, file://, Tiefenlimit, Zyklenschutz
   *.test.mjs                node:test — je Datei ein weiterer Themenbereich
   browser-shim/             node:test/node:assert-Ersatz für den Browser
-  index.html                 dieselben Tests, im Browser (via Import-Map)
+  index.html                 vereinheitlichtes Test-Dashboard: browser-taugliche Dateien laufen
+                            direkt hier (via Import-Map), Node-only-Dateien optional serverseitig
+                            über server/test-runner.mjs — ein Ergebnis, eine Übersicht
 docs/lab/                    interaktives Lab — der primäre Weg, QU im Browser
                             selbst auszuprobieren (siehe eigener Abschnitt unten)
-  index.html                 Navigation + vier Abschnitte, je ein "Ausführen"-Button
+  index.html                 Navigation + fünf Abschnitte, je ein "Ausführen"-Button
   render.mjs                  DOM-Rendering für Schritt-Karten (Code-Block + Ergebnis)
   lab-runner.mjs                generischer Schritt-Executor
   labs/
@@ -463,6 +602,10 @@ docs/lab/                    interaktives Lab — der primäre Weg, QU im Browse
 examples/
   todo-lib.mjs               Logik einer teilbaren ToDo-Liste, getrennt von jeder UI
   todo-lib.test.mjs            node:test dafür — Space + Link + FP-basiertes Schreibrecht
+  forum-lib.mjs               Zeit-Sharding für wachsende Collections (Grundkonzepte, Abschnitt 7)
+                            lauffähig statt nur Prosa: Boards, Posts pro Zeit-Bucket, Bucket-Index
+  forum-lib.test.mjs           node:test dafür — Bucket-Isolation (live wie beim Lesen),
+                            Index-Dedup/-Sortierung, kollisionssicheres gleichzeitiges Schreiben
 relay/
   ws-server.mjs              minimaler RFC-6455-WebSocket-Server, keine Abhängigkeit
   relay.mjs                    createRelay() — universeller QU-Relay-Kern, kein App-/Node-Bezug
@@ -475,12 +618,12 @@ archive/                     alte UI-Demos (live-chat, browser-demo, die vier
 ## Core, Storage, Network, Data — wie die Plugins zusammenspielen
 
 Ein `Qu.create()` ohne jedes `use()` ist vollständig lokal: Identity, Session,
-`publish`/`append`/`get`/`query`/`on`, `resolveRefs` — alles auf dem
-`MemoryAdapter`, kein `node:fs`-Import, kein `WebSocket`/`RTCPeerConnection`
-je referenziert. Das ist mit einem einzigen Test abgesichert
-(`grep` auf `src/index.js` findet keinen Netzwerk-/Node-Import) und mit
-einem End-to-End-Smoke-Test (`Qu.create()` → `publish`/`get` → funktioniert,
-ganz ohne Plugin).
+`qu.get(id)` (`put`/`set`/`on`/`map`, thenable für lesenden `await`) — alles
+auf dem `MemoryAdapter`, kein `node:fs`-Import, kein `WebSocket`/
+`RTCPeerConnection` je referenziert. Das ist mit einem einzigen Test
+abgesichert (`grep` auf `src/index.js` findet keinen Netzwerk-/Node-Import)
+und mit einem End-to-End-Smoke-Test (`Qu.create()` → `get().put()`/`await
+get()` → funktioniert, ganz ohne Plugin).
 
 **Der ACL-Default ist bewusst strikt, nicht "offen bis konfiguriert":** ohne
 jedes Plugin darfst du ausschließlich unter deinem eigenen
@@ -529,44 +672,47 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
      echten Bytes auf, sonst zum rohen Manifest.
    - `resolveReference(qu, ref, { maxDepth, asArray, fileHandler })` /
      `resolveValue(qu, value, opts)` lösen manuell auf — bewusst kein
-     automatischer Read-Hook in `Session`, gleiche Philosophie wie das
-     bestehende `resolveRefs()`: der Core bleibt ein dummer Store, die App
-     entscheidet, wann sie einem Link folgt. `maxDepth` (Default 1)
-     begrenzt, wie viele Referenz-Hops kaskadiert werden — inklusive
-     Zyklenschutz (ein Ref, der auf sich selbst zurückführt, bleibt ab dem
-     zweiten Auftreten im selben Pfad unaufgelöst statt zu hängen).
+     automatischer Read-Hook in `get()`, gleiche Philosophie: der Core
+     bleibt ein dummer Store, die App entscheidet, wann sie einem Link
+     folgt. `maxDepth` (Default 1) begrenzt, wie viele Referenz-Hops
+     kaskadiert werden — inklusive Zyklenschutz (ein Ref, der auf sich
+     selbst zurückführt, bleibt ab dem zweiten Auftreten im selben Pfad
+     unaufgelöst statt zu hängen).
 4. **Spaces** (`src/modules/spaces.js`, `createSpacesPlugin()`) — löst den
    Core-Default (nur `~<eigener-fingerprint>`) durch manifest-bewusste ACL-
    Auflösung ab: generische (UUID-)Spaces mit `writers`/`readers`/`admins`,
    und zusätzliche Writer auf einem User-Space per Manifest. Fügt
    `qu.createSpace(opts)` hinzu — ohne dieses Plugin existiert die Methode
    nicht, und `createChatRoom()`/jede Multi-Writer-Anwendung ist
-   unbeschreibbar. `qu.createSpace(opts)` liefert ein `QuSpace`-Handle
-   zurück (siehe unten), nicht nur die rohe Id. Kein Storage-/Netzwerk-Bezug,
-   also weiterhin offline-sicher — aber eine echte Policy-Entscheidung, kein
-   struktureller Core-Bestandteil, deshalb Plugin statt Default.
+   unbeschreibbar. `qu.createSpace(opts)` liefert **synchron** einen
+   `QuSpace`-Node zurück (siehe unten), nicht nur die rohe Id — das
+   Manifest wird im Hintergrund geschrieben (`space.ready` für eine echte
+   Bestätigung). Kein Storage-/Netzwerk-Bezug, also weiterhin
+   offline-sicher — aber eine echte Policy-Entscheidung, kein struktureller
+   Core-Bestandteil, deshalb Plugin statt Default.
 
 **`QuSpace`** (`src/core/space-handle.js`) ist dagegen Core, nicht Plugin —
 ein reines Adressierungs-Hilfsmittel, kein Policy-Entscheid, kostet keinen
-Storage-/Manifest-Zugriff, um zu *bauen*. `qu.own` (= `qu.space(qu.userSpaceId)`)
-und `qu.space(id)` sind für **jede** `Qu`-Instanz da, mit oder ohne Spaces-
+Storage-/Manifest-Zugriff, um zu *bauen*. `qu.own` (= `qu.get(qu.userSpaceId)`)
+und `qu.get(id)` sind für **jede** `Qu`-Instanz da, mit oder ohne Spaces-
 Plugin — nur `qu.createSpace()` (neue generische Spaces anlegen) braucht das
 Plugin, weil das ein echter Manifest-Write mit Policy-Entscheidung ist.
-Ein Handle prüft selbst nichts: jeder `publish`/`get`/`query`/`on`-Aufruf
+Ein Node prüft selbst nichts: jeder `put`/`set`/`on`/`map`/`await`-Aufruf
 darüber läuft exakt so durch die ACL wie derselbe Aufruf mit dem vollen
-Pfad direkt auf `qu`. `toString()`/`toJSON()` machen ein Handle überall
+Pfad direkt auf `qu`. `toString()`/`toJSON()` machen einen Node überall
 einsetzbar, wo bisher ein roher SpaceId-String erwartet wurde.
 
 `chat.js` (`src/modules/chat.js`, `createChatPlugin()`) ist die eine
 lockerere, nicht-numerierte Kategorie: ein fertiger Baustein, ausschließlich
 auf der öffentlichen Runtime/Session/Qu-API aufgebaut, kein Sonderzugriff
-auf den Core — eher Beispielcode als Architektur. Sein Text-Pfad
-(`sendMessage`/`listMessages`/…) braucht `append()`/`query()` (Core) und
-`createSpace()` (Spaces-Plugin, für den geteilten Room) — aber kein
-Netzwerk-Plugin: eine Chat-Room bleibt vollständig lokal nutzbar, nur ohne
-Mehrgeräte-Sync. Anhänge brauchen zusätzlich einen `FileHandler`;
-Mehrgeräte-Sync zusätzlich einen `NetworkPlugin` — Chat selbst bleibt davon
-unwissend.
+auf den Core — eher Beispielcode als Architektur. Jede Funktion nimmt einen
+bereits navigierten Space-Node entgegen (`sendMessage(space, opts)`) und ist
+intern nur `space.get('msgs').set(...)`/`.map(...)` — aber `createSpace()`
+(Spaces-Plugin, für den geteilten Room) bleibt nötig. Kein Netzwerk-Plugin
+nötig: eine Chat-Room bleibt vollständig lokal nutzbar, nur ohne
+Mehrgeräte-Sync. Anhänge brauchen zusätzlich einen `FileHandler`
+(`.put(bytes)` erkennt sie automatisch); Mehrgeräte-Sync zusätzlich einen
+`NetworkPlugin` — Chat selbst bleibt davon unwissend.
 
 ## Im Browser (Server starten)
 
@@ -581,14 +727,26 @@ selbst keine QU-Logik, ruft nur `server/static-server.mjs` und
 `index.html` erreichbar:
 
 - **Interaktives Lab** (`/docs/lab/index.html`) — der primäre Einstieg zum
-  Selbst-Ausprobieren: vier Abschnitte (Identität, Spaces/ACL, Storage-
-  Adapter, Netzwerk/Relay/Mirror), je ein "Ausführen"-Button, echte
-  Objekte auf `window` für die Konsole danach (siehe eigener Abschnitt
-  unten).
+  Selbst-Ausprobieren: fünf Abschnitte (Identität, Spaces/ACL, Storage-
+  Adapter, Netzwerk/Relay/Mirror, Referenzen in der Praxis), je ein
+  "Ausführen"-Button, echte Objekte auf `window` für die Konsole danach
+  (siehe eigener Abschnitt unten).
 - **Tests** (`/test/index.html`) — dieselben `test/*.test.mjs`-Dateien wie
-  `npm test`, unverändert; eine Import-Map leitet nur `node:test` und
-  `node:assert/strict` auf einen kleinen Browser-Shim um
-  (`test/browser-shim/`).
+  `npm test`, unverändert, aber vollständig: die Dateiliste kommt live von
+  `/test/manifest.json` (der Server scannt `test/` bei jeder Anfrage neu,
+  keine von Hand gepflegte Liste, die veralten kann). Browser-taugliche
+  Dateien laufen über eine Import-Map auf einen kleinen Shim
+  (`test/browser-shim/`), gruppiert nach Datei mit Live-Ergebnissen. Die
+  restlichen (echtes `node:fs`/`node:http`/`node:net`, z. B. der
+  Relay-Test gegen einen echten WebSocket-Server) können nicht im Browser
+  laufen — der Server bietet optional an, sie selbst auszuführen und das
+  Ergebnis als JSON auszuliefern (`GET /test/run-node-tests`), damit auch
+  sie im selben Dashboard auftauchen. Aus, per Default: `QU_ENABLE_TEST_ENDPOINT=1`
+  beim Start setzen, um das zu aktivieren — ein Endpunkt, der bei jeder
+  Anfrage einen echten Testlauf auslöst, ist für lokale Entwicklung
+  unproblematisch, aber kein Endpunkt, den man ungeschützt öffentlich
+  erreichbar machen möchte (Ergebnisse werden 30s gecacht, damit wiederholte
+  Anfragen nicht wiederholt einen Lauf auslösen).
 - **Whitepaper**, **README**, **API-Referenz** (`/docs/view.html?file=...`)
   — ein generischer Markdown-Viewer, derselbe für alle drei Dokumente.
 
@@ -842,8 +1000,8 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
   ausgeschlossen, nicht nur unwahrscheinlich.
 - **Rechte sind an Spaces gebunden**, nicht an einzelne Pfade oder
   Nachrichten — ein Manifest pro Space.
-- **Zwei Schreibmodi, keine Konvention:** `publish(id, ...)` ist ein
-  benanntes, veränderliches Register (LWW); `append(collectionId, ...)`
+- **Zwei Schreibmodi, keine Konvention:** `put(value)` ist ein
+  benanntes, veränderliches Register (LWW); `set(value)`
   namensraumisiert die ID automatisch nach Schreiber-Fingerprint, damit
   unabhängige Schreiber in einer geteilten Sammlung (Chat, Kommentare)
   strukturell nie kollidieren können — ohne ACL-Sonderbehandlung.
@@ -855,14 +1013,14 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
   remote-shared (Network-Plugin ja/nein), gekreuzt mit flüchtig
   (`runtime.emit()`, kein QuBit) / `NullAdapter` (echtes QuBit, nie
   gespeichert) / Memory / Session / persistent (Local/IndexedDB/Filesystem)
-  — dieselbe `publish()`/`on()`-API in jeder Kombination, nur der
+  — dieselbe `put()`/`on()`-API in jeder Kombination, nur der
   `StorageAdapter`-Mount und ob ein Network-Plugin verbunden ist ändern
   sich (siehe [Grundkonzepte, Abschnitt 4](#4-arten-von-events)).
 - **`QuSpace` ist Adressierung, kein Policy-Entscheid:** `qu.own`/
-  `qu.space(id)`/`qu.createSpace()` geben ein an einen Space gebundenes
-  Handle zurück (`publish`/`get`/`query`/`on` relativ dazu) — kostet nichts,
-  prüft nichts selbst, jeder Aufruf darüber läuft exakt so durch die ACL wie
-  derselbe Aufruf mit vollem Pfad auf `qu`.
+  `qu.get(id)`/`qu.createSpace()` geben einen an einen Space gebundenen
+  Node zurück (`put`/`set`/`on`/`map` relativ dazu, gleichzeitig thenable)
+  — kostet nichts, prüft nichts selbst, jeder Aufruf darüber läuft exakt so
+  durch die ACL wie derselbe Aufruf mit vollem Pfad auf `qu`.
 - **Alles Optionale ist ein Plugin:** Storage-Adapter jenseits von
   Memory/Null, Network (Replication/Transporte/Routing), Referenzen/
   Dateien, Spaces-ACL-Resolver und Chat sind austauschbar, docken über
@@ -873,12 +1031,17 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Status
 
-127 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+135 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
 CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
 Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
-`LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter` (neu,
-Browser-only) sind wie `webrtc-channel-browser.mjs` nicht per CLI testbar —
-kein Browser, keine `localStorage`/`indexedDB`-Globals in Node; ein echter
-Test im Browser-Testlauf (`test/index.html`) steht für diese drei noch aus.
+Dieselben Fälle laufen auch im vereinheitlichten Browser-Dashboard
+(`test/index.html`, siehe [Abschnitt "Im Browser"](#im-browser-server-starten))
+— Node-only-Dateien (echtes `node:fs`/`node:net`) optional serverseitig
+mitgeliefert, sofern `QU_ENABLE_TEST_ENDPOINT=1` gesetzt ist.
+`LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter` (Browser-only)
+sind wie `webrtc-channel-browser.mjs` nicht per CLI testbar — kein Browser,
+keine `localStorage`/`indexedDB`-Globals in Node; ein eigener, automatisierter
+Testfall für diese drei im Browser-Dashboard steht noch aus (bisher nur
+manuell über Lab 3 geprüft).
 Offen: SQLite-Adapter für `StorageAdapter`/`FileStorageAdapter`
 (mechanisch, kein Architekturrisiko).

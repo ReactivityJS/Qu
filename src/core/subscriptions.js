@@ -1,4 +1,5 @@
 import { debug } from './debug.js';
+import { splitPath, assertValidPattern } from './pattern.js';
 
 // Subscription Engine
 //
@@ -8,11 +9,6 @@ import { debug } from './debug.js';
 // idea MQTT uses for topic routing ('*' = one segment, '**' = this node and
 // everything below it, regardless of remaining depth). publish() only walks
 // the branches that can possibly match, instead of every subscriber.
-
-function splitPath(p) {
-  const clean = p.startsWith('/') ? p.slice(1) : p;
-  return clean.length ? clean.split('/') : [];
-}
 
 class TrieNode {
   children = new Map(); // literal segment -> TrieNode
@@ -26,6 +22,7 @@ export class QuSubscriptionEngine {
   #count = 0;
 
   subscribe(pattern, callback) {
+    assertValidPattern(pattern);
     const segments = splitPath(pattern);
     let node = this.#root;
     for (let i = 0; i < segments.length; i++) {

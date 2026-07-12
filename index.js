@@ -14,6 +14,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startServer } from './server/static-server.mjs';
+import { createTestRoutes } from './server/test-runner.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { QuStore, NullAdapter, enableConsoleDebug } from './src/index.js';
@@ -45,7 +46,10 @@ if (process.env.QU_DEBUG !== '0') {
   enableConsoleDebug({ filter });
 }
 
-const server = startServer({ root, port });
+// /test/manifest.json is always on (read-only, no code runs); the
+// server-side test-EXECUTION endpoint (/test/run-node-tests) is opt-in via
+// QU_ENABLE_TEST_ENDPOINT=1 — see server/test-runner.mjs for why.
+const server = startServer({ root, port, routes: createTestRoutes({ root }) });
 
 const store = new QuStore([
   { prefix: '', adapter: new FileSystemStorageAdapter(path.join(dataDir, 'qubits.ndjson')) },

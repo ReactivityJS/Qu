@@ -57,11 +57,14 @@ export function createSpaceACLResolver(runtime) {
   };
 }
 
-/** Convenience: create a new generic Space with an explicit manifest. Returns the new SpaceId. */
-export async function createSpace(session, { writers = [], readers = ['*'], admins } = {}) {
+function buildManifest(fingerprint, { writers = [], readers = ['*'], admins } = {}) {
+  return { admins: admins ?? (fingerprint ? [fingerprint] : []), writers, readers, createdAt: Date.now() };
+}
+
+/** Convenience: create a new generic Space with an explicit manifest. Returns the new SpaceId, only once the manifest write has actually landed. */
+export async function createSpace(session, opts) {
   const spaceId = randomSpaceId();
-  const adminList = admins ?? (session.fingerprint ? [session.fingerprint] : []);
-  await session.publish(spaceId, { admins: adminList, writers, readers, createdAt: Date.now() });
+  await session.publish(spaceId, buildManifest(session.fingerprint, opts));
   return spaceId;
 }
 
@@ -72,21 +75,40 @@ export async function createSpace(session, { writers = [], readers = ['*'], admi
  * `qu.createSpace(opts)`. Without this, `createChatRoom()`/any multi-writer
  * Space is unwritable — the Core default only ever grants `~<own fingerprint>`.
  *
- * `qu.createSpace(opts)` returns a `QuSpace` (via `qu.space(spaceId)`), not
- * a raw id string — so the manifest write and the room's first real write
- * can both go through the same handle. Still safe to use exactly like the
- * old raw SpaceId anywhere a string was expected (`${room}/msg`,
- * `JSON.stringify({ room })`, or passing it straight into
- * `qu.publish(room, ...)`) — see core/space-handle.js.
+ * `qu.createSpace(opts)` is SYNCHRONOUS — like `qu.get(id)`, it returns the
+ * new Space's `QuSpace` immediately, no `await` needed to keep navigating
+ * (`qu.createSpace(opts).get('msg1').put(...)`). This is not just a style
+ * choice: `QuSpace` is thenable (see core/space-handle.js), and a Promise
+ * that resolves WITH a thenable is unconditionally "chased" by the Promise
+ * spec — `await` on the OUTER promise would silently unwrap the whole way
+ * through to the manifest's QuBit, not the node, if this were `async`. Same
+ * rule as everywhere else in this API: no `await` navigates, `await` reads.
+ *
+ * The manifest write itself is fire-and-forget from here (logged, not
+ * thrown, on failure) — this is the same accepted bootstrap race already
+ * documented on `createSpaceACLResolver` above (no manifest yet -> anyone
+ * may write), just a slightly wider window. Importantly, `await`ing the
+ * returned node (a plain READ) does NOT reliably wait for that write to
+ * land — Runtime has no per-id read/write ordering, so a read started right
+ * after can race ahead of the write's own verify+sign+ingest pipeline and
+ * see nothing yet. A caller that genuinely needs the manifest confirmed
+ * durable before proceeding (e.g. handing the id to someone else who'll
+ * immediately try to use it, or writing again to the SAME id right after)
+ * has two reliable options: `await space.ready` (the actual write's own
+ * Promise, exposed on the returned node) or the standalone, awaitable
+ * `createSpace(session, opts)` below.
  */
 export function createSpacesPlugin() {
   return {
     install(qu) {
       qu.setACLResolver(createSpaceACLResolver(qu.runtime));
-      qu.createSpace = async (opts) => {
+      qu.createSpace = (opts) => {
         if (qu.isGuest) throw new Error('[Spaces] Guest-Sessions haben kein Schreibrecht (versucht: createSpace). Mit Qu.create({ identity }) eine echte Identität verwenden.');
-        const spaceId = await createSpace(qu.session, opts);
-        return qu.space(spaceId);
+        const spaceId = randomSpaceId();
+        const space = qu.get(spaceId);
+        space.ready = qu.session.publish(spaceId, buildManifest(qu.fingerprint, opts));
+        space.ready.catch((e) => console.error(`[Spaces] createSpace(): manifest write for ${spaceId} failed:`, e));
+        return space;
       };
     },
   };

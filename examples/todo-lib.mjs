@@ -12,7 +12,8 @@
 
 /** Erstellt eine neue, leere Liste. Rückgabe: die Space-ID (für den Link) — bewusst der reine String, nicht das QuSpace-Handle, das qu.createSpace() zurückgibt: die Funktionen unten (getListManifest etc.) nehmen weiterhin überall listId als plain string entgegen. */
 export async function createTodoList(qu) {
-  const space = await qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] });
+  const space = qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] }); // synchron — siehe modules/spaces.js
+  await space.ready; // wirklich auf das Manifest warten (nicht nur "await space" — das ist nur ein Read und kann dem Write vorauslaufen)
   return space.id;
 }
 
@@ -37,34 +38,34 @@ export async function grantWriteAccess(qu, listId, fingerprint) {
   const manifest = await getListManifest(qu, listId);
   if (!manifest) throw new Error('Liste nicht gefunden — noch nicht gesynct?');
   const writers = manifest.writers.includes(fingerprint) ? manifest.writers : [...manifest.writers, fingerprint];
-  return qu.publish(listId, { ...manifest, writers });
+  return qu.get(listId).put({ ...manifest, writers });
 }
 
-/** Ein neuer Eintrag — append(), weil mehrere Personen unabhängig voneinander Einträge hinzufügen können (kollisionssicher, siehe §7.2). */
+/** Ein neuer Eintrag — set(), weil mehrere Personen unabhängig voneinander Einträge hinzufügen können (kollisionssicher, siehe §7.2). */
 export async function addItem(qu, listId, text) {
-  return qu.append(`${listId}/items`, { text, done: false });
+  return qu.get(`${listId}/items`).set({ text, done: false });
 }
 
-/** Status ändern (oder löschen) ist publish() auf die EXISTIERENDE Item-ID — ein benannter, veränderlicher Wert, kein neuer Eintrag. Jeder Writer der Liste darf das, nicht nur die ursprüngliche Autorin. */
+/** Status ändern (oder löschen) ist put() auf die EXISTIERENDE Item-ID — ein benannter, veränderlicher Wert, kein neuer Eintrag. Jeder Writer der Liste darf das, nicht nur die ursprüngliche Autorin. */
 export async function setItemDone(qu, itemId, done) {
   const q = await qu.get(itemId);
   if (!q) throw new Error('Eintrag nicht gefunden');
-  return qu.publish(itemId, { ...q.value, done });
+  return qu.get(itemId).put({ ...q.value, done });
 }
 
 /** Kein echtes "Löschen" (QuBits sind unveränderlich) — ein Tombstone-Flag, das die Liste beim Anzeigen herausfiltert. */
 export async function deleteItem(qu, itemId) {
   const q = await qu.get(itemId);
   if (!q) return;
-  return qu.publish(itemId, { ...q.value, deleted: true });
+  return qu.get(itemId).put({ ...q.value, deleted: true });
 }
 
 /** Alle (nicht gelöschten) Einträge, älteste zuerst. */
 export async function listItems(qu, listId) {
-  const rows = await qu.query(`${listId}/items/**`);
+  const rows = await qu.session.query(`${listId}/items/**`);
   return rows.filter((q) => !q.value.deleted).sort((a, b) => a.ts - b.ts);
 }
 
 export function onItemsChange(qu, listId, callback) {
-  return qu.on(`${listId}/items/**`, callback);
+  return qu.get(listId).get('items').map(callback, { deep: true });
 }

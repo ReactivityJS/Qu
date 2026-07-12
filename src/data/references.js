@@ -53,7 +53,10 @@ async function resolveOne(qu, ref, opts, seen, depth) {
   }
 
   if (scheme === 'obj') {
-    const rows = await qu.query(`${path}/*`);
+    // A one-shot array of matches, not a live subscription — the escape
+    // hatch (qu.session.query()) rather than get(path).map(cb, {once}),
+    // which is callback-shaped and has no "done" signal to await.
+    const rows = await qu.session.query(`${path}/*`);
     const entries = await Promise.all(rows.map(async (q) => [
       lastSegment(q.id, path),
       await walk(qu, q.value, opts, seen, depth - 1),

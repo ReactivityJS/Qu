@@ -17,15 +17,15 @@ function mockInput(initial = '') {
 
 test('viewKey: delivers an existing value on mount (initial:true), then every future change', async () => {
   const qu = await Qu.create();
-  const id = `${qu.userSpaceId}/note`;
-  await qu.publish(id, 'first');
+  const node = qu.own.get('note');
+  await node.put('first');
 
   const seen = [];
-  const off = viewKey(qu, id, (value) => seen.push(value));
+  const off = viewKey(node, (value) => seen.push(value));
   await wait();
   assert.deepEqual(seen, ['first']);
 
-  await qu.publish(id, 'second');
+  await node.put('second');
   await wait();
   assert.deepEqual(seen, ['first', 'second']);
   off();
@@ -33,66 +33,66 @@ test('viewKey: delivers an existing value on mount (initial:true), then every fu
 
 test('viewObject: renders existing children on mount, and new children live, one item per key', async () => {
   const qu = await Qu.create();
-  const prefix = `${qu.userSpaceId}/rows`;
-  await qu.publish(`${prefix}/a`, { label: 'A' });
-  await qu.publish(`${prefix}/b`, { label: 'B' });
+  const rows = qu.own.get('rows');
+  await rows.get('a').put({ label: 'A' });
+  await rows.get('b').put({ label: 'B' });
 
   const created = [];
   const rendered = [];
-  const off = viewObject(qu, prefix, {
+  const off = viewObject(rows, {
     createItem: (q) => { created.push(q.id); return { id: q.id }; },
     render: (item, value) => rendered.push(`${item.id}:${value.label}`),
   });
   await wait();
-  assert.deepEqual(created.sort(), [`${prefix}/a`, `${prefix}/b`]);
-  assert.deepEqual(rendered.sort(), [`${prefix}/a:A`, `${prefix}/b:B`]);
+  assert.deepEqual(created.sort(), [`${rows.id}/a`, `${rows.id}/b`]);
+  assert.deepEqual(rendered.sort(), [`${rows.id}/a:A`, `${rows.id}/b:B`]);
 
-  await qu.publish(`${prefix}/c`, { label: 'C' });
+  await rows.get('c').put({ label: 'C' });
   await wait();
   assert.equal(created.length, 3, 'a new child gets its own createItem() call');
-  assert.ok(rendered.includes(`${prefix}/c:C`));
+  assert.ok(rendered.includes(`${rows.id}/c:C`));
 
-  // Republishing an existing key must render again but not re-create the item.
-  await qu.publish(`${prefix}/a`, { label: 'A2' });
+  // Re-writing an existing key must render again but not re-create the item.
+  await rows.get('a').put({ label: 'A2' });
   await wait();
   assert.equal(created.length, 3, 'an update to an existing key must not call createItem() again');
-  assert.ok(rendered.includes(`${prefix}/a:A2`));
+  assert.ok(rendered.includes(`${rows.id}/a:A2`));
 
   off();
 });
 
-test('bindKey: a local edit publishes, and an identical value never triggers a write', async () => {
+test('bindKey: a local edit writes, and an identical value never triggers a write', async () => {
   const qu = await Qu.create();
-  const id = `${qu.userSpaceId}/name`;
+  const node = qu.own.get('name');
   const input = mockInput('');
 
-  const off = bindKey(qu, id, input);
+  const off = bindKey(node, input);
   await wait();
 
   input.value = 'Alice';
   await input.fire();
   await wait();
-  assert.equal((await qu.get(id)).value, 'Alice', 'the edit must have been published');
-  const afterFirstEdit = await qu.get(id);
+  assert.equal((await node).value, 'Alice', 'the edit must have been written');
+  const afterFirstEdit = await node;
 
   // Same value again — must be a no-op, not a second write with a new ts.
   input.value = 'Alice';
   await input.fire();
   await wait();
-  const afterSecondEdit = await qu.get(id);
-  assert.equal(afterSecondEdit.ts, afterFirstEdit.ts, 'an identical value must never be republished');
+  const afterSecondEdit = await node;
+  assert.equal(afterSecondEdit.ts, afterFirstEdit.ts, 'an identical value must never be rewritten');
 
   off();
 });
 
 test('bindKey: its own write does not bounce back and stomp the element (no redundant set())', async () => {
   const qu = await Qu.create();
-  const id = `${qu.userSpaceId}/title`;
+  const node = qu.own.get('title');
   const input = mockInput('');
   let setCalls = 0;
   const set = (el, v) => { setCalls++; el.value = v; };
 
-  const off = bindKey(qu, id, input, { set });
+  const off = bindKey(node, input, { set });
   await wait();
   assert.equal(setCalls, 0, 'nothing existed yet, so the initial subscription has nothing to render');
 
@@ -100,19 +100,19 @@ test('bindKey: its own write does not bounce back and stomp the element (no redu
   await input.fire();
   await wait();
   assert.equal(setCalls, 0, 'the echo of our own write must be recognized and skipped — set() must not run again for a value the element already has');
-  assert.equal((await qu.get(id)).value, 'typed locally');
+  assert.equal((await node).value, 'typed locally');
 
   off();
 });
 
 test('bindKey: a second, independent binding to the same id still sees the first one\'s write', async () => {
   const qu = await Qu.create();
-  const id = `${qu.userSpaceId}/shared-field`;
+  const node = qu.own.get('shared-field');
   const inputA = mockInput('');
   const inputB = mockInput('');
 
-  const offA = bindKey(qu, id, inputA);
-  const offB = bindKey(qu, id, inputB);
+  const offA = bindKey(node, inputA);
+  const offB = bindKey(node, inputB);
   await wait();
 
   inputA.value = 'from A';
@@ -128,11 +128,11 @@ test('bindKey: a second, independent binding to the same id still sees the first
 
 test('bindKey: a rejected write reverts the element to its previous value and calls onError', async () => {
   const qu = await Qu.create();
-  const id = 'not-my-user-space/forbidden'; // outside the caller's own User-Space -> core identity-acl.js denies it
+  const node = qu.get('not-my-user-space/forbidden'); // outside the caller's own User-Space -> core identity-acl.js denies it
   const input = mockInput('');
   const errors = [];
 
-  const off = bindKey(qu, id, input, { onError: (e) => errors.push(e) });
+  const off = bindKey(node, input, { onError: (e) => errors.push(e) });
   input.value = 'should not stick';
   await input.fire();
   await wait();
@@ -146,11 +146,11 @@ test('bindKey: a rejected write reverts the element to its previous value and ca
 
 test('bindObject: each field is its own leaf QuBit, editable independently', async () => {
   const qu = await Qu.create();
-  const prefix = `${qu.userSpaceId}/profile`;
+  const profile = qu.own.get('profile');
   const nameInput = mockInput('');
   const bioInput = mockInput('');
 
-  const off = bindObject(qu, prefix, { name: nameInput, bio: bioInput });
+  const off = bindObject(profile, { name: nameInput, bio: bioInput });
   await wait();
 
   nameInput.value = 'Alice';
@@ -159,8 +159,8 @@ test('bindObject: each field is its own leaf QuBit, editable independently', asy
   await bioInput.fire();
   await wait();
 
-  assert.equal((await qu.get(`${prefix}/name`)).value, 'Alice');
-  assert.equal((await qu.get(`${prefix}/bio`)).value, 'Likes QuBits');
+  assert.equal((await profile.get('name')).value, 'Alice');
+  assert.equal((await profile.get('bio')).value, 'Likes QuBits');
   assert.equal(bioInput.value, 'Likes QuBits', 'editing one field must not disturb the other');
 
   off();

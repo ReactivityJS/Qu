@@ -1,50 +1,52 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu, QuIdentity, createLoopbackChannelPair, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
+import { Qu, QuIdentity, userSpaceId, createLoopbackChannelPair, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
 
-test('Qu.create() generates an identity and can publish/query — under its own User-Space, with zero plugins installed', async () => {
+test('Qu.create() generates an identity and can put/read — under its own User-Space, with zero plugins installed', async () => {
   const alice = await Qu.create();
   assert.ok(alice.fingerprint);
-  await alice.publish(`${alice.userSpaceId}/chat/room1/msg1`, { text: 'hi' });
-  const rows = await alice.query(`${alice.userSpaceId}/chat/room1/**`);
+  await alice.get(`${alice.userSpaceId}/chat/room1/msg1`).put({ text: 'hi' });
+  const rows = await alice.session.query(`${alice.userSpaceId}/chat/room1/**`);
   assert.equal(rows[0].value.text, 'hi');
 });
 
 test('without the Spaces plugin, a generic (non-User) path is unwritable — the Core default only ever grants your own User-Space', async () => {
   const alice = await Qu.create();
   assert.equal(typeof alice.createSpace, 'undefined', 'createSpace() must not exist before qu.use(createSpacesPlugin())');
-  await assert.rejects(() => alice.publish('chat/room1/msg1', 'nope'), /\[ACL\] Write denied/);
+  await assert.rejects(() => alice.get('chat/room1/msg1').put('nope'), /\[ACL\] Write denied/);
 });
 
 test('a guest instance has an identity but cannot write — even to its own User-Space, even with createSpace() available', async () => {
   const guest = (await Qu.create({ guest: true })).use(createSpacesPlugin());
   assert.ok(guest.fingerprint, 'guests still get a real, ephemeral identity');
   assert.equal(guest.isGuest, true);
-  await assert.rejects(() => guest.publish(`${guest.userSpaceId}/msg1`, 'nope'));
-  await assert.rejects(() => guest.createSpace());
+  await assert.rejects(() => guest.own.get('msg1').put('nope'));
+  assert.throws(() => guest.createSpace()); // synchronous — see modules/spaces.js
 });
 
-test('publishProfile()/readProfile() use individual leaf QuBits under the User-Space root, not one combined object', async () => {
+test('a User-Space profile is just individual leaf QuBits under its root, not one combined object', async () => {
   const alice = await Qu.create();
-  await alice.publishProfile({ alias: 'alice', epub: { kty: 'EC', x: 'stub' } });
+  await alice.own.get('pub').put(alice.fingerprint);
+  await alice.own.get('alias').put('alice');
+  await alice.own.get('epub').put({ kty: 'EC', x: 'stub' });
 
-  const aliasQubit = await alice.get(`${alice.userSpaceId}/alias`);
-  const pubQubit = await alice.get(`${alice.userSpaceId}/pub`);
+  const aliasQubit = await alice.own.get('alias');
+  const pubQubit = await alice.own.get('pub');
   assert.equal(aliasQubit.value, 'alice');
   assert.equal(pubQubit.value, alice.fingerprint);
 
   const bob = await Qu.create({ runtime: alice.runtime });
-  const profile = await bob.readProfile(alice.fingerprint);
-  assert.equal(profile.alias, 'alice');
-  assert.equal(profile.pub, alice.fingerprint);
+  const aliceProfile = bob.get(userSpaceId(alice.fingerprint));
+  assert.equal((await aliceProfile.get('alias')).value, 'alice');
+  assert.equal((await aliceProfile.get('pub')).value, alice.fingerprint);
 });
 
 test('two Qu instances can share one Runtime without double-registering middleware', async () => {
   const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
 
-  const rA = await alice.publish('shared/note1', 'from alice');
-  const rB = await bob.publish('shared/note2', 'from bob');
+  const rA = await alice.get('shared/note1').put('from alice');
+  const rB = await bob.get('shared/note2').put('from bob');
   assert.equal(rA.qubit.writer, alice.fingerprint);
   assert.equal(rB.qubit.writer, bob.fingerprint);
 });
@@ -52,11 +54,12 @@ test('two Qu instances can share one Runtime without double-registering middlewa
 test('createSpace() via the facade produces a working, ACL-enforced Space', async () => {
   const alice = (await Qu.create()).use(createSpacesPlugin());
   const bob = await Qu.create({ runtime: alice.runtime });
-  const roomId = await alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] });
+  const room = alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] }); // synchronous — see modules/spaces.js
+  await room.ready; // wait for the manifest write to land — "await room" alone is a read and can race ahead of it
 
-  await assert.rejects(() => bob.publish(`${roomId}/msg1`, 'bob tries to post'));
-  await alice.publish(`${roomId}/msg1`, 'alice posts');
-  assert.equal((await bob.query(`${roomId}/**`))[0].value, 'alice posts');
+  await assert.rejects(() => bob.get(room.id).get('msg1').put('bob tries to post'));
+  await room.get('msg1').put('alice posts');
+  assert.equal((await bob.session.query(`${room.id}/**`))[0].value, 'alice posts');
 });
 
 test('connect() authenticates the channel and returns a working DefaultReplication', async () => {
@@ -65,10 +68,10 @@ test('connect() authenticates the channel and returns a working DefaultReplicati
   const { a, b } = createLoopbackChannelPair();
 
   const [replAlice, replBob] = await Promise.all([alice.connect(a), bob.connect(b)]);
-  await alice.publish('chat/room1/msg1', 'hello from alice');
+  await alice.get('chat/room1/msg1').put('hello from alice');
   await replBob.sync({ topic: 'chat/room1', since: 0 });
 
-  assert.equal((await bob.query('chat/room1/**'))[0].value, 'hello from alice');
+  assert.equal((await bob.session.query('chat/room1/**'))[0].value, 'hello from alice');
   replAlice.close();
   replBob.close();
 });
@@ -130,7 +133,7 @@ test('qu.connect() with role/group/metric registers a route; without them, behav
   chMirrorPeer.onMessage((msg) => { if (msg.type === 'qu.push') seenByMirror = true; });
   chPlainPeer.onMessage((msg) => { if (msg.type === 'qu.push') seenByPlain = true; });
 
-  await alice.publish('room/msg1', 'hi');
+  await alice.get('room/msg1').put('hi');
   await new Promise((r) => setTimeout(r, 30));
 
   assert.equal(seenByMirror, true, 'the mirror-registered channel must still push normally');

@@ -3,6 +3,7 @@ import { QuSubscriptionEngine } from './subscriptions.js';
 import { QuClock } from './clock.js';
 import { debug } from './debug.js';
 import { subscribeWithOptions } from './subscribe-with-options.js';
+import { assertValidPattern } from './pattern.js';
 
 /**
  * The QU Runtime: Public API + Pipeline (Commit Engine) + QuStore + Dispatch/
@@ -71,6 +72,7 @@ export class QuRuntime {
   }
 
   async query(pattern) {
+    assertValidPattern(pattern);
     const prefix = pattern.split(/[*]/)[0].replace(/\/$/, '');
     const all = await this.#store.query(prefix);
     const re = patternToRegExp(pattern);

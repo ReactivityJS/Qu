@@ -7,9 +7,16 @@ export function test(name, fn) {
   queue.push({ name, fn });
 }
 
-export async function runAll(onResult) {
+/** Runs and clears whatever is CURRENTLY queued (not tests queued later by
+ * a subsequent import) — the building block both `runAll()` and a
+ * per-file dashboard (import one file, drain, import the next) need,
+ * since `test()` calls happen synchronously as each file's top-level code
+ * runs, so "queue length right after one `await import()`" is exactly
+ * that file's tests. */
+export async function drain(onResult) {
+  const items = queue.splice(0, queue.length);
   const results = [];
-  for (const { name, fn } of queue) {
+  for (const { name, fn } of items) {
     const start = performance.now();
     try {
       await fn();
@@ -20,4 +27,8 @@ export async function runAll(onResult) {
     onResult?.(results[results.length - 1]);
   }
   return results;
+}
+
+export async function runAll(onResult) {
+  return drain(onResult);
 }

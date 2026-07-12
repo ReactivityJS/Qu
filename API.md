@@ -16,7 +16,7 @@ import { QuRuntime, QuSession, QuIdentity, /* ... */ } from './src/index.js';
 ## Inhalt
 
 1. [Qu — Facade (empfohlener Einstieg)](#qu-facade-empfohlener-einstieg)
-2. [QuSpace](#quspace) — an einen Space gebundenes Handle (`qu.own`/`qu.space(id)`)
+2. [QuSpace](#quspace) — an einen Space gebundener Node (`qu.own`/`qu.get(id)`), fünf Verben: get/put/set/on/map
 3. [QuRuntime](#quruntime) — der Core
 4. [QuStore](#qustore) — Persistenz & Mounts
 5. [QuSession](#qusession) — Identität, Verschlüsselung, Rechte (von `Qu` intern genutzt)
@@ -88,49 +88,72 @@ eine async Fabrikmethode nicht passt.
 | `qu.userSpaceId` | `string \| null` | `"~" + fingerprint` |
 | `qu.exportKeys()` | `Promise<ExportedKeys \| null>` | Für persistente Speicherung der Identität |
 
-### Daten (delegiert an die zugrundeliegende `QuSession`)
-`qu.publish(id, value, opts?)` · `qu.append(collectionId, value, opts?)` ·
-`qu.get(id)` · `qu.query(pattern)` · `qu.on(pattern, cb, opts?)` ·
-`qu.resolveRefs(qubit)` · `qu.trustPeer(fp, encPubJwk)`
-— Parameter identisch zu [`QuSession`](#qusession) (`opts` bei `on()`:
-`{ initial, once }`, siehe dort). Jede Schreib-Methode
-wirft sofort, wenn `qu.isGuest === true`.
+### Daten: `qu.get(id)` → `QuSpace`
+Der einzige Daten-Einstiegspunkt — ein an `id` gebundener Node (siehe
+[`QuSpace`](#quspace) für die vollständige get/put/set/on/map-Oberfläche
+und die Thenable-Semantik). Baut nur den Node, keine I/O; `qu.own` ist
+`qu.get(qu.userSpaceId)`. `qu.trustPeer(fp, encPubJwk)` bleibt eine
+eigenständige Qu-Methode (delegiert an `QuSession`).
 
-**`publish` vs. `append` — zwei Schreibmodi, keine Konvention:**
-`publish(id, value)` ist ein benanntes, veränderliches Register (LWW) — der
+**`put` vs. `set` — zwei Schreibmodi, keine Konvention:**
+`node.put(value)` ist ein benanntes, veränderliches Register (LWW) — der
 *gleiche* `id` von zwei verschiedenen Schreibern überschreibt sich
 gegenseitig (kein Sicherheitsproblem, beide Signaturen sind echt, aber ein
-echter Datenverlust, falls das nicht gewollt war). `append(collectionId,
-value)` ist der andere Modus: es hängt `/${fingerprint}/${ts}` an die ID an,
-*bevor* es denselben `publish()`-Pfad durchläuft — zwei verschiedene
-Schreiber können dadurch strukturell nie kollidieren, ohne dass die ACL
-davon etwas mitbekommen müsste (sie prüft weiterhin nur
-`spaceIdOf(id)`, das erste Pfadsegment, unverändert). Für "viele
-unabhängige Beiträge zu einer gemeinsamen Sammlung" (Chat-Nachrichten,
-Kommentare, Aktivitäts-Events) immer `append()`, nie `publish()` mit einer
-selbstgewählten, potenziell wiederverwendeten ID.
+echter Datenverlust, falls das nicht gewollt war). `node.set(value)` ist
+der andere Modus: es hängt `/${fingerprint}/${ts}` an die ID an, *bevor* es
+denselben `put()`-Pfad durchläuft — zwei verschiedene Schreiber können
+dadurch strukturell nie kollidieren, ohne dass die ACL davon etwas
+mitbekommen müsste (sie prüft weiterhin nur `spaceIdOf(id)`, das erste
+Pfadsegment, unverändert). Für "viele unabhängige Beiträge zu einer
+gemeinsamen Sammlung" (Chat-Nachrichten, Kommentare, Aktivitäts-Events)
+immer `set()`, nie `put()` mit einer selbstgewählten, potenziell
+wiederverwendeten ID. Jede Schreib-Methode wirft sofort, wenn
+`qu.isGuest === true`.
+
+`node.put(bytes, opts)` erkennt `Uint8Array`/`Blob`/`File` automatisch als
+Datei (Chunking+Manifest statt einem rohen Byte-Wert) — **wenn** ein
+`FileHandler` konfiguriert ist (`qu.use(createFileHandlerPlugin({ fileStorage }))`,
+siehe [Files-Modul](#files-modul)); ohne FileHandler wirft `put()` bei
+Datei-Bytes klar, statt sie still als opaken Wert zu schreiben.
 
 ### Profil — einzelne Felder direkt unter der User-Space-Root
-**Kein** `~<fp>/profile`-Objekt — `alias`, `pub`, `epub` (und beliebige
-weitere Felder) liegen als eigene QuBits direkt unter `~<fp>`, dem
-User-Space selbst.
+**Kein** `~<fp>/profile`-Objekt — jedes Feld eine eigene Leaf-QuBit direkt
+unter `~<fp>`, dem User-Space selbst. Keine eigene Methode dafür nötig,
+nur `qu.own`:
 
 ```js
-await alice.publishProfile({ alias: 'alice', epub: (await alice.exportKeys()).encPub });
-// schreibt: ~<fp>/pub, ~<fp>/alias, ~<fp>/epub
+await alice.own.get('pub').put(alice.fingerprint);
+await alice.own.get('alias').put('alice');
+await alice.own.get('epub').put((await alice.exportKeys()).encPub);
 
-const profile = await bob.readProfile(alice.fingerprint);
-// { alias: 'alice', pub: '<fp>', epub: {...JWK} }
+const aliceProfile = bob.get(userSpaceId(alice.fingerprint));
+const alias = (await aliceProfile.get('alias')).value; // 'alice'
 ```
 
-### Spaces & Space-Handles
-`qu.own` → `QuSpace` — gebunden an den eigenen User-Space (`qu.space(qu.userSpaceId)`), immer verfügbar, kein Plugin nötig.
-`qu.space(spaceId)` → `QuSpace` — gebunden an einen beliebigen bekannten Space (eigener, `~<fremder-fp>`, oder generische Space-Id); baut nur das Handle, prüft nichts.
-`qu.createSpace({ writers?, readers?, admins? })` → `Promise<QuSpace>` —
-wie [`createSpace()`](#spaces-modul) (Modul-Funktion, braucht das
-Spaces-Plugin), aber ohne die Session separat zu übergeben, und liefert
-direkt ein `QuSpace`-Handle für den neuen Space statt nur der rohen Id —
-siehe [`QuSpace`](#quspace).
+### Spaces & Space-Nodes
+`qu.own` → `QuSpace` — gebunden an den eigenen User-Space (`qu.get(qu.userSpaceId)`), immer verfügbar, kein Plugin nötig.
+`qu.get(spaceId)` → `QuSpace` — gebunden an einen beliebigen bekannten Space (eigener, `~<fremder-fp>`, oder generische Space-Id); baut nur den Node, prüft nichts.
+`qu.createSpace({ writers?, readers?, admins? })` → `QuSpace` — **synchron**
+(wie `get()`), Spaces-Plugin nötig. Liefert sofort einen Node für den neuen
+Space zurück, nicht nur die rohe Id — siehe [`QuSpace`](#quspace). Das
+Manifest wird im Hintergrund geschrieben (`space.ready` ist dessen eigenes
+Promise); ein `async createSpace()` hätte hier den Node bis zum
+Manifest-Wert hindurchgereicht statt ihn zurückzugeben, weil `QuSpace`
+thenable ist und jedes Promise, das mit einem Thenable auflöst, dieses
+automatisch "durchreicht" (Promise-Spezifikation) — dieselbe "kein await
+navigiert, await liest"-Regel wie überall sonst in dieser API.
+
+### Presets: `QU_PRESETS`
+`src/presets.js` bündelt gängige `plugins`-Listen für `Qu.create({ plugins })`:
+`QU_PRESETS.local` (`[]`, Core-Default), `QU_PRESETS.spaces`
+(`[createSpacesPlugin()]`), `QU_PRESETS.network`
+(`[createSpacesPlugin(), createNetworkPlugin()]`). Jede Eigenschaft ist ein
+Getter, kein statisches Array — jeder Zugriff baut frische Plugin-Instanzen
+(wichtig für `createNetworkPlugin()`, das eigenen `router`-Zustand hält;
+geteilte Instanzen über mehrere `Qu.create()`-Aufrufe hinweg würden sonst
+unabhängige Runtimes/Identitäten denselben Router teilen lassen). Liegt
+bewusst außerhalb `core/` — importiert aus `modules/`/`network/`, was
+`qu.js` selbst nie darf (Schichttrennung).
 
 ### Replication (optionales Modul, hier bequem verdrahtet)
 `qu.connect(channel, { pushTopics?, role?, group?, metric? })` → `Promise<DefaultReplication>` —
@@ -175,9 +198,11 @@ Whitepaper.
 
 ### Files (optionales Modul, hier bequem verdrahtet)
 `qu.shareFile(id, bytes, opts)` → wie [`publishFile()`](#files-modul), Session
-bereits gebunden.
-`qu.fileTransfer(channel, fileStorage)` → `DefaultFileTransfer`, Runtime
-bereits gebunden.
+bereits gebunden. `qu.resolveFileRef(ref, opts?)` → löst `file://<manifestId>`
+zu echten Bytes auf. `qu.fileTransfer(channel, fileStorage?)` →
+`DefaultFileTransfer`, Runtime bereits gebunden. Installiert außerdem einen
+`setPutHandler()`-Upgrade, sodass jedes `node.put(bytes, opts)`
+Datei-Bytes automatisch erkennt (siehe [Daten](#qu-facade-empfohlener-einstieg) oben).
 
 ### Chat (optionales Modul, hier bequem verdrahtet)
 `qu.createChatRoom(memberFingerprints, opts?)` · `qu.sendMessage(spaceId, { text, attachments?, encryptFor? })` ·
@@ -190,7 +215,7 @@ const bob = await Qu.create();
 const { a, b } = createLoopbackChannelPair();
 
 const [replAlice, replBob] = await Promise.all([alice.connect(a), bob.connect(b)]);
-await alice.publish('chat/room1/msg1', 'hallo');
+await alice.get('chat/room1/msg1').put('hallo');
 await replBob.sync({ topic: 'chat/room1', since: 0 });
 ```
 
@@ -198,23 +223,47 @@ await replBob.sync({ topic: 'chat/room1', since: 0 });
 
 ## QuSpace
 
-Ein dünnes, zustandsloses Handle, gebunden an einen Space (`src/core/space-handle.js`)
-— dieselbe `publish`/`append`/`get`/`query`/`on`-Oberfläche wie `Qu` selbst,
-nur dass jeder Pfad relativ zu diesem Space aufgelöst wird, statt jedes Mal
-vollständig ausgeschrieben zu werden. Kein neuer Identitäts-/Session-
-Mechanismus — es wrappt dieselbe `QuSession`, die eine `Qu`-Instanz ohnehin
-schon hat, also werden Writes exakt so signiert/ACL-geprüft, als hättest du
-`qu.publish()` mit dem vollen Pfad selbst aufgerufen. Ein Handle prüft
-nichts beim Bauen — nur die tatsächlichen Aufrufe darüber, genau wie sonst.
+Ein dünner, zustandsloser Node, gebunden an einen Space
+(`src/core/space-handle.js`) — GunDB-inspiriert (`gun.get(key).put(x)`/
+`.on(cb)`/`.map(cb)`), an QUs signiertes, ACL-geprüftes Schreibmodell
+angepasst. Kein neuer Identitäts-/Session-Mechanismus — es wrappt dieselbe
+`QuSession`, die eine `Qu`-Instanz ohnehin schon hat, also werden Writes
+exakt so signiert/ACL-geprüft, als hättest du die entsprechende
+`Session`-Methode mit dem vollen Pfad selbst aufgerufen. Ein Node prüft
+nichts beim Bauen (`get()` — synchron, keine I/O) — nur die tatsächlichen
+Aufrufe darüber (`put`/`set`/`on`/`map`/`await`).
 
-Drei Wege, eines zu bekommen (siehe [Qu — Facade](#qu-facade-empfohlener-einstieg)):
+**Fünf Verben, ein Objekt-Typ:**
+| Verb | Signatur | Beschreibung |
+|---|---|---|
+| `get` | `node.get(subpath)` → `QuSpace` | Navigiert — Node gebunden an `${node.id}/${subpath}`. Synchron, keine I/O. Weggelassenes/leeres `subpath` liefert `node` selbst zurück. |
+| `put` | `node.put(value, opts?)` → `Promise` | Schreibt AN diesem Node (LWW-Register). Datei-Bytes werden automatisch erkannt, wenn ein `FileHandler` konfiguriert ist (siehe `putDispatch` unten). |
+| `set` | `node.set(value, opts?)` → `Promise` | Kollisionssicher: hängt `/${fingerprint}/${ts}` an, bevor es denselben `put()`-Pfad durchläuft — für Sammlungen mit mehreren unabhängigen Schreibern. |
+| `on` | `node.on(cb, opts?)` → `() => void` | Live-Subscription auf DIESEN Node — `{ initial?, once? }`, gleiche Semantik wie `QuSession.on()`. |
+| `map` | `node.map(cb, opts?)` → `() => void` | Live-Subscription auf die KINDER dieses Nodes — `${id}/*` (`opts.deep: true` → `${id}/**`, für `set()`-Sammlungen, die zwei Segmente tief namensraumisieren). Default `{ initial: true }` (anders als `on()`). |
+
+**Thenable:** `await node` (bzw. `node.then()`) liest den aktuellen Wert AN
+diesem Node (delegiert an `session.get(node.id)`). Navigieren (`get()`) und
+Lesen (`await`) sind bewusst orthogonal: `qu.get(id)` macht selbst nie I/O;
+erst `await qu.get(id)` macht genau die I/O, die das alte `qu.get(id)`
+früher gemacht hat. Wichtige Konsequenz: eine `async function`, die einen
+`QuSpace` `return`ed, gibt NICHT den Node zurück, wenn man sie awaitet —
+die Promise-Spezifikation "chased" jeden Thenable, den ein Promise als
+Auflösungswert bekommt, automatisch bis zum Ende durch (siehe `createSpace()`
+unten, das deshalb bewusst synchron ist, nicht `async`).
+
+Drei Wege, einen Node zu bekommen (siehe [Qu — Facade](#qu-facade-empfohlener-einstieg)):
 - `qu.own` — gebunden an den eigenen User-Space, immer verfügbar.
-- `qu.space(spaceId)` — gebunden an jeden bekannten Space (eigener, `~<fremder-fp>`, generisch).
-- `qu.createSpace(opts)` — legt einen neuen generischen Space an (Spaces-Plugin nötig) und gibt direkt ein Handle dafür zurück.
+- `qu.get(spaceId)` — gebunden an jeden bekannten Space (eigener, `~<fremder-fp>`, generisch).
+- `qu.createSpace(opts)` — legt einen neuen generischen Space an (Spaces-Plugin nötig), **synchron**, gibt sofort einen Node dafür zurück.
 
-### `new QuSpace(session, spaceId, { guest? })`
-Niedrigerer Konstruktor — `qu.own`/`qu.space()` nutzen ihn intern, direkt
-aufrufbar für eine `QuSession` ganz ohne `Qu`-Fassade.
+### `new QuSpace(session, spaceId, { guest?, putDispatch? })`
+Niedrigerer Konstruktor — `qu.own`/`qu.get()` nutzen ihn intern, direkt
+aufrufbar für eine `QuSession` ganz ohne `Qu`-Fassade. `putDispatch(session,
+id, value, opts)` (optional) ersetzt das Standard-`put()`-Verhalten (Default:
+`session.publish(id, value, opts)`) — der Mechanismus, über den
+`createFileHandlerPlugin()`/`qu.setPutHandler()` Datei-Auto-Detect
+nachrüsten, ohne dass diese Klasse Files/Plugins kennen muss.
 
 ### `space.id` → `string`
 Die rohe Space-Id.
@@ -223,30 +272,27 @@ Die rohe Space-Id.
 Beide liefern `space.id` — ein `QuSpace` ist damit überall einsetzbar, wo
 bisher ein roher SpaceId-String erwartet wurde: `` `${space}/msg` `` (Template-
 Literal-Interpolation), `JSON.stringify({ space })` (auch verschachtelt),
-und sogar direkt als `id`-Argument an `qu.publish(space, ...)`/`qu.get(space)`
+und sogar direkt als `id`-Argument an `qu.session.publish(space, ...)`
 — `QuSession`s öffentliche Methoden coercen jedes `id`/`pattern`-Argument
 mit `String(...)`, bevor sie es verwenden.
 
-### `space.publish(subpath, value, opts?)` / `space.append(subpath, value, opts?)`
-Wie `qu.publish`/`qu.append`, aber `subpath` wird zu `${space.id}/${subpath}`
-aufgelöst — ein leerer/weggelassener `subpath` adressiert `space.id` selbst
-(z. B. das Space-Manifest). Wirft für eine Guest-gebundene `Qu`-Instanz,
-identisch zu `qu.publish()`.
-
-### `space.get(subpath?)` / `space.query(pattern)` / `space.on(pattern, cb, opts?)`
-Wie die entsprechenden `qu`-Methoden, `subpath`/`pattern` ebenso relativ zu
-`space.id` aufgelöst.
+### `space.runtime` / `space.session`
+Fluchttüren, wie bei `Qu` — `.runtime` z. B. für `ui/bindings.js`s
+`bindKey()` (braucht `runtime.nextTs()` für den Echo-Schutz), `.session`
+für einmalige Array-Abfragen (`space.session.query(pattern)`), die
+`map()`/`on()`s Callback-Form nicht direkt abdeckt.
 
 ```js
 const alice = await Qu.create();
-await alice.own.publish('status', 'online');           // == alice.publish(`${alice.userSpaceId}/status`, 'online')
+await alice.own.get('status').put('online');           // == alice.get(`${alice.userSpaceId}/status`).put('online')
 
 alice.use(createSpacesPlugin());
-const room = await alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] });
-await room.publish('msg1', 'hallo');                    // == alice.publish(`${room.id}/msg1`, 'hallo')
+const room = alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] }); // synchron
+await room.ready; // auf das (im Hintergrund geschriebene) Manifest warten
+await room.get('msg1').put('hallo');                    // == alice.get(`${room.id}/msg1`).put('hallo')
 
 const bob = await Qu.create({ runtime: alice.runtime });
-const sameRoom = bob.space(room.id);                    // dieselbe Space-Id, unabhängig rekonstruiert (z. B. aus einem Link)
+const sameRoom = bob.get(room.id);                      // dieselbe Space-Id, unabhängig rekonstruiert (z. B. aus einem Link)
 ```
 
 ---
@@ -293,7 +339,24 @@ Direkter Store-Zugriff, keine Ver-/Entschlüsselung, keine ACL-Filterung
 
 ### `runtime.query(pattern)` → `Promise<QuBit[]>`
 `pattern` wie bei `on()` (`*` = ein Segment, `**` = Rest). Beispiel:
-`'chat/room1/**'`.
+`'chat/room1/**'`. Wirft für ein ungültiges Pattern — siehe
+`assertValidPattern()` unten.
+
+### `assertValidPattern(pattern)` (`core/pattern.js`)
+Wirft, falls `**` irgendwo außer als letztes Segment vorkommt (z. B.
+`'posts/**/01'`) — MQTT-Konvention, hier für BEIDE Matcher gemeinsam
+durchgesetzt: den Regex hinter `query()` und den Trie hinter `on()`/`map()`.
+Vor dieser Prüfung "funktionierte" ein mittiges `**` nur bei `query()`
+korrekt (Regex matcht den literalen Rest) — beim Trie brach die Traversierung
+beim ersten `**` ab, sodass alles danach im Pattern ignoriert wurde und die
+Live-Subscription faktisch zu `prefix/**` wurde (alles, nicht nur der
+gemeinte Ausschnitt). `*` (ein einzelnes Segment) ist dagegen überall,
+auch mittig, ohne Einschränkung gültig (`'posts/*/07/*'` — jeder Juli,
+jedes Jahr). Wird automatisch von `query()` und `on()`/`map()` aufgerufen;
+direkt nutzbar, um ein von außen kommendes Pattern vorab zu prüfen. Siehe
+README, [Abschnitt 7](./README.md#7-datenstruktur-für-wachsende-collections-z-b-ein-forum)
+für die volle Datenstruktur-Empfehlung (Zeit-Sharding für wachsende
+Collections).
 
 ### `runtime.on(pattern, callback, opts?)` → `() => void`
 Registriert eine Subscription im Trie. `callback(qubit)` wird bei jedem
@@ -331,10 +394,10 @@ Verarbeitung weiterhin manuell `for (const q of await runtime.query(p)) await ca
 
 ```js
 // Chat-Historie laden + live weiterhören, ohne die Lücke selbst zu bauen:
-qu.on(`${room}/msgs/**`, renderMessage, { initial: true });
+runtime.on(`${room}/msgs/**`, renderMessage, { initial: true });
 
 // Einmaliger Snapshot über dasselbe Interface wie der Rest der API:
-qu.on(`${room}/msgs/**`, renderMessage, { once: true });
+runtime.on(`${room}/msgs/**`, renderMessage, { once: true });
 ```
 
 ### `runtime.emit(topic, payload?)`
@@ -441,8 +504,8 @@ laufend, damit es sich identisch zu `session.query()` verhält.
 ### `session.trustPeer(fingerprint, encPubKeyJwk)`
 Merkt sich den ECDH-Public-Key eines anderen Fingerprints, damit
 `encryptFor` diesen adressieren kann. In der Praxis meist aus dem
-öffentlichen Profil des Peers gelesen (`~<fp>/epub`, siehe `Qu.readProfile()`), nicht
-manuell verteilt.
+öffentlichen Profil des Peers gelesen (`~<fp>/epub`, siehe
+[Profil](#qu-facade-empfohlener-einstieg) oben), nicht manuell verteilt.
 
 ### `session.resolveRefs(qubit)` → `Promise<(QuBit | null)[]>`
 Lädt (und entschlüsselt, falls möglich) alle in `qubit.refs` referenzierten
@@ -610,12 +673,17 @@ Manifest-basierter ACL-Resolver, direkt einsetzbar in
   darf nur von `admins` geändert werden.
 
 ### `createSpace(session, { writers?, readers?, admins? })` → `Promise<SpaceId>`
-Erzeugt einen neuen generischen Space: generiert eine UUID, veröffentlicht
-das Manifest-QuBit (`session.publish(spaceId, { admins, writers, readers, createdAt })`).
-`admins` defaultet auf `[session.fingerprint]`. Liefert die rohe Id als
-String — für ein `QuSpace`-Handle stattdessen `qu.createSpace(opts)` nutzen
-(siehe [`QuSpace`](#quspace)), die Fassaden-Sugar-Methode, die intern genau
-diese Funktion aufruft und das Ergebnis in `qu.space(spaceId)` einwickelt.
+Erzeugt einen neuen generischen Space: generiert eine UUID, **awaitet** das
+Manifest-QuBit (`session.publish(spaceId, { admins, writers, readers, createdAt })`,
+`admins` defaultet auf `[session.fingerprint]`) und liefert die rohe Id
+erst zurück, wenn es wirklich geschrieben ist —
+im Gegensatz zur Fassaden-Sugar-Methode `qu.createSpace(opts)` (siehe
+[`QuSpace`](#quspace)), die synchron einen `QuSpace`-Node liefert und das
+Manifest fire-and-forget im Hintergrund schreibt. Für Aufrufer, die eine
+GARANTIERT durchgeschriebene Id brauchen, bevor sie weitermachen (z. B. eine
+Id, die sofort an jemand anderen weitergegeben wird), ist diese Funktion
+die robustere Wahl — `qu.createSpace(opts).ready` ist die äquivalente
+Garantie über die Fassade.
 
 ```js
 const acl = createSpaceACLResolver(runtime);
@@ -719,55 +787,76 @@ Ein Raum (1:1 oder Gruppe — kein Unterschied im Modell, nur die
 Mitgliederliste im Manifest unterscheidet sich) ist ein gewöhnlicher Space
 (siehe [Spaces-Modul](#spaces-modul)). Dieses Modul trägt selbst keine
 Sicherheitslogik bei — die Kollisionssicherheit kommt vollständig aus
-`append()` (siehe [`QuSession`](#qusession)); hier steht nur bequeme
-Namensgebung und Anhang-Behandlung obendrauf.
+`set()` (siehe [`QuSpace`](#quspace)); hier steht nur bequeme Namensgebung
+und Anhang-Behandlung obendrauf. Jede Funktion außer `createChatRoom()`
+nimmt einen bereits navigierten Space-Node entgegen (`qu.get(spaceId)`)
+statt eines `(qu, spaceId)`-Paars und ist intern nur eine kurze
+get/put/set/map-Kombination.
 
-### `createChatRoom(qu, memberFingerprints, { readers? })` → `Promise<SpaceId>`
-`readers` defaultet auf `memberFingerprints` (nur Mitglieder lesen). Für
-einen öffentlich lesbaren Raum explizit `readers: ['*']` übergeben.
+### `createChatRoom(qu, memberFingerprints, { readers? })` → `QuSpace`
+**Synchron** (wie `qu.createSpace()`, das es aufruft — siehe
+[`QuSpace`](#quspace) dazu, warum). `readers` defaultet auf
+`memberFingerprints` (nur Mitglieder lesen). Für einen öffentlich lesbaren
+Raum explizit `readers: ['*']` übergeben. `room.ready` abwarten, bevor
+andere Mitglieder sofort mitschreiben sollen.
 
-### `sendMessage(qu, spaceId, { text, attachments?, encryptFor? })`
+### `sendMessage(space, { text, attachments?, encryptFor? })`
 | Parameter | Typ | Beschreibung |
 |---|---|---|
-| `attachments` | `{ bytes, name, mime, fileStorage }[]` | Jeder Anhang wird als eigenes File-Manifest veröffentlicht (kollisionssicher adressiert wie Nachrichten selbst) und per `refs` an die Nachricht gehängt — Foto, Video und beliebige Datei unterscheiden sich nur im `mime`-Feld. |
-| `encryptFor` | `string[]` | Wie bei `publish()` — für Ende-zu-Ende-verschlüsselte Räume. |
+| `attachments` | `{ bytes, name, mime, fileStorage }[]` | Jeder Anhang wird über `put()` geschrieben (Datei-Auto-Detect, chunked+manifested — siehe [`QuSpace`](#quspace)), kollisionssicher adressiert wie Nachrichten selbst, und per `refs` an die Nachricht gehängt — Foto, Video und beliebige Datei unterscheiden sich nur im `mime`-Feld. |
+| `encryptFor` | `string[]` | Wie bei `put()` — für Ende-zu-Ende-verschlüsselte Räume. |
 
-Ruft intern `qu.append(\`${spaceId}/msgs\`, { text }, { refs })` auf.
+Ruft intern `space.get('msgs').set({ text }, { refs, encryptFor })` auf.
 
-### `listMessages(qu, spaceId)` → `Promise<QuBit[]>`
-Alle Nachrichten, älteste zuerst (`query()` + Sortierung nach `ts`). Jede
-trägt weiterhin ihr geprüftes `writer`-Feld — **eine Oberfläche muss dieses
-Feld für die Autorenanzeige nutzen, nie den ID-Text interpretieren** (siehe
-Warnung unten).
+### `listMessages(space)` → `Promise<QuBit[]>`
+Alle Nachrichten, älteste zuerst (`space.session.query()` + Sortierung nach
+`ts`). Jede trägt weiterhin ihr geprüftes `writer`-Feld — **eine Oberfläche
+muss dieses Feld für die Autorenanzeige nutzen, nie den ID-Text
+interpretieren** (siehe Warnung unten).
 
-### `onMessage(qu, spaceId, callback, opts?)` → `() => void`
-Live-Subscription auf neue Nachrichten (`qu.on` unter der Haube — `opts`
-wird 1:1 durchgereicht, siehe `{ initial, once }` bei `runtime.on()`).
-`onReadReceipt(qu, spaceId, callback, opts?)` und
-`onPresenceChange(qu, spaceId, callback, opts?)` verhalten sich identisch.
+### `onMessage(space, callback, opts?)` → `() => void`
+Live-Subscription auf neue Nachrichten (`space.get('msgs').map(callback, { deep: true, ...opts })`
+unter der Haube). `onReadReceipt(space, callback, opts?)` und
+`onPresenceChange(space, callback, opts?)` verhalten sich identisch.
+
+### Read-Receipts & Presence
+`markRead(space, uptoTs)` / `getReadReceipts(space)` — ein LWW-Slot pro
+Leser (`space.get('reads/${fingerprint}').put({ upTo })`). `setPresence(space,
+status)` / `getPresence(space, { staleAfterMs? })` / `startHeartbeat(space,
+{ intervalMs? })` → `() => Promise<void>` (stop-Funktion) — derselbe
+Heartbeat-auf-festem-Slot-Mechanismus wie zuvor, nur auf einen Space-Node
+statt `(qu, spaceId)` bezogen.
 
 > **Wichtig:** Die ID einer Nachricht enthält den Fingerprint des
 > Schreibers nur als Adressierungs-Konvention (damit verschiedene
-> Schreiber nie kollidieren, siehe `append()`) — sie ist **keine
+> Schreiber nie kollidieren, siehe `set()`) — sie ist **keine
 > Vertrauensquelle**. Ein böswilliger Schreiber kann einen Pfad konstruieren,
 > der wie der Namensraum eines anderen aussieht (`.../msgs/<fremder-fp>/...`)
 > — das signierte `writer`-Feld des empfangenen QuBits bleibt davon
 > unberührt und zeigt weiterhin unweigerlich den tatsächlichen Autor. Jede
 > Chat-Oberfläche muss Autorschaft ausschließlich aus `writer` ableiten.
 
-```js
-const alice = await Qu.create();
-const bob = await Qu.create({ runtime: alice.runtime });
-const roomId = await alice.createChatRoom([alice.fingerprint, bob.fingerprint]);
+### `createChatPlugin()` — Fassaden-Sugar
+`qu.use(createChatPlugin())` hängt `qu.createChatRoom(memberFingerprints, opts?)`,
+`qu.sendMessage(spaceId, opts?)`, `qu.listMessages(spaceId)`,
+`qu.onMessage(spaceId, cb, opts?)` (und die Read-Receipt-/Presence-
+Äquivalente) an — jede löst `spaceId` nur zu `qu.get(spaceId)` auf und
+delegiert an die Funktion oben.
 
-await alice.sendMessage(roomId, { text: 'hey bob' });
-await alice.sendMessage(roomId, {
+```js
+const alice = (await Qu.create()).use(createSpacesPlugin()).use(createChatPlugin());
+const bob = (await Qu.create({ runtime: alice.runtime })).use(createChatPlugin());
+const room = alice.createChatRoom([alice.fingerprint, bob.fingerprint]); // synchron
+await room.ready;
+
+await alice.sendMessage(room.id, { text: 'hey bob' });
+await alice.sendMessage(room.id, {
   text: 'ein Bild',
   attachments: [{ bytes: imageBytes, name: 'photo.png', mime: 'image/png', fileStorage }],
 });
 
-// Historie + live weiterhören in einem Aufruf, statt query() + on() von Hand zu kombinieren:
-bob.onMessage(roomId, (msg) => console.log(msg.writer, msg.value.text), { initial: true });
+// Historie + live weiterhören in einem Aufruf, statt map() von Hand zu bemühen:
+bob.onMessage(room.id, (msg) => console.log(msg.writer, msg.value.text), { initial: true });
 ```
 
 ---
@@ -778,64 +867,66 @@ Reaktive View-/Bindung-Primitive in reinem JS (`src/ui/bindings.js`) —
 DOM-Library-agnostisch (kein `document.*` in dieser Datei; `createItem`/
 `render`/Element-Get-Set kommen vom Aufrufer), fully unit-testbar mit
 Mock-Objekten statt einem echten Browser (siehe `test/ui-bindings.test.mjs`).
-Basis für das [UI-Components-Modul](#ui-components-modul) darunter — eine
-Component IST nichts als eine dieser Funktionen, aufgerufen aus
-`connectedCallback()`, mit dem zurückgegebenen `off()` in
-`disconnectedCallback()`.
+Jede Funktion nimmt einen bereits navigierten Node entgegen (`qu.get(id)`,
+siehe [`QuSpace`](#quspace)) statt eines `(qu, id)`-Paars. Basis für das
+[UI-Components-Modul](#ui-components-modul) darunter — eine Component IST
+nichts als eine dieser Funktionen, aufgerufen aus `connectedCallback()`,
+mit dem zurückgegebenen `off()` in `disconnectedCallback()`.
 
-### `viewKey(qu, id, render)` → `() => void`
-One-way, ein einzelner QuBit. `render(value, qubit)` läuft einmal für den
-aktuellen Stand (via `on(id, cb, { initial: true })`), danach bei jeder
+### `viewKey(node, render)` → `() => void`
+One-way, ein einzelner Node. `render(value, qubit)` läuft einmal für den
+aktuellen Stand (via `node.on(cb, { initial: true })`), danach bei jeder
 Änderung. Dedupliziert über `(id, ts)`, nicht per Wertevergleich — dieselbe
 Idee wie `QuStore.put()`s Same-ts-Noop-Check.
 
-### `viewObject(qu, prefix, { createItem, render, key?, pattern? })` → `() => void`
-One-way, eine Sammlung. Jeder QuBit direkt unter `prefix` (Default-Pattern
-`${prefix}/*`, überschreibbar) bekommt einmalig `createItem(qubit)` (liefert
-ein beliebiges opakes "Item", typischerweise ein bereits eingefügtes
-DOM-Element) und danach bei jedem Update `render(item, value, qubit)`.
+### `viewObject(node, { createItem, render, key?, deep? })` → `() => void`
+One-way, eine Sammlung. Jeder QuBit direkt unter `node` (`node.map()`
+unter der Haube — `deep: true` für `${node.id}/**`, z. B. `set()`-Sammlungen,
+die zwei Segmente tief namensraumisieren) bekommt einmalig `createItem(qubit)`
+(liefert ein beliebiges opakes "Item", typischerweise ein bereits
+eingefügtes DOM-Element) und danach bei jedem Update `render(item, value, qubit)`.
 `key(qubit)` bestimmt die Item-Identität (Default: `qubit.id`). Gleiches
 `(id, ts)`-Dedup pro Item wie `viewKey()`.
 
-### `bindKey(qu, id, element, { get?, set?, event?, onError? })` → `() => void`
+### `bindKey(node, element, { get?, set?, event?, onError? })` → `() => void`
 Two-way — derselbe Live-Render wie `viewKey()`, plus ein lokaler
-Edit-Listener, der zurückschreibt. `get`/`set`/`event` defaulten auf
-`<input>`/`<textarea>` (`.value`, Event `input`), sonst `.textContent`
-(funktioniert für contenteditable).
+Edit-Listener, der zurückschreibt (`node.put()`). `get`/`set`/`event`
+defaulten auf `<input>`/`<textarea>` (`.value`, Event `input`), sonst
+`.textContent` (funktioniert für contenteditable).
 
 Beide Hälften des Echo-Problems werden explizit geschützt, nie durch
 pauschales Unterdrücken:
 - **Schreib-Seite:** ein Edit, dessen Wert bereits dem bekannten lokalen
-  Wert entspricht, wird nie publiziert.
-- **Render-Seite:** das QuBit, das dieses Binding selbst gerade publiziert
+  Wert entspricht, wird nie geschrieben.
+- **Render-Seite:** das QuBit, das dieses Binding selbst gerade geschrieben
   hat, wird nicht erneut gerendert (würde Cursor/Selektion überschreiben)
   — ein ANDERES Binding auf dieselbe `id` (anderer Tab, anderer Nutzer)
   rendert weiterhin normal.
 
-Der `ts` des Publish wird vorab berechnet (`qu.runtime.nextTs()`) und mit
-eingehenden QuBits verglichen, statt erst nach `await qu.publish()` — die
+Der `ts` des Writes wird vorab berechnet (`node.runtime.nextTs()`) und mit
+eingehenden QuBits verglichen, statt erst nach `await node.put()` — die
 Runtime dispatcht synchron während `ingest()`, ein Vergleich erst nach
 `await` würde das eigene erste Echo verpassen. `onError(e)` (optional) läuft
 bei einem abgelehnten Write (z.B. ACL-Ablehnung); der Element-Wert wird dabei
 auf den vorherigen Stand zurückgesetzt.
 
-### `bindObject(qu, prefix, fields, opts?)` → `() => void`
+### `bindObject(node, fields, opts?)` → `() => void`
 Two-way, mehrere Felder eines Datensatzes: ein `bindKey()` pro Feld, jedes
-Feld eine eigene Leaf-QuBit (`${prefix}/${field}`) — dieselbe "jedes Feld
-seine eigene Leaf-QuBit"-Form wie `Qu.publishProfile()`, damit zwei
+Feld eine eigene Leaf-QuBit (`node.get(field)`) — dieselbe "jedes Feld
+seine eigene Leaf-QuBit"-Form wie das Profil-Beispiel oben, damit zwei
 unabhängige Schreiber nie auf demselben LWW-Register kollidieren.
 `fields`: `{ [feldname]: element }`.
 
 ```js
 import { viewObject, bindKey } from './src/index.js';
 
-const offList = viewObject(qu, `${qu.userSpaceId}/todos`, {
+const offList = viewObject(qu.own.get('todos'), {
   createItem: (q) => document.querySelector('ul').appendChild(document.createElement('li')),
   render: (li, value) => { li.textContent = value.text; },
 });
 
 const input = document.querySelector('#note');
-const offBind = bindKey(qu, `${qu.userSpaceId}/note`, input); // tippen schreibt sofort, kein Speichern-Knopf
+const offBind = bindKey(qu.own.get('note'), input); // tippen schreibt sofort, kein Speichern-Knopf
 
 // beim Unmount:
 offList();
@@ -895,7 +986,7 @@ angehängt werden (`appendChild()` löst `connectedCallback()` synchron aus)
 gesetzt"-Reihenfolge ab, bevor endgültig eine Fehlermeldung in die Konsole
 geht.
 
-`.qu` muss keine `Qu`-Instanz sein — ein `QuSpace` (`qu.own`/`qu.space(id)`)
+`.qu` muss keine `Qu`-Instanz sein — ein `QuSpace` (`qu.own`/`qu.get(id)`)
 funktioniert genauso: `container.qu = alice.own` scoped jeden Nachfahren
 relativ zu diesem Space, `path` selbst (falls gesetzt) wird dann noch
 EINMAL relativ dazu aufgelöst, nicht absolut.
@@ -917,7 +1008,7 @@ container.querySelector('qu-bind').addEventListener('qu-error', (e) => console.e
 ### `<qu-list path="...">`
 Deklarative Form von [`viewObject()`](#ui-bindings-modul) — ein `<template>`-
 Kind, einmal geklont pro Kind-QuBit unter `path`, jeder Klon-Wurzel `.qu`
-auf `qu.space(<Item-Id>)` gesetzt, sodass `<qu-view>`/`<qu-bind>` INNERHALB
+auf `qu.get(<Item-Id>)` gesetzt, sodass `<qu-view>`/`<qu-bind>` INNERHALB
 des Templates ihre Felder mit bloßem `key` adressieren können, ganz ohne
 Id-Wiederholung:
 ```html

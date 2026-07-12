@@ -17,14 +17,14 @@ export const steps = [
     title: '1 · Ohne Plugin: nur der eigene User-Space ist beschreibbar',
     description: 'core/identity-acl.js ist der Core-Default — strukturell aus der Identität ableitbar, kein Manifest, kein Storage-Roundtrip. Ein generischer (Nicht-User-)Pfad wird abgelehnt.',
     code: `const qu = await Qu.create();
-await qu.publish(\`\${qu.userSpaceId}/ok\`, 1);      // geht
-await qu.publish('irgendein/generischer/pfad', 1);   // wirft [ACL] Write denied`,
+await qu.own.get('ok').put(1);                    // geht
+await qu.get('irgendein/generischer/pfad').put(1);  // wirft [ACL] Write denied`,
     kind: 'error',
     expectFailure: true,
     async run(ctx) {
       ctx.solo = await Qu.create();
-      await ctx.solo.publish(`${ctx.solo.userSpaceId}/ok`, 1);
-      await ctx.solo.publish('irgendein/generischer/pfad', 1);
+      await ctx.solo.own.get('ok').put(1);
+      await ctx.solo.get('irgendein/generischer/pfad').put(1);
       return {};
     },
   },
@@ -48,13 +48,15 @@ const bob = await Qu.create({ runtime: owner.runtime });`,
   {
     id: 'create-space',
     title: '3 · Space anlegen (createSpacesPlugin macht das möglich)',
-    description: 'createSpace() existiert erst, seit owner sich das Spaces-Plugin geholt hat. Das ist eine reine Sugar-Methode auf DIESER Qu-Instanz — bob müsste use() selbst aufrufen, um auch ein eigenes bob.createSpace() zu bekommen. Was dagegen wirklich runtime-weit gilt (setACLResolver()): die ACL-POLICY selbst — genau das sehen die nächsten Schritte, wenn bob ganz ohne eigenes use() erfolgreich in owners Space schreiben darf, sobald er berechtigt ist.',
-    code: `const roomId = await owner.createSpace({ writers: [owner.fingerprint], readers: ['*'] });`,
+    description: 'createSpace() existiert erst, seit owner sich das Spaces-Plugin geholt hat. Das ist eine reine Sugar-Methode auf DIESER Qu-Instanz — bob müsste use() selbst aufrufen, um auch ein eigenes bob.createSpace() zu bekommen. Was dagegen wirklich runtime-weit gilt (setACLResolver()): die ACL-POLICY selbst — genau das sehen die nächsten Schritte, wenn bob ganz ohne eigenes use() erfolgreich in owners Space schreiben darf, sobald er berechtigt ist. createSpace() ist synchron (wie get()) und liefert den Node sofort; das Manifest wird im Hintergrund geschrieben — room.ready ist das Promise DIESES Writes (ein bloßes "await room" wäre nur ein Read und könnte dem Write vorauslaufen).',
+    code: `const room = owner.createSpace({ writers: [owner.fingerprint], readers: ['*'] });
+await room.ready; // wirklich auf das Manifest warten`,
     kind: 'info',
     async run(ctx) {
-      ctx.roomId = await ctx.owner.createSpace({ writers: [ctx.owner.fingerprint], readers: ['*'] });
+      ctx.room = ctx.owner.createSpace({ writers: [ctx.owner.fingerprint], readers: ['*'] });
+      await ctx.room.ready;
       return {
-        'Space-ID': ctx.roomId,
+        'Space-ID': ctx.room.id,
         'bob.createSpace existiert (Sugar ist pro Instanz, NICHT runtime-weit)': typeof ctx.bob.createSpace === 'function',
       };
     },
@@ -63,11 +65,11 @@ const bob = await Qu.create({ runtime: owner.runtime });`,
     id: 'bob-denied',
     title: '4 · Bob schreibt ohne Rechte — abgelehnt',
     description: 'bob steht noch nicht in den writers des Manifests — die ACL-Middleware lehnt ab, bevor irgendetwas gespeichert wird.',
-    code: `await bob.publish(\`\${roomId}/msg1\`, 'bob versucht zu schreiben'); // wirft [ACL] Write denied`,
+    code: `await bob.get(room.id).get('msg1').put('bob versucht zu schreiben'); // wirft [ACL] Write denied`,
     kind: 'error',
     expectFailure: true,
     async run(ctx) {
-      await ctx.bob.publish(`${ctx.roomId}/msg1`, 'bob versucht zu schreiben');
+      await ctx.bob.get(ctx.room.id).get('msg1').put('bob versucht zu schreiben');
       return {};
     },
   },
@@ -75,13 +77,13 @@ const bob = await Qu.create({ runtime: owner.runtime });`,
     id: 'grant-access',
     title: '5 · Schreibrecht gewähren',
     description: 'Das Manifest ist selbst nur ein QuBit — owner (Admin) republiziert es mit bob zusätzlich in writers.',
-    code: `const manifest = await owner.get(roomId);
-await owner.publish(roomId, { ...manifest.value, writers: [...manifest.value.writers, bob.fingerprint] });`,
+    code: `const manifest = await room;
+await room.put({ ...manifest.value, writers: [...manifest.value.writers, bob.fingerprint] });`,
     kind: 'info',
     async run(ctx) {
-      const manifest = await ctx.owner.get(ctx.roomId);
-      await ctx.owner.publish(ctx.roomId, { ...manifest.value, writers: [...manifest.value.writers, ctx.bob.fingerprint] });
-      const updated = await ctx.owner.get(ctx.roomId);
+      const manifest = await ctx.room;
+      await ctx.room.put({ ...manifest.value, writers: [...manifest.value.writers, ctx.bob.fingerprint] });
+      const updated = await ctx.room;
       return { writers: updated.value.writers.join(', ') };
     },
   },
@@ -89,12 +91,12 @@ await owner.publish(roomId, { ...manifest.value, writers: [...manifest.value.wri
     id: 'bob-allowed',
     title: '6 · Bob schreibt jetzt erfolgreich',
     description: 'Dieselbe ACL-Middleware, dieselbe Prüfung — nur die Manifest-Daten haben sich geändert.',
-    code: `await bob.publish(\`\${roomId}/msg1\`, 'jetzt klappt es');
-const view = await owner.query(\`\${roomId}/**\`);`,
+    code: `await bob.get(room.id).get('msg1').put('jetzt klappt es');
+const view = await owner.session.query(\`\${room.id}/**\`);`,
     kind: 'info',
     async run(ctx) {
-      await ctx.bob.publish(`${ctx.roomId}/msg1`, 'jetzt klappt es');
-      const view = await ctx.owner.query(`${ctx.roomId}/**`);
+      await ctx.bob.get(ctx.room.id).get('msg1').put('jetzt klappt es');
+      const view = await ctx.owner.session.query(`${ctx.room.id}/**`);
       return { 'Nachrichten im Space': view.length, Inhalt: view[0]?.value };
     },
   },

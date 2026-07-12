@@ -13,7 +13,8 @@ import { createIdentityACL } from './core/identity-acl.js';
 // middleware installed, so sharing one Runtime across several `Qu`
 // instances (e.g. several users on one server process) never registers
 // the same middleware twice — and holds the one mutable "which policy is
-// currently in force" slot per Runtime.
+// currently in force" slot per Runtime, plus that Runtime's "default
+// plugins" (see wireRuntime() below).
 //
 // The ACL *enforcement* middleware (core/acl.js's createACLPlugin) is
 // registered on the Runtime exactly once, wrapping a stable indirection
@@ -24,7 +25,7 @@ import { createIdentityACL } from './core/identity-acl.js';
 // manifest-aware resolution), without re-registering middleware or
 // weakening the "Verify+ACL, no exceptions" guarantee: enforcement itself
 // never becomes optional, only the policy it enforces is swappable.
-const wiredRuntimes = new WeakMap(); // Runtime -> { resolver: { current: getACLFn } }
+const wiredRuntimes = new WeakMap(); // Runtime -> { resolver: { current: getACLFn }, defaultPlugins: Plugin[] | null }
 
 function wireRuntime(runtime) {
   let wired = wiredRuntimes.get(runtime);
@@ -32,37 +33,70 @@ function wireRuntime(runtime) {
     const resolver = { current: createIdentityACL() };
     runtime.use(createVerifyPlugin());
     runtime.use(createACLPlugin((id) => resolver.current(id)));
-    wired = { resolver };
+    wired = { resolver, defaultPlugins: null };
     wiredRuntimes.set(runtime, wired);
   }
-  return wired.resolver;
+  return wired;
 }
 
 function isQuIdentity(x) {
   return x && typeof x.sign === 'function' && typeof x.fingerprint === 'string';
 }
 
+function isBytesLike(value) {
+  return value instanceof Uint8Array
+    || (typeof Blob !== 'undefined' && value instanceof Blob)
+    || (typeof File !== 'undefined' && value instanceof File);
+}
+
+/**
+ * Default put() dispatcher — plain publish(), EXCEPT file-shaped values
+ * (Uint8Array, or Blob/File in a browser), which throw instead of silently
+ * writing raw bytes as an opaque value. `createFileHandlerPlugin()` replaces
+ * this (via `setPutHandler()`) with one that chunks+manifests them instead.
+ */
+const defaultPutDispatch = (session, id, value, opts) => {
+  if (isBytesLike(value)) {
+    throw new Error(`[Qu] put() hat Datei-Bytes für "${id}" erhalten, aber kein FileHandler ist konfiguriert. qu.use(createFileHandlerPlugin({ fileStorage })) hinzufügen, oder rohe Bytes bewusst über qu.session.publish() schreiben.`);
+  }
+  return session.publish(id, value, opts);
+};
+
 /**
  * Qu is the class most applications should actually instantiate — it wraps
- * Runtime + Store + Session behind plain instance methods, so a caller
- * doesn't need to assemble those pieces by hand for the common case.
- * QuRuntime/QuStore/QuSession/etc. remain the underlying
- * primitives (still directly usable — `qu.runtime` is the escape hatch)
- * for advanced composition: custom middleware ordering, non-default
- * adapters, or several `Qu` instances deliberately sharing one Runtime.
+ * Runtime + Store + Session behind a small set of instance methods, so a
+ * caller doesn't need to assemble those pieces by hand for the common case.
+ * QuRuntime/QuSession/etc. remain the underlying primitives (still directly
+ * usable — `qu.runtime` is the escape hatch) for advanced composition.
  *
- * Qu itself only knows Identity/Session/publish-get-query-on and one
+ * Data access is five GunDB-inspired verbs, all reached through `qu.get(id)`
+ * (a `QuSpace` — see core/space-handle.js for the full picture):
+ *   qu.get(id)                a node bound to `id` — navigate further with
+ *                             `.get(subpath)`, no I/O until you await it or
+ *                             call put/set/on/map.
+ *   qu.own                    `qu.get(qu.userSpaceId)` — your own Space,
+ *                             always writable without any plugin (see
+ *                             core/identity-acl.js's structural default).
+ *   await qu.get(id)          reads the QuBit at `id`.
+ *   qu.get(id).put(v, opts)    writes at `id` (LWW) — auto-detects
+ *                             Uint8Array/Blob as a file if a FileHandler is
+ *                             configured (see setPutHandler()).
+ *   qu.get(id).set(v, opts)    collision-safe write into a shared
+ *                             collection at `id` (many independent
+ *                             writers — chat messages, comments).
+ *   qu.get(id).on(cb, opts)    live subscription to `id`'s own value.
+ *   qu.get(id).map(cb, opts)   live subscription to `id`'s children.
+ *
+ * Qu itself only knows Identity/Session/the five verbs above, and one
  * structural ACL fact: you may always write under `~<your fingerprint>`,
  * nothing else (see core/identity-acl.js — this costs nothing, needs no
  * manifest or Storage round-trip, and follows directly from `fingerprint =
  * hash(pubKey)`, so it's a property of Identity, not a policy choice).
  * Everything else — generic multi-writer Spaces, Files, References,
- * Replication, WebRTC, Chat — is a plugin, installed via `use()`. A
- * plugin's underlying functions (e.g. `sendMessage(qu, spaceId, opts)` in
- * modules/chat.js) always work standalone too; `use()` only adds
- * convenience sugar (`qu.sendMessage(spaceId, opts)`) on top for apps that
- * want it. `qu.createSpace()` in particular does not exist until
- * `qu.use(createSpacesPlugin())` — see modules/spaces.js.
+ * Replication, WebRTC, Chat — is a plugin, installed via `use()`.
+ * `qu.createSpace()` in particular does not exist until
+ * `qu.use(createSpacesPlugin())` — see modules/spaces.js. `src/presets.js`
+ * bundles common plugin combinations (`QU_PRESETS.spaces`, `.network`).
  *
  * Three ways to get an identity:
  *   Qu.create()                        — generates a new one
@@ -78,6 +112,7 @@ export class Qu {
   #store;
   #session;
   #aclResolver;
+  #putResolver;
   #guest;
 
   /**
@@ -93,13 +128,27 @@ export class Qu {
    *
    * `plugins` is sugar for calling `.use(plugin)` once per entry, in order,
    * right after construction — for apps that always want Spaces/Files/
-   * References/Network available without a separate `.use()` chain:
-   *   Qu.create({ plugins: [createSpacesPlugin(), createFileHandlerPlugin({ fileStorage })] })
+   * References/Network available without a separate `.use()` chain. See
+   * `src/presets.js`'s `QU_PRESETS` for ready-made combinations:
+   *   Qu.create({ plugins: QU_PRESETS.spaces })
+   *
+   * The stable default stays fully encapsulated: calling `Qu.create()`
+   * without `runtime` always builds a brand-new, private Runtime+Store —
+   * never a hidden global, never shared unless you explicitly pass
+   * `runtime: other.runtime`. The FIRST `Qu.create()` call that builds a
+   * given Runtime this way "owns" its `plugins` as that Runtime's default:
+   * every LATER `Qu.create({ runtime })` call sharing it automatically gets
+   * those same plugins installed too (plus any of its own), so a second
+   * user/session on one process doesn't have to repeat the same `.use()`
+   * chain. Passing an already-`Qu.create()`-wired `runtime` in without ever
+   * having been the creator inherits nothing extra beyond what the creator
+   * defined.
    */
   static async create({ identity, guest = false, runtime, store, mounts, plugins = [] } = {}) {
+    const isNewRuntime = !runtime;
     const resolvedStore = store ?? new QuStore(mounts ?? [{ prefix: '', adapter: new MemoryAdapter() }]);
     const resolvedRuntime = runtime ?? new QuRuntime({ store: resolvedStore });
-    const aclResolver = wireRuntime(resolvedRuntime);
+    const wired = wireRuntime(resolvedRuntime);
 
     let resolvedIdentity = null;
     if (identity) {
@@ -112,8 +161,15 @@ export class Qu {
       resolvedIdentity = await QuIdentity.generate(); // guests still get a real, ephemeral identity — see class doc
     }
 
-    const qu = new Qu({ runtime: resolvedRuntime, store: resolvedStore, identity: resolvedIdentity, guest, aclResolver });
-    for (const plugin of plugins) qu.use(plugin);
+    const qu = new Qu({ runtime: resolvedRuntime, store: resolvedStore, identity: resolvedIdentity, guest, aclResolver: wired.resolver });
+
+    if (isNewRuntime) {
+      wired.defaultPlugins = plugins;
+      for (const plugin of plugins) qu.use(plugin);
+    } else {
+      for (const plugin of wired.defaultPlugins ?? []) qu.use(plugin);
+      for (const plugin of plugins) qu.use(plugin);
+    }
     return qu;
   }
 
@@ -124,6 +180,7 @@ export class Qu {
     this.#store = store ?? runtime.store;
     this.#guest = guest;
     this.#aclResolver = aclResolver ?? { current: createIdentityACL() };
+    this.#putResolver = { current: defaultPutDispatch };
     this.#session = new QuSession(runtime, { identity, getACL: (id) => this.#aclResolver.current(id) });
   }
 
@@ -133,70 +190,31 @@ export class Qu {
   get isGuest() { return this.#guest; }
   get userSpaceId() { return this.fingerprint ? userSpaceId(this.fingerprint) : null; }
   async exportKeys() { return this.identity ? this.identity.exportKeys() : null; }
-
-  /**
-   * A QuSpace bound to `spaceId` — publish/append/get/query/on with paths
-   * relative to that Space instead of spelled out in full each time. Works
-   * for any Space you know the id of: your own, another user's
-   * ("~<their-fp>"), or a generic Space (its UUID) — see core/space-handle.js.
-   * Building the handle needs no plugin and does no manifest lookup; only
-   * the actual calls made through it are ACL-checked, exactly as if you'd
-   * called qu.publish()/qu.get() with the full id yourself.
-   */
-  space(spaceId) { return new QuSpace(this.#session, spaceId, { guest: this.#guest }); }
-
-  /** `qu.own` is `qu.space(qu.userSpaceId)` — the ergonomic default for "my own Space", always available without any plugin (see core/identity-acl.js's structural default). */
-  get own() { return this.space(this.userSpaceId); }
-
-  #assertCanWrite(action) {
-    if (this.#guest) throw new Error(`[Qu] Guest-Sessions haben kein Schreibrecht (versucht: ${action}). Mit Qu.create({ identity }) eine echte Identität verwenden.`);
-  }
-
-  // --- data (delegates to the underlying Session) ---
-  async publish(id, value, opts) {
-    this.#assertCanWrite('publish');
-    return this.#session.publish(id, value, opts);
-  }
-  /** Collision-safe write for shared collections (chat messages, comments, activity events) — see QuSession.append(). */
-  async append(collectionId, value, opts) {
-    this.#assertCanWrite('append');
-    return this.#session.append(collectionId, value, opts);
-  }
-  async get(id) { return this.#session.get(id); }
-  async query(pattern) { return this.#session.query(pattern); }
-  on(pattern, callback, opts) { return this.#session.on(pattern, callback, opts); }
-  async resolveRefs(qubit) { return this.#session.resolveRefs(qubit); }
   async trustPeer(fingerprint, encPubKeyJwk) { return this.#session.trustPeer(fingerprint, encPubKeyJwk); }
 
-  // --- profile: individual leaf QuBits directly under the User-Space root, not one combined object ---
-  async publishProfile({ alias, epub, ...rest } = {}) {
-    this.#assertCanWrite('publishProfile');
-    const root = this.userSpaceId;
-    await this.#session.publish(`${root}/pub`, this.fingerprint);
-    if (alias !== undefined) await this.#session.publish(`${root}/alias`, alias);
-    if (epub !== undefined) await this.#session.publish(`${root}/epub`, epub);
-    for (const [key, value] of Object.entries(rest)) await this.#session.publish(`${root}/${key}`, value);
-  }
+  /**
+   * A node bound to `id` — get/put/set/on/map relative to it (see
+   * core/space-handle.js). Works for any Space/path you know: your own,
+   * another user's ("~<their-fp>"), a generic Space (its UUID), or any
+   * subpath of one. Building the node needs no plugin and does no
+   * ACL/manifest lookup or I/O at all — only put/set/on/map/await do,
+   * lazily, exactly as if you'd called the equivalent Session method with
+   * the full id yourself.
+   */
+  get(id) { return new QuSpace(this.#session, id, { guest: this.#guest, putDispatch: (...args) => this.#putResolver.current(...args) }); }
 
-  /** Reads another identity's public profile fields (alias/pub/epub/...) by their fingerprint — no manifest required to read, User-Spaces default to readers: ['*']. */
-  async readProfile(fingerprint) {
-    const root = userSpaceId(fingerprint);
-    const [alias, pub, epub] = await Promise.all([
-      this.#session.get(`${root}/alias`),
-      this.#session.get(`${root}/pub`),
-      this.#session.get(`${root}/epub`),
-    ]);
-    return { alias: alias?.value, pub: pub?.value, epub: epub?.value };
-  }
+  /** `qu.own` is `qu.get(qu.userSpaceId)` — the ergonomic default for "my own Space", always available without any plugin. */
+  get own() { return this.get(this.userSpaceId); }
 
   /**
    * Installs a plugin: either a plain `(qu) => {...}` function, or an
    * `{ install(qu) {...} }` object — the same shape `createFileHandlerPlugin()`,
    * `createReferenceHandlerPlugin()`, `createNetworkPlugin()` and
    * `createChatPlugin()` return (see src/data/, src/network/, src/modules/).
-   * A plugin typically attaches convenience methods (`qu.shareFile`,
-   * `qu.connect`, ...) and/or registers Runtime pipeline middleware
-   * (`qu.runtime.use(...)`) — Qu itself has no opinion about which.
+   * A plugin typically attaches convenience methods (`qu.connect`, ...)
+   * and/or registers Runtime pipeline middleware (`qu.runtime.use(...)`)
+   * and/or calls `setACLResolver()`/`setPutHandler()` — Qu itself has no
+   * opinion about which.
    */
   use(plugin) {
     if (typeof plugin === 'function') plugin(this);
@@ -218,6 +236,21 @@ export class Qu {
    */
   setACLResolver(getACL) {
     this.#aclResolver.current = getACL;
+    return this;
+  }
+
+  /**
+   * Replaces the `put(session, id, value, opts)` dispatcher every node
+   * `qu.get(id)`/`qu.own` produces uses for `.put()` — this is how
+   * `createFileHandlerPlugin()` makes `node.put(bytes, opts)` auto-detect
+   * files (chunk+manifest) instead of writing raw bytes as an opaque
+   * value, without core/space-handle.js needing to know Files/plugins
+   * exist. Unlike `setACLResolver()`, this is per-Qu-instance, not
+   * per-Runtime — file handling is a property of which plugin THIS
+   * instance loaded, not of the Space being written to.
+   */
+  setPutHandler(putDispatch) {
+    this.#putResolver.current = putDispatch;
     return this;
   }
 

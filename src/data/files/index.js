@@ -35,6 +35,12 @@ export async function resolveFileRef(qu, fileStorage, ref, { fileTransfer = null
   return reassembleFile(fileStorage, manifest);
 }
 
+function isBytesLike(value) {
+  return value instanceof Uint8Array
+    || (typeof Blob !== 'undefined' && value instanceof Blob)
+    || (typeof File !== 'undefined' && value instanceof File);
+}
+
 /**
  * `qu.use(createFileHandlerPlugin({ fileStorage }))` — attaches:
  *   - `qu.shareFile(id, bytes, opts)` — defaults `opts.fileStorage` to this
@@ -44,6 +50,10 @@ export async function resolveFileRef(qu, fileStorage, ref, { fileTransfer = null
  *   - `qu.fileTransfer(channel, fileStorage = this plugin's, opts)` — same
  *     signature as the underlying `DefaultFileTransfer` constructor, with
  *     `getACL` wired to this Qu instance's ACL resolver automatically.
+ *   - a `setPutHandler()` upgrade so `qu.get(id).put(bytes, opts)` auto-detects
+ *     Uint8Array/Blob/File and routes through `shareFile()` (chunk+manifest)
+ *     instead of the Core default, which throws on file-shaped values (see
+ *     qu.js's `defaultPutDispatch`).
  * Also directly usable as `references.js`'s `fileHandler` option (it
  * already exposes a matching `resolveFileRef(qu, ref)`), so
  * `qu.use(createReferenceHandlerPlugin({ fileHandler:
@@ -60,6 +70,13 @@ export function createFileHandlerPlugin({ fileStorage } = {}) {
       qu.shareFile = (id, bytes, opts) => handler.shareFile(qu, id, bytes, opts);
       qu.resolveFileRef = (ref, opts) => handler.resolveFileRef(qu, ref, opts);
       qu.fileTransfer = (channel, storage = fileStorage, opts = {}) => new DefaultFileTransfer(qu.runtime, channel, storage, { getACL: qu.acl, ...opts });
+      qu.setPutHandler(async (session, id, value, opts) => {
+        if (!isBytesLike(value)) return session.publish(id, value, opts);
+        const bytes = value instanceof Uint8Array ? value : new Uint8Array(await value.arrayBuffer());
+        const name = opts?.name ?? value.name;
+        const mime = opts?.mime ?? value.type;
+        return handler.shareFile(qu, id, bytes, { name, mime, ...opts });
+      });
     },
   };
   return handler;

@@ -32,7 +32,7 @@ console.log(qu.fingerprint, qu.userSpaceId);`,
       ctx.adapter = adapter;
       ctx.store = store;
       ctx.qu = await Qu.create({ store });
-      window.qu = ctx.qu; // console: qu.fingerprint, await qu.publish(...), ...
+      window.qu = ctx.qu; // console: qu.fingerprint, await qu.own.get('x').put(...), ...
       return { Fingerprint: ctx.qu.fingerprint, 'User-Space': ctx.qu.userSpaceId };
     },
   },
@@ -68,10 +68,10 @@ const qu2 = await Qu.create({ identity: saved, store });`,
     id: 'write-some-data',
     title: '4 · Etwas schreiben',
     description: 'Ein QuBit unter dem eigenen User-Space — Core-Default, kein Plugin nötig (core/identity-acl.js erlaubt das immer).',
-    code: `await qu.publish(\`\${qu.userSpaceId}/note\`, { text: 'Hallo aus localStorage' });`,
+    code: `await qu.own.get('note').put({ text: 'Hallo aus localStorage' });`,
     kind: 'info',
     async run(ctx) {
-      await ctx.qu.publish(`${ctx.qu.userSpaceId}/note`, { text: 'Hallo aus localStorage' });
+      await ctx.qu.own.get('note').put({ text: 'Hallo aus localStorage' });
       const rows = await ctx.store.query(ctx.qu.userSpaceId);
       return { 'QuBits im Store (dieser User)': rows.length };
     },

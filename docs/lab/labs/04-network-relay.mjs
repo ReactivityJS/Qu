@@ -78,12 +78,12 @@ const replB = await bob.connect(chB, { pushTopics: [\`\${roomId}/\`] });`,
     id: 'live-push',
     title: '2 · Live-Push: kein sync() nötig',
     description: 'Alice schreibt — weil der Raum unter ihren pushTopics steht, pusht der Relay das sofort an Bob weiter.',
-    code: `await alice.publish(\`\${roomId}/msg1\`, { text: 'Hallo Bob, live über den echten Relay!' });`,
+    code: `await alice.get(\`\${roomId}/msg1\`).put({ text: 'Hallo Bob, live über den echten Relay!' });`,
     kind: 'chat',
     async run(ctx) {
-      await ctx.alice.publish(`${ctx.roomId}/msg1`, { text: 'Hallo Bob, live über den echten Relay!' });
+      await ctx.alice.get(`${ctx.roomId}/msg1`).put({ text: 'Hallo Bob, live über den echten Relay!' });
       await wait(150);
-      const bobView = await ctx.bob.query(`${ctx.roomId}/**`);
+      const bobView = await ctx.bob.session.query(`${ctx.roomId}/**`);
       return { 'Bob hat empfangen (ohne sync!)': bobView.length > 0, Text: bobView[0]?.value?.text };
     },
   },
@@ -103,7 +103,7 @@ await syncWithRetry(replC, { topic: roomId, since: 0 });`,
       await ctx.chC.connect();
       ctx.replC = await ctx.carol.connect(ctx.chC, { pushTopics: [`${ctx.roomId}/`] });
       await syncWithRetry(ctx.replC, { topic: ctx.roomId, since: 0 });
-      const carolView = await ctx.carol.query(`${ctx.roomId}/**`);
+      const carolView = await ctx.carol.session.query(`${ctx.roomId}/**`);
       window.carolNet = ctx.carol;
       return { 'Carol sieht (war offline für Schritt 2)': carolView.length, Text: carolView[0]?.value?.text };
     },
