@@ -511,8 +511,10 @@ src/
                           optional: Handshake, Router, Routed-Events,
                           replication/{Default,Hub,Provider}, transports/
                           {WebSocket,WebRTC}, WebRTC-Peer-Manager,
-                          index.js (createNetworkPlugin — qu.connect()/qu.router/
-                          qu.webrtc()-Sugar)
+                          rate-limiter.js (Relay-Schutz gegen einen
+                          flutenden Peer, siehe requireDirectWriter/
+                          rateLimiter oben), index.js (createNetworkPlugin
+                          — qu.connect()/qu.router/qu.webrtc()-Sugar)
   data/                  Kategorie 3 — Referenzen & Dateien: references.js
                           (obj://, key://, file:// — ReferenceHandler, Tiefen-
                           limit konfigurierbar), files/{manifest,transfer}.js
@@ -803,6 +805,24 @@ für schnelle lokale Tests oder kurzlebige Relay-Instanzen), sonst persistent
 Neustart) — derselbe `StorageAdapter`-Contract in beiden Fällen, austauschbar
 ohne dass der Relay-Kern selbst etwas davon weiß.
 
+**Schutz vor einem einzelnen flutenden oder fremd-weiterleitenden Peer:**
+zwei unabhängige, additive Optionen auf `DefaultReplication`/`qu.connect()`/
+`createRelay()` — beide betreffen nur eingehende Pushes, nie das ausgehende
+Routing. `rateLimiter` (ein `createRateLimiter()`, gleitendes Zeitfenster
+pro Fingerprint) begrenzt, wie viele Writes ein einzelner Peer pro Sekunde
+durch diese Verbindung schleusen darf — im Demo-Deployment (`index.js`)
+standardmäßig **aktiv** (200/s, `QU_RATE_LIMIT_MAX`/
+`QU_RATE_LIMIT_WINDOW_MS` einstellbar, `QU_RATE_LIMIT=0` schaltet ab), weil
+hier (anders als z. B. beim Test-Endpunkt) das ungeschützte `ingest()`
+selbst das Risiko ist, nicht ein zusätzlicher Endpunkt. `requireDirectWriter`
+(aus per Default, `QU_REQUIRE_DIRECT_WRITER=1`) verschärft das zu einer
+strikten Stern-Topologie: ein Push wird nur akzeptiert, wenn `qubit.writer`
+exakt der per Handshake bewiesene Fingerprint dieser einen Verbindung ist —
+kein Drittweiterleiten fremder (wenn auch gültig signierter) QuBits über
+diesen Relay. Details, inklusive warum das kein Core-Default ist (bricht
+legitime Mesh-/Gossip-Weiterleitung), stehen in
+[API.md](./API.md#relay-schutz-requiredirectwriter-ratelimiter).
+
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,
 browserfähigen `src/index.js` exportiert — jede Seite, die davon
@@ -1057,7 +1077,7 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Status
 
-151 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+156 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
 CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
 Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
 Dieselben Fälle laufen auch im vereinheitlichten Browser-Dashboard

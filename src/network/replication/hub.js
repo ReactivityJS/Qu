@@ -20,6 +20,11 @@ import { DefaultFileTransfer } from '../../data/files/transfer.js';
  * + FileStorageAdapter) — this is a convenience composition, not a new
  * dependency from the Replication module onto the Files module's
  * internals.
+ *
+ * `requireDirectWriter`/`rateLimiter` are opt-in incoming-push protections,
+ * applied identically to every channel this Hub attaches — see
+ * DefaultReplication's own doc comment for what each does. Off by default,
+ * same as there.
  */
 export class ReplicationHub {
   #runtime;
@@ -30,13 +35,17 @@ export class ReplicationHub {
   #repls = new Map();      // channel.id -> DefaultReplication
   #transfers = new Map();  // channel.id -> DefaultFileTransfer
   #byFingerprint = new Map(); // fingerprint -> channel.id (last-attached wins for a given fingerprint)
+  #requireDirectWriter;
+  #rateLimiter;
 
-  constructor(runtime, { identity = null, getACL = async () => null, pushTopics = [], fileStorage = null } = {}) {
+  constructor(runtime, { identity = null, getACL = async () => null, pushTopics = [], fileStorage = null, requireDirectWriter = false, rateLimiter = null } = {}) {
     this.#runtime = runtime;
     this.#identity = identity;
     this.#getACL = getACL;
     this.#pushTopics = pushTopics;
     this.#fileStorage = fileStorage;
+    this.#requireDirectWriter = requireDirectWriter;
+    this.#rateLimiter = rateLimiter;
   }
 
   async attach(channel) {
@@ -45,6 +54,8 @@ export class ReplicationHub {
       getACL: this.#getACL,
       peerFingerprint,
       pushTopics: this.#pushTopics,
+      requireDirectWriter: this.#requireDirectWriter,
+      rateLimiter: this.#rateLimiter,
     });
     this.#repls.set(channel.id, repl);
 

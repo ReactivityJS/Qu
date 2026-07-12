@@ -33,9 +33,25 @@ export async function createRelay({
   fileStorage = new MemoryFileStorageAdapter(),
   identity,
   pushTopics = [],
+  // Both opt-in incoming-push protections (network/replication/default.js),
+  // applied identically to every connection this relay attaches:
+  //   requireDirectWriter — only accept a push whose qubit.writer is the
+  //     connection's own proven fingerprint, i.e. a strict star topology
+  //     (this relay only ever hears a write from its actual author, never
+  //     forwarded/relayed by a third party). Off by default because a
+  //     legitimate mesh/gossip topology (e.g. a client relaying what it
+  //     learned from a WebRTC peer onward to its own mirror connection)
+  //     needs writer !== the connection it arrives on.
+  //   rateLimiter — a createRateLimiter() instance (network/rate-limiter.js)
+  //     or compatible `{ allow(key) }`, capping how many writes per second
+  //     a single fingerprint may push through THIS relay. `null` (default)
+  //     leaves the relay unprotected against flooding — pass one in for
+  //     anything reachable beyond localhost/trusted clients.
+  requireDirectWriter = false,
+  rateLimiter = null,
 } = {}) {
   const relay = (await Qu.create({ store, identity })).use(createSpacesPlugin()); // generic (non-User) rooms — the relay's own Runtime enforces this on every incoming push, exactly like any other write
-  const hub = new ReplicationHub(relay.runtime, { identity: relay.identity, getACL: relay.acl, pushTopics });
+  const hub = new ReplicationHub(relay.runtime, { identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter });
   const connected = new Map(); // fingerprint -> { channel, fileTransfer }
 
   // Proactively mirror a file's chunks from its uploader while they're

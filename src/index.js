@@ -69,6 +69,7 @@ export { DefaultReplication } from './network/replication/default.js';
 export { ReplicationHub } from './network/replication/hub.js';
 export { assertReplicationProvider } from './network/replication/provider.js';
 export { createNetworkPlugin } from './network/index.js';
+export { createRateLimiter } from './network/rate-limiter.js';
 
 // Category 3 — data: references (obj://, key://, file://) and files.
 export {
