@@ -17,7 +17,7 @@ import { startServer } from './server/static-server.mjs';
 import { createTestRoutes } from './server/test-runner.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
-import { QuStore, NullAdapter, enableConsoleDebug } from './src/index.js';
+import { QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug } from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
 
@@ -51,11 +51,18 @@ if (process.env.QU_DEBUG !== '0') {
 // QU_ENABLE_TEST_ENDPOINT=1 — see server/test-runner.mjs for why.
 const server = startServer({ root, port, routes: createTestRoutes({ root }) });
 
+// Two supported startup modes, chosen once at process start — flüchtig
+// (in-memory, gone on restart, no disk I/O at all: quick local testing,
+// ephemeral relay instances) or persistent (the default: a durable,
+// file-backed mirror that survives a restart). `QU_STORE=memory` to opt
+// into the former; anything else (including unset) keeps the previous,
+// always-persistent default so existing deployments see no behavior change.
+const persistent = process.env.QU_STORE !== 'memory';
 const store = new QuStore([
-  { prefix: '', adapter: new FileSystemStorageAdapter(path.join(dataDir, 'qubits.ndjson')) },
+  { prefix: '', adapter: persistent ? new FileSystemStorageAdapter(path.join(dataDir, 'qubits.ndjson')) : new MemoryAdapter() },
   { prefix: 'signal/', adapter: new NullAdapter() },
 ]);
-const fileStorage = new FileSystemFileStorageAdapter(path.join(dataDir, 'files'));
+const fileStorage = persistent ? new FileSystemFileStorageAdapter(path.join(dataDir, 'files')) : new MemoryFileStorageAdapter();
 const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'] });
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
 

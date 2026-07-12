@@ -795,7 +795,13 @@ minimaler RFC-6455-WebSocket-Server ohne Abhängigkeit.
 `index.js` entscheidet als konkretes Deployment, **was** persistiert wird
 (Filesystem-Adapter, `.relay-data/`) und **welche** Topics gerouted werden
 (`qu-demo-room/`) — das ist Konfiguration an der richtigen Stelle, nicht im
-Relay-Kern eingebaut.
+Relay-Kern eingebaut. Zwei Startmodi, per `QU_STORE`-Umgebungsvariable
+gewählt (Default: persistent, unverändertes Verhalten): `QU_STORE=memory`
+für flüchtig (`MemoryAdapter`/`MemoryFileStorageAdapter`, kein Datei-I/O,
+für schnelle lokale Tests oder kurzlebige Relay-Instanzen), sonst persistent
+(`FileSystemStorageAdapter`/`FileSystemFileStorageAdapter`, übersteht einen
+Neustart) — derselbe `StorageAdapter`-Contract in beiden Fällen, austauschbar
+ohne dass der Relay-Kern selbst etwas davon weiß.
 
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,
@@ -1051,17 +1057,19 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Status
 
-135 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+151 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
 CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
 Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
 Dieselben Fälle laufen auch im vereinheitlichten Browser-Dashboard
 (`test/index.html`, siehe [Abschnitt "Im Browser"](#im-browser-server-starten))
 — Node-only-Dateien (echtes `node:fs`/`node:net`) optional serverseitig
 mitgeliefert, sofern `QU_ENABLE_TEST_ENDPOINT=1` gesetzt ist.
-`LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter` (Browser-only)
-sind wie `webrtc-channel-browser.mjs` nicht per CLI testbar — kein Browser,
-keine `localStorage`/`indexedDB`-Globals in Node; ein eigener, automatisierter
-Testfall für diese drei im Browser-Dashboard steht noch aus (bisher nur
-manuell über Lab 3 geprüft).
+Jeder `StorageAdapter` (`MemoryAdapter`/`NullAdapter` sowie die drei
+Browser-only-Adapter) ist jetzt gegen denselben gemeinsamen Contract-Test
+geprüft (`test/helpers.mjs`s `assertStorageAdapterContract()`) —
+`LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter` brauchen dafür
+echte Browser-Globals (kein `localStorage`/`indexedDB` in Node), laufen unter
+`npm test` deshalb absichtlich als dokumentierter No-op und werden erst im
+Browser-Dashboard tatsächlich geprüft (`test/storage-adapters-browser.test.mjs`).
 Offen: SQLite-Adapter für `StorageAdapter`/`FileStorageAdapter`
 (mechanisch, kein Architekturrisiko).
