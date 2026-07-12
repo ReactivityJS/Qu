@@ -54,6 +54,7 @@ export class QuSession {
   }
 
   async publish(id, plainValue, { ts, encryptFor: recipients, refs } = {}) {
+    id = String(id); // tolerate anything with a sensible toString() (e.g. QuSpace), not just plain strings
     let value = plainValue;
     if (recipients && recipients.length) {
       if (!this.#identity) throw new Error('[Session] Cannot encrypt without an identity');
@@ -110,7 +111,7 @@ export class QuSession {
   }
 
   async get(id) {
-    const q = await this.#runtime.get(id);
+    const q = await this.#runtime.get(String(id)); // tolerate anything with a sensible toString() (e.g. QuSpace)
     if (q && this.#getACL) {
       const [visible] = await filterForReader([q], this.fingerprint, this.#getACL);
       if (!visible) return null;
@@ -119,13 +120,14 @@ export class QuSession {
   }
 
   async query(pattern) {
-    let rows = await this.#runtime.query(pattern);
+    let rows = await this.#runtime.query(String(pattern)); // tolerate anything with a sensible toString() (e.g. QuSpace)
     if (this.#getACL) rows = await filterForReader(rows, this.fingerprint, this.#getACL);
     return Promise.all(rows.map((q) => this.#decrypt(q)));
   }
 
   /** See Runtime.on() for `initial`/`once` semantics — this is the same thing, but every delivered qubit (initial batch and live) goes through decrypt() first, matching query()'s existing behaviour. */
   on(pattern, callback, opts) {
+    pattern = String(pattern); // tolerate anything with a sensible toString() (e.g. QuSpace)
     const decryptedSubscribe = (p, cb) => this.#runtime.on(p, (q) => {
       // Deliberately NOT `return this.#decrypt(q).then(cb)` — a bare
       // block-body arrow here previously discarded that promise entirely,

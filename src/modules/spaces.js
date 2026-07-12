@@ -71,6 +71,13 @@ export async function createSpace(session, { writers = [], readers = ['*'], admi
  * every Qu instance sharing this Runtime, not just the caller) and attaches
  * `qu.createSpace(opts)`. Without this, `createChatRoom()`/any multi-writer
  * Space is unwritable — the Core default only ever grants `~<own fingerprint>`.
+ *
+ * `qu.createSpace(opts)` returns a `QuSpace` (via `qu.space(spaceId)`), not
+ * a raw id string — so the manifest write and the room's first real write
+ * can both go through the same handle. Still safe to use exactly like the
+ * old raw SpaceId anywhere a string was expected (`${room}/msg`,
+ * `JSON.stringify({ room })`, or passing it straight into
+ * `qu.publish(room, ...)`) — see core/space-handle.js.
  */
 export function createSpacesPlugin() {
   return {
@@ -78,7 +85,8 @@ export function createSpacesPlugin() {
       qu.setACLResolver(createSpaceACLResolver(qu.runtime));
       qu.createSpace = async (opts) => {
         if (qu.isGuest) throw new Error('[Spaces] Guest-Sessions haben kein Schreibrecht (versucht: createSpace). Mit Qu.create({ identity }) eine echte Identität verwenden.');
-        return createSpace(qu.session, opts);
+        const spaceId = await createSpace(qu.session, opts);
+        return qu.space(spaceId);
       };
     },
   };

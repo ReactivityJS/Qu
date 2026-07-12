@@ -23,6 +23,7 @@ export { QuRuntime } from './core/runtime.js';
 export { QuStore } from './core/store.js';
 export { QuSession } from './core/session.js';
 export { QuIdentity } from './core/identity.js';
+export { QuSpace } from './core/space-handle.js';
 export { QuClock } from './core/clock.js';
 export { debug, onDebug, enableConsoleDebug } from './core/debug.js';
 export { assertChannel, createLoopbackChannelPair } from './core/channel.js';

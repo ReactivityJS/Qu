@@ -10,9 +10,10 @@
 // dürfen die Liste zwar lesen (readers: ['*']), aber nicht verändern, bis
 // sie freigeschaltet sind.
 
-/** Erstellt eine neue, leere Liste. Rückgabe: die Space-ID (für den Link). */
+/** Erstellt eine neue, leere Liste. Rückgabe: die Space-ID (für den Link) — bewusst der reine String, nicht das QuSpace-Handle, das qu.createSpace() zurückgibt: die Funktionen unten (getListManifest etc.) nehmen weiterhin überall listId als plain string entgegen. */
 export async function createTodoList(qu) {
-  return qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] });
+  const space = await qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] });
+  return space.id;
 }
 
 /** Aktueller Zustand des Manifests — u. a. um zu prüfen, wer schreiben darf. */

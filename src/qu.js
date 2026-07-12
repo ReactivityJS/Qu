@@ -2,6 +2,7 @@ import { QuRuntime } from './core/runtime.js';
 import { QuStore } from './core/store.js';
 import { QuSession } from './core/session.js';
 import { QuIdentity } from './core/identity.js';
+import { QuSpace } from './core/space-handle.js';
 import { userSpaceId } from './core/space.js';
 import { MemoryAdapter } from './adapters/memory.js';
 import { createVerifyPlugin } from './core/verify.js';
@@ -79,9 +80,24 @@ export class Qu {
   #aclResolver;
   #guest;
 
-  /** Primary entry point — async because generating/importing keys is inherently async. */
-  static async create({ identity, guest = false, runtime, store } = {}) {
-    const resolvedStore = store ?? new QuStore([{ prefix: '', adapter: new MemoryAdapter() }]);
+  /**
+   * Primary entry point — async because generating/importing keys is
+   * inherently async.
+   *
+   * `mounts` is sugar for `store`: pass the same `{ prefix, adapter,
+   * replicate? }[]` shape `new QuStore(mounts)` would take, without
+   * constructing the QuStore yourself — this is the config-object answer to
+   * "which StorageAdapter for which kind of data" (memory/session/
+   * persistent, or a NullAdapter for a pure ephemeral event-bus mount, see
+   * README's "Arten von Events"). Ignored if `store` is given directly.
+   *
+   * `plugins` is sugar for calling `.use(plugin)` once per entry, in order,
+   * right after construction — for apps that always want Spaces/Files/
+   * References/Network available without a separate `.use()` chain:
+   *   Qu.create({ plugins: [createSpacesPlugin(), createFileHandlerPlugin({ fileStorage })] })
+   */
+  static async create({ identity, guest = false, runtime, store, mounts, plugins = [] } = {}) {
+    const resolvedStore = store ?? new QuStore(mounts ?? [{ prefix: '', adapter: new MemoryAdapter() }]);
     const resolvedRuntime = runtime ?? new QuRuntime({ store: resolvedStore });
     const aclResolver = wireRuntime(resolvedRuntime);
 
@@ -96,7 +112,9 @@ export class Qu {
       resolvedIdentity = await QuIdentity.generate(); // guests still get a real, ephemeral identity — see class doc
     }
 
-    return new Qu({ runtime: resolvedRuntime, store: resolvedStore, identity: resolvedIdentity, guest, aclResolver });
+    const qu = new Qu({ runtime: resolvedRuntime, store: resolvedStore, identity: resolvedIdentity, guest, aclResolver });
+    for (const plugin of plugins) qu.use(plugin);
+    return qu;
   }
 
   /** Lower-level, synchronous constructor for when you already have a resolved identity/runtime (e.g. sharing a Runtime — pass `runtime: other.runtime`). Prefer `Qu.create()` unless you need this. */
@@ -115,6 +133,20 @@ export class Qu {
   get isGuest() { return this.#guest; }
   get userSpaceId() { return this.fingerprint ? userSpaceId(this.fingerprint) : null; }
   async exportKeys() { return this.identity ? this.identity.exportKeys() : null; }
+
+  /**
+   * A QuSpace bound to `spaceId` — publish/append/get/query/on with paths
+   * relative to that Space instead of spelled out in full each time. Works
+   * for any Space you know the id of: your own, another user's
+   * ("~<their-fp>"), or a generic Space (its UUID) — see core/space-handle.js.
+   * Building the handle needs no plugin and does no manifest lookup; only
+   * the actual calls made through it are ACL-checked, exactly as if you'd
+   * called qu.publish()/qu.get() with the full id yourself.
+   */
+  space(spaceId) { return new QuSpace(this.#session, spaceId, { guest: this.#guest }); }
+
+  /** `qu.own` is `qu.space(qu.userSpaceId)` — the ergonomic default for "my own Space", always available without any plugin (see core/identity-acl.js's structural default). */
+  get own() { return this.space(this.userSpaceId); }
 
   #assertCanWrite(action) {
     if (this.#guest) throw new Error(`[Qu] Guest-Sessions haben kein Schreibrecht (versucht: ${action}). Mit Qu.create({ identity }) eine echte Identität verwenden.`);

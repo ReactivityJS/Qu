@@ -99,9 +99,21 @@ await alice.publish(`${alice.userSpaceId}/status`, 'online'); // eigener Context
 await alice.publish('irgendein/anderer/pfad', 'x');             // ein anderer Context — wirft: [ACL] Write denied
 ```
 
+**`qu.own`** ist derselbe eigene Context, nur ohne `${alice.userSpaceId}/`
+bei jedem Aufruf auszuschreiben — ein `QuSpace`-Handle, das jeden Pfad
+relativ zu genau diesem Space auflöst (`publish`/`append`/`get`/`query`/
+`on`, gleiche Signaturen, nur ohne den Präfix):
+
+```js
+await alice.own.publish('status', 'online'); // exakt dieselbe QuBit wie oben
+console.log((await alice.own.get('status')).value); // 'online'
+```
+
 Um in einem **anderen** Context zu schreiben — einem geteilten Space, oder
 dem Space einer anderen Person — muss dieser Context dich explizit als
-`writer` listen. Das übernimmt das Spaces-Plugin:
+`writer` listen. Das übernimmt das Spaces-Plugin. `qu.createSpace(opts)`
+liefert direkt ein `QuSpace`-Handle für den neuen Space zurück (statt nur
+die rohe Id) — Anlegen und erstes Schreiben laufen über dasselbe Objekt:
 
 ```js
 import { createSpacesPlugin } from './src/index.js';
@@ -111,11 +123,25 @@ import { createSpacesPlugin } from './src/index.js';
 // gleich Netzwerk/Sync mit hereinzunehmen (das kommt in Abschnitt 3 + 5).
 const bob = await Qu.create({ runtime: alice.runtime });
 alice.use(createSpacesPlugin());
-const roomId = await alice.createSpace({ writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] });
+const room = await alice.createSpace({ writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] });
 
-await alice.publish(`${roomId}/msg1`, 'hallo');   // erlaubt, weil roomId's Manifest alice als writer listet
-await bob.publish(`${roomId}/msg2`, 'hi zurück'); // erlaubt, gleicher Grund
+await room.publish('msg1', 'hallo');              // erlaubt, weil room's Manifest alice als writer listet
+await bob.publish(`${room}/msg2`, 'hi zurück');   // room funktioniert auch weiterhin wie ein roher String — ${room} interpoliert zur Id
 ```
+
+Einen bereits bekannten Space **laden** (statt neu anzulegen) — egal ob
+dein eigener, der einer anderen Person (`~<ihr-fingerprint>`), oder ein
+geteilter Raum, dessen Id z. B. über einen Link ankam:
+
+```js
+const bobsSpace = alice.space(bob.userSpaceId);        // ~<bob-fp> — liest, was bob öffentlich freigegeben hat
+const sameRoomAgain = bob.space(room.id);                // dieselbe room-Id, jetzt aus bobs Sicht
+```
+
+`qu.space(id)` selbst prüft nichts — es baut nur das Handle. Jeder
+tatsächliche `publish`/`get`/`query`/`on`-Aufruf darüber wird exakt so
+ACL-geprüft, wie ein direkter `qu.publish(id, ...)`-Aufruf es auch wäre;
+`qu.own` ist nichts als `qu.space(qu.userSpaceId)`.
 
 `publish(id, value)` überschreibt (LWW, benanntes Register); `append(collectionId,
 value)` hängt automatisch `/${fingerprint}/${ts}` an — für Sammlungen mit
@@ -123,8 +149,8 @@ mehreren unabhängigen Schreibern (Chat, Kommentare), die strukturell nie
 kollidieren können:
 
 ```js
-await alice.append(`${roomId}/msgs`, { text: 'erste Nachricht' }); // landet unter roomId/msgs/<alice-fp>/<ts>
-await bob.append(`${roomId}/msgs`, { text: 'zweite Nachricht' });   // eigener Namensraum, keine Kollision möglich
+await room.append('msgs', { text: 'erste Nachricht' });  // landet unter room/msgs/<alice-fp>/<ts>
+await bob.append(`${room}/msgs`, { text: 'zweite Nachricht' }); // eigener Namensraum, keine Kollision möglich
 ```
 
 ### 3. Sync, Mirror, Relay
@@ -164,8 +190,11 @@ eigenes Gerät offline ist.
 
 ### 4. Arten von Events
 
-Ein "Event" in QU ist ein QuBit, das über `on()` zugestellt wird — zwei
-unabhängige Dimensionen bestimmen, was mit ihm passiert:
+Diese Matrix ist eine der zentralen Kernideen von QU, nicht nur eine
+Konfigurationsoption unter vielen: **jedes** `publish()`/`append()` ist ein
+Event, und genau zwei unabhängige Dimensionen legen vollständig fest, was
+mit ihm passiert — es gibt keine dritte, versteckte Form. Ein "Event" in QU
+ist schlicht ein QuBit, das über `on()` zugestellt wird:
 
 **Ort — lokal oder remote-shared:**
 - **Lokal**: kein Network-Plugin installiert/verbunden — `publish()`/`append()` bleibt auf diesem Prozess/Tab.
@@ -200,6 +229,34 @@ const proSitzung = await Qu.create({ store: new QuStore([{ prefix: '', adapter: 
 const dauerhaft  = await Qu.create({ store: new QuStore([{ prefix: '', adapter: new LocalStorageAdapter() }]) });
 ```
 
+`Qu.create({ mounts })` ist Sugar für genau das, ohne selbst ein `QuStore`
+zu bauen — verschiedene Präfixe auf verschiedenen Adaptern in einem
+Konfig-Objekt, die direkte Antwort auf "welcher StorageAdapter für welche
+Art von Event":
+```js
+import { Qu, MemoryAdapter, NullAdapter, LocalStorageAdapter } from './src/index.js';
+
+const qu = await Qu.create({
+  mounts: [
+    { prefix: '', adapter: new LocalStorageAdapter() },          // Standard: dauerhaft
+    { prefix: '~fp/presence/', adapter: new NullAdapter() },     // reiner Event-Bus, nie persistiert
+    { prefix: '~fp/draft/', adapter: new MemoryAdapter() },      // session-lang, absichtlich flüchtig
+  ],
+});
+```
+Ebenso `Qu.create({ plugins })` — Sugar für eine `use()`-Schleife direkt
+nach dem Anlegen, für Apps, die Spaces/Files/Referenzen/Network immer dabei
+haben wollen, ohne eine separate `use()`-Kette zu schreiben:
+```js
+import { Qu, createSpacesPlugin, createFileHandlerPlugin, MemoryFileStorageAdapter } from './src/index.js';
+
+const qu = await Qu.create({
+  plugins: [createSpacesPlugin(), createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })],
+});
+```
+Beide Optionen sind rein additiv — `Qu.create()` ganz ohne sie verhält sich
+exakt wie bisher, komplett lokal, keine Plugins geladen.
+
 **Listener:** `on(pattern, callback, { initial?, once? })` — `initial: true`
 liefert erst alles bereits Passende, danach laufend Neues (kein manuelles
 `query()` + `on()` mehr nötig); `once: true` liefert nur den aktuellen
@@ -223,7 +280,7 @@ qu.runtime.emit('lab.progress', { step: 3 });
 // Remote-shared: zwei GETRENNTE Runtimes (anders als bobs geteilte Runtime
 // in Abschnitt 2!), verbunden per Loopback-Channel — für einen echten
 // Relay createWebSocketChannel(url) statt createLoopbackChannelPair().
-// Absichtlich unter alice' EIGENEM User-Space (nicht roomId aus Abschnitt 2)
+// Absichtlich unter alice' EIGENEM User-Space (nicht dem "room" aus Abschnitt 2)
 // — der ist auf jeder Runtime strukturell gültig, ganz ohne Spaces-Plugin
 // oder eine erst noch zu synchronisierende Manifest-QuBit auf bobRemotes
 // Seite (siehe Abschnitt 2: fingerprint = hash(pubKey) macht "alice darf
@@ -256,6 +313,7 @@ bei der jede klassische DB-Frage eine direkte Entsprechung hat:
 | Welche Storage-Engine? | Austauschbarer `StorageAdapter` — Memory/Session/Local/IndexedDB/Filesystem, identische API (Abschnitt 4) |
 | Wie repliziere ich zu einer entfernten Kopie? | `qu.connect()` + `pushTopics`/`role: 'mirror'` — derselbe Space, gespiegelt auf einen Relay-Prozess (Abschnitt 3) |
 | Wie sind Rechte modelliert? | Pro Space (nicht pro Tabelle/Zeile): ein Manifest mit `writers`/`readers`/`admins`, write-seitig als Middleware erzwungen (`runtime.ingest()`), read-seitig gefiltert (`filterForReader()`) |
+| Wie adressiere ich relativ statt jedes Mal den vollen Pfad? | `QuSpace` (`qu.own`, `qu.space(id)`, `qu.createSpace()`) — ein Handle, an einen Space gebunden, `publish`/`get`/`query`/`on` relativ dazu (Abschnitt 2) |
 | Ordering-Garantie? | Hybrid-Logical-Clock (`runtime.nextTs()`) statt Wall-Clock — konsistente Ordering-Entscheidungen auch über mehrere Schreiber/Geräte hinweg |
 
 Ein Client, der lokal schreibt, ein Relay mit durablem Storage, und beliebig
@@ -278,13 +336,18 @@ src/
                           (Core + Memory/Null-Adapter + alle Plugin-Factories —
                           kein node:fs, kein Browser-only-Code zwingend geladen)
   qu.js                   Qu — schlanke Fassade: Identity/Session/publish+append+
-                          get+query+on, plus generisches qu.use(plugin) und
-                          qu.setACLResolver() (der Erweiterungspunkt, den
-                          createSpacesPlugin() nutzt)
+                          get+query+on, qu.own/qu.space(id) (QuSpace-Handles),
+                          generisches qu.use(plugin), qu.setACLResolver() (der
+                          Erweiterungspunkt, den createSpacesPlugin() nutzt),
+                          Qu.create({ mounts?, plugins? }) als Sugar für einen
+                          eigenen QuStore bzw. eine use()-Kette
   core/                  lokal, offline-sicher, keine Netzwerk-/Storage-Vendor-
                           Abhängigkeit: Pipeline, Runtime, Store (Adapter-Mounts),
-                          Session, Identity, Clock, Subscription Engine (Trie),
-                          Channel-Contract, StorageAdapter-Contract, Space,
+                          Session, Identity, Space-Handle (QuSpace — an einen
+                          Space gebundenes publish/get/query/on, reine
+                          Adressierung, kein Policy-Entscheid), Clock,
+                          Subscription Engine (Trie), Channel-Contract,
+                          StorageAdapter-Contract, Space (String-Helfer),
                           Bytes, Debug, Verify (Zero-Trust-Signaturprüfung),
                           ACL-Enforcement, **Identity-ACL** (Zero-Config-
                           Default: nur dein eigenes ~<fingerprint> ist
@@ -355,6 +418,7 @@ src/
                           nicht im Barrel `src/index.js`, direkt importieren.
 test/
   qu.test.mjs               Tests für die Qu-Fassade
+  space-handle.test.mjs         Tests für QuSpace (qu.own/qu.space()/createSpace()) und Qu.create({ mounts, plugins })
   chat.test.mjs               Tests für das Chat-Modul (inkl. Kollisionssicherheit, Presence, Lesebestätigungen)
   relay.test.mjs               End-to-End gegen den echten WebSocket-Relay (native WebSocket-Clients, kein Loopback)
   references.test.mjs            obj://, key://, file://, Tiefenlimit, Zyklenschutz
@@ -467,9 +531,21 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
    und zusätzliche Writer auf einem User-Space per Manifest. Fügt
    `qu.createSpace(opts)` hinzu — ohne dieses Plugin existiert die Methode
    nicht, und `createChatRoom()`/jede Multi-Writer-Anwendung ist
-   unbeschreibbar. Kein Storage-/Netzwerk-Bezug, also weiterhin offline-
-   sicher — aber eine echte Policy-Entscheidung, kein struktureller
-   Core-Bestandteil, deshalb Plugin statt Default.
+   unbeschreibbar. `qu.createSpace(opts)` liefert ein `QuSpace`-Handle
+   zurück (siehe unten), nicht nur die rohe Id. Kein Storage-/Netzwerk-Bezug,
+   also weiterhin offline-sicher — aber eine echte Policy-Entscheidung, kein
+   struktureller Core-Bestandteil, deshalb Plugin statt Default.
+
+**`QuSpace`** (`src/core/space-handle.js`) ist dagegen Core, nicht Plugin —
+ein reines Adressierungs-Hilfsmittel, kein Policy-Entscheid, kostet keinen
+Storage-/Manifest-Zugriff, um zu *bauen*. `qu.own` (= `qu.space(qu.userSpaceId)`)
+und `qu.space(id)` sind für **jede** `Qu`-Instanz da, mit oder ohne Spaces-
+Plugin — nur `qu.createSpace()` (neue generische Spaces anlegen) braucht das
+Plugin, weil das ein echter Manifest-Write mit Policy-Entscheidung ist.
+Ein Handle prüft selbst nichts: jeder `publish`/`get`/`query`/`on`-Aufruf
+darüber läuft exakt so durch die ACL wie derselbe Aufruf mit dem vollen
+Pfad direkt auf `qu`. `toString()`/`toJSON()` machen ein Handle überall
+einsetzbar, wo bisher ein roher SpaceId-String erwartet wurde.
 
 `chat.js` (`src/modules/chat.js`, `createChatPlugin()`) ist die eine
 lockerere, nicht-numerierte Kategorie: ein fertiger Baustein, ausschließlich
@@ -760,6 +836,18 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
   in `Session`.
 - **Store ist die Offline-Queue:** keine separate Outbox-Datenstruktur;
   reziproker Sync entleert beide Richtungen bei Reconnect.
+- **Jedes Event ist Ort × Dauerhaftigkeit, sonst nichts:** lokal oder
+  remote-shared (Network-Plugin ja/nein), gekreuzt mit flüchtig
+  (`runtime.emit()`, kein QuBit) / `NullAdapter` (echtes QuBit, nie
+  gespeichert) / Memory / Session / persistent (Local/IndexedDB/Filesystem)
+  — dieselbe `publish()`/`on()`-API in jeder Kombination, nur der
+  `StorageAdapter`-Mount und ob ein Network-Plugin verbunden ist ändern
+  sich (siehe [Grundkonzepte, Abschnitt 4](#4-arten-von-events)).
+- **`QuSpace` ist Adressierung, kein Policy-Entscheid:** `qu.own`/
+  `qu.space(id)`/`qu.createSpace()` geben ein an einen Space gebundenes
+  Handle zurück (`publish`/`get`/`query`/`on` relativ dazu) — kostet nichts,
+  prüft nichts selbst, jeder Aufruf darüber läuft exakt so durch die ACL wie
+  derselbe Aufruf mit vollem Pfad auf `qu`.
 - **Alles Optionale ist ein Plugin:** Storage-Adapter jenseits von
   Memory/Null, Network (Replication/Transporte/Routing), Referenzen/
   Dateien, Spaces-ACL-Resolver und Chat sind austauschbar, docken über
@@ -770,7 +858,7 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Status
 
-117 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+127 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
 CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
 Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
 `LocalStorageAdapter`/`SessionStorageAdapter`/`IndexedDBAdapter` (neu,

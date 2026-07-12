@@ -16,20 +16,21 @@ import { QuRuntime, QuSession, QuIdentity, /* ... */ } from './src/index.js';
 ## Inhalt
 
 1. [Qu — Facade (empfohlener Einstieg)](#qu-facade-empfohlener-einstieg)
-2. [QuRuntime](#quruntime) — der Core
-3. [QuStore](#qustore) — Persistenz & Mounts
-4. [QuSession](#qusession) — Identität, Verschlüsselung, Rechte (von `Qu` intern genutzt)
-5. [QuIdentity](#quidentity) — Schlüssel, Signatur, Fingerprint
-6. [Channel & Handshake](#channel-handshake) — Transport-Contract
-7. [Space-Helfer](#space-helfer) — Adressierung
-8. [Adapter](#adapter) — Storage-Contracts
-9. [Plugins](#plugins) — Verify & ACL
-10. [Spaces-Modul](#spaces-modul) — ACL-Resolver
-11. [Replication-Modul](#replication-modul) — Sync
-12. [Files-Modul](#files-modul) — Datei-Transfer
-13. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
-14. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
-15. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`
+2. [QuSpace](#quspace) — an einen Space gebundenes Handle (`qu.own`/`qu.space(id)`)
+3. [QuRuntime](#quruntime) — der Core
+4. [QuStore](#qustore) — Persistenz & Mounts
+5. [QuSession](#qusession) — Identität, Verschlüsselung, Rechte (von `Qu` intern genutzt)
+6. [QuIdentity](#quidentity) — Schlüssel, Signatur, Fingerprint
+7. [Channel & Handshake](#channel-handshake) — Transport-Contract
+8. [Space-Helfer](#space-helfer) — Adressierung
+9. [Adapter](#adapter) — Storage-Contracts
+10. [Plugins](#plugins) — Verify & ACL
+11. [Spaces-Modul](#spaces-modul) — ACL-Resolver
+12. [Replication-Modul](#replication-modul) — Sync
+13. [Files-Modul](#files-modul) — Datei-Transfer
+14. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
+15. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
+16. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`
 
 ---
 
@@ -51,7 +52,9 @@ ist).
 | `identity` | `QuIdentity \| ExportedKeys \| undefined` | — | Wiederverwenden einer Identität oder zuvor exportierter Schlüssel (`{signPub, signPriv, encPub, encPriv}`) |
 | `guest` | `boolean` | `false` | Erzeugt eine echte, aber temporäre Identität — jede Schreib-Methode lehnt sofort ab, unabhängig von der Space-ACL |
 | `runtime` | `QuRuntime` | neu erzeugt | Eine bestehende Runtime teilen (z. B. mehrere Nutzer auf einem Server-Prozess) |
-| `store` | `QuStore` | `MemoryAdapter`-basiert | Nur relevant, wenn `runtime` nicht mitgegeben wird |
+| `store` | `QuStore` | `MemoryAdapter`-basiert | Nur relevant, wenn `runtime` nicht mitgegeben wird. Gewinnt über `mounts`, falls beides gesetzt ist |
+| `mounts` | `{ prefix, adapter, replicate? }[]` | `[{ prefix: '', adapter: new MemoryAdapter() }]` | Sugar für `store: new QuStore(mounts)`, ohne selbst ein `QuStore` zu bauen — verschiedene `StorageAdapter` für verschiedene Präfixe/Event-Arten in einem Konfig-Objekt. Ignoriert, falls `store` gesetzt ist |
+| `plugins` | `(Plugin)[]` | `[]` | Jeder Eintrag wird nach der Konstruktion einmal per `qu.use(plugin)` installiert, in Array-Reihenfolge — Sugar für eine `use()`-Kette |
 
 Ohne `identity`/`guest` wird automatisch eine neue Identität erzeugt.
 Verify- und ACL-Middleware werden pro `runtime`-Instanz nur einmal
@@ -61,6 +64,14 @@ registriert, auch wenn mehrere `Qu.create()`-Aufrufe dieselbe Runtime teilen.
 const alice = await Qu.create();                       // neue Identität, eigenes Gerät
 const bob = await Qu.create({ runtime: alice.runtime }); // teilt Alice' Runtime (z. B. ein Server-Prozess)
 const guest = await Qu.create({ guest: true });           // liest, schreibt nie
+
+const configured = await Qu.create({
+  mounts: [
+    { prefix: '', adapter: new LocalStorageAdapter() },
+    { prefix: '~fp/presence/', adapter: new NullAdapter() },
+  ],
+  plugins: [createSpacesPlugin(), createNetworkPlugin()],
+});
 ```
 
 ### `new Qu({ runtime, store?, identity?, guest?, acl? })`
@@ -112,10 +123,14 @@ const profile = await bob.readProfile(alice.fingerprint);
 // { alias: 'alice', pub: '<fp>', epub: {...JWK} }
 ```
 
-### Spaces
-`qu.createSpace({ writers?, readers?, admins? })` → `Promise<SpaceId>` —
-wie [`createSpace()`](#spaces-modul), aber ohne die Session separat zu
-übergeben.
+### Spaces & Space-Handles
+`qu.own` → `QuSpace` — gebunden an den eigenen User-Space (`qu.space(qu.userSpaceId)`), immer verfügbar, kein Plugin nötig.
+`qu.space(spaceId)` → `QuSpace` — gebunden an einen beliebigen bekannten Space (eigener, `~<fremder-fp>`, oder generische Space-Id); baut nur das Handle, prüft nichts.
+`qu.createSpace({ writers?, readers?, admins? })` → `Promise<QuSpace>` —
+wie [`createSpace()`](#spaces-modul) (Modul-Funktion, braucht das
+Spaces-Plugin), aber ohne die Session separat zu übergeben, und liefert
+direkt ein `QuSpace`-Handle für den neuen Space statt nur der rohen Id —
+siehe [`QuSpace`](#quspace).
 
 ### Replication (optionales Modul, hier bequem verdrahtet)
 `qu.connect(channel, { pushTopics?, role?, group?, metric? })` → `Promise<DefaultReplication>` —
@@ -177,6 +192,61 @@ const { a, b } = createLoopbackChannelPair();
 const [replAlice, replBob] = await Promise.all([alice.connect(a), bob.connect(b)]);
 await alice.publish('chat/room1/msg1', 'hallo');
 await replBob.sync({ topic: 'chat/room1', since: 0 });
+```
+
+---
+
+## QuSpace
+
+Ein dünnes, zustandsloses Handle, gebunden an einen Space (`src/core/space-handle.js`)
+— dieselbe `publish`/`append`/`get`/`query`/`on`-Oberfläche wie `Qu` selbst,
+nur dass jeder Pfad relativ zu diesem Space aufgelöst wird, statt jedes Mal
+vollständig ausgeschrieben zu werden. Kein neuer Identitäts-/Session-
+Mechanismus — es wrappt dieselbe `QuSession`, die eine `Qu`-Instanz ohnehin
+schon hat, also werden Writes exakt so signiert/ACL-geprüft, als hättest du
+`qu.publish()` mit dem vollen Pfad selbst aufgerufen. Ein Handle prüft
+nichts beim Bauen — nur die tatsächlichen Aufrufe darüber, genau wie sonst.
+
+Drei Wege, eines zu bekommen (siehe [Qu — Facade](#qu-facade-empfohlener-einstieg)):
+- `qu.own` — gebunden an den eigenen User-Space, immer verfügbar.
+- `qu.space(spaceId)` — gebunden an jeden bekannten Space (eigener, `~<fremder-fp>`, generisch).
+- `qu.createSpace(opts)` — legt einen neuen generischen Space an (Spaces-Plugin nötig) und gibt direkt ein Handle dafür zurück.
+
+### `new QuSpace(session, spaceId, { guest? })`
+Niedrigerer Konstruktor — `qu.own`/`qu.space()` nutzen ihn intern, direkt
+aufrufbar für eine `QuSession` ganz ohne `Qu`-Fassade.
+
+### `space.id` → `string`
+Die rohe Space-Id.
+
+### `space.toString()` / `space.toJSON()`
+Beide liefern `space.id` — ein `QuSpace` ist damit überall einsetzbar, wo
+bisher ein roher SpaceId-String erwartet wurde: `` `${space}/msg` `` (Template-
+Literal-Interpolation), `JSON.stringify({ space })` (auch verschachtelt),
+und sogar direkt als `id`-Argument an `qu.publish(space, ...)`/`qu.get(space)`
+— `QuSession`s öffentliche Methoden coercen jedes `id`/`pattern`-Argument
+mit `String(...)`, bevor sie es verwenden.
+
+### `space.publish(subpath, value, opts?)` / `space.append(subpath, value, opts?)`
+Wie `qu.publish`/`qu.append`, aber `subpath` wird zu `${space.id}/${subpath}`
+aufgelöst — ein leerer/weggelassener `subpath` adressiert `space.id` selbst
+(z. B. das Space-Manifest). Wirft für eine Guest-gebundene `Qu`-Instanz,
+identisch zu `qu.publish()`.
+
+### `space.get(subpath?)` / `space.query(pattern)` / `space.on(pattern, cb, opts?)`
+Wie die entsprechenden `qu`-Methoden, `subpath`/`pattern` ebenso relativ zu
+`space.id` aufgelöst.
+
+```js
+const alice = await Qu.create();
+await alice.own.publish('status', 'online');           // == alice.publish(`${alice.userSpaceId}/status`, 'online')
+
+alice.use(createSpacesPlugin());
+const room = await alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] });
+await room.publish('msg1', 'hallo');                    // == alice.publish(`${room.id}/msg1`, 'hallo')
+
+const bob = await Qu.create({ runtime: alice.runtime });
+const sameRoom = bob.space(room.id);                    // dieselbe Space-Id, unabhängig rekonstruiert (z. B. aus einem Link)
 ```
 
 ---
@@ -542,7 +612,10 @@ Manifest-basierter ACL-Resolver, direkt einsetzbar in
 ### `createSpace(session, { writers?, readers?, admins? })` → `Promise<SpaceId>`
 Erzeugt einen neuen generischen Space: generiert eine UUID, veröffentlicht
 das Manifest-QuBit (`session.publish(spaceId, { admins, writers, readers, createdAt })`).
-`admins` defaultet auf `[session.fingerprint]`.
+`admins` defaultet auf `[session.fingerprint]`. Liefert die rohe Id als
+String — für ein `QuSpace`-Handle stattdessen `qu.createSpace(opts)` nutzen
+(siehe [`QuSpace`](#quspace)), die Fassaden-Sugar-Methode, die intern genau
+diese Funktion aufruft und das Ergebnis in `qu.space(spaceId)` einwickelt.
 
 ```js
 const acl = createSpaceACLResolver(runtime);
