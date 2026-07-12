@@ -393,29 +393,39 @@ src/
                           identischem Wert, Re-Render unterbleibt bei
                           identischem (id, ts) statt Wertevergleich — siehe
                           Doku-Kommentar in der Datei.
-    components.js             <qu-view>/<qu-bind> — Custom Elements über
-                          bindings.js: connectedCallback()/
+    components.js             <qu-view>/<qu-bind>/<qu-list> — Custom Elements
+                          über bindings.js: connectedCallback()/
                           disconnectedCallback() sind das on()/off(), das
                           bindings.js-Aufrufer bisher von Hand verdrahten
-                          mussten. Zwei Elemente, nicht vier: <qu-bind> ist
-                          <qu-view> plus Schreiben-zurück, eine
-                          überschriebene Methode statt eines zweiten
-                          Mechanismus. `path` (+ optional `key`, ergibt
-                          `${path}/${key}` als eigene Leaf-QuBit — deckt ein
-                          Objekt mit mehreren Properties als N
-                          Geschwister-Elemente ab, dieselbe "jedes Feld
-                          seine eigene Leaf-QuBit"-Philosophie wie
-                          bindObject()) und `attr` (Default wie bindKey
+                          mussten. <qu-bind> ist <qu-view> plus
+                          Schreiben-zurück, eine überschriebene Methode statt
+                          eines zweiten Mechanismus. `path` (+ optional
+                          `key`, ergibt `${path}/${key}` als eigene
+                          Leaf-QuBit — deckt ein Objekt mit mehreren
+                          Properties als N Geschwister-Elemente ab, dieselbe
+                          "jedes Feld seine eigene Leaf-QuBit"-Philosophie
+                          wie bindObject()) und `attr` (Default wie bindKey
                           selbst: value falls vorhanden, sonst textContent;
                           frei überschreibbar auf innerHTML/checked/jedes
-                          HTML-Attribut wie href/src/class). Bindet ein
-                          eingewickeltes einzelnes Kind-Element (z.B. ein
-                          echtes `<input>`) statt `is="..."` zu brauchen
-                          (fehlt in Safari). Qu-Instanz nie global: `.qu`
-                          als Property auf dem Element oder einem Vorfahren,
-                          per DOM-Walk gefunden — bewusst BROWSER-ONLY
-                          (erweitert HTMLElement beim Modul-Laden), deshalb
-                          nicht im Barrel `src/index.js`, direkt importieren.
+                          HTML-Attribut wie href/src/class). `path` selbst
+                          ist weglassbar, wenn der `.qu`-Context eine `.id`
+                          hat (ein QuSpace) — dann wird dessen eigene Id
+                          verwendet. Bindet ein eingewickeltes einzelnes
+                          Kind-Element (z.B. ein echtes `<input>`) statt
+                          `is="..."` zu brauchen (fehlt in Safari).
+                          `<qu-list path="...">` ist die deklarative Form
+                          von viewObject() — ein `<template>`-Kind, geklont
+                          pro Kind-QuBit, jeder Klon-Wurzel `.qu` auf
+                          `qu.space(<Item-Id>)` gesetzt, sodass `<qu-view
+                          key>`/`<qu-bind key>` im Template ihre Felder ohne
+                          Id-Wiederholung adressieren; deckt nur den
+                          Leaf-per-Field-Fall ab (siehe API.md). Qu-Instanz
+                          nie global: `.qu` als Property auf dem Element
+                          oder einem Vorfahren, per DOM-Walk gefunden — auch
+                          ein QuSpace (`qu.own`/`qu.space(id)`), nicht nur
+                          eine Qu-Instanz. Bewusst BROWSER-ONLY (erweitert
+                          HTMLElement beim Modul-Laden), deshalb nicht im
+                          Barrel `src/index.js`, direkt importieren.
 test/
   qu.test.mjs               Tests für die Qu-Fassade
   space-handle.test.mjs         Tests für QuSpace (qu.own/qu.space()/createSpace()) und Qu.create({ mounts, plugins })
@@ -794,11 +804,16 @@ startbar, jeder mit dem exakt gezeigten Code (keine narrative Annäherung):
    Bytes). Liste **und** Notizfeld sind **durchgängig reaktiv** und zeigen
    bewusst beide UI-Ebenen nebeneinander, jede dort, wo sie das richtige
    Werkzeug ist, statt auf Hand-verdrahtetem `qu.on(...)`:
-   `viewObject()` (`src/ui/bindings.js`, JS) für die Liste — "Kind-QuBits
-   unter einem Prefix aufzählen" hat kein deklaratives Gegenstück, bleibt
-   also JS (`initial: true` liefert beim Mounten zuerst, was schon da ist,
-   danach kommt jede Änderung — neuer Eintrag, neuer Upload — über dieselbe
-   Subscription herein) — und `<qu-bind>` (`src/ui/components.js`, Custom
+   `viewObject()` (`src/ui/bindings.js`, JS) für die Liste — die Einträge
+   liegen als EIN kombiniertes Objekt (`{name, category, avatar,
+   createdAt}`) statt als Leaf-per-Field vor und `category`/`avatar`
+   müssen erst über `resolveReference()` aufgelöst werden, beides
+   außerhalb dessen, was das deklarative `<qu-list>` abdeckt (siehe unten
+   und API.md) — hier bleibt JS also die richtige Wahl, nicht weil es
+   grundsätzlich keine deklarative Form gäbe (`initial: true` liefert beim
+   Mounten zuerst, was schon da ist, danach kommt jede Änderung — neuer
+   Eintrag, neuer Upload — über dieselbe Subscription herein) — und
+   `<qu-bind>` (`src/ui/components.js`, Custom
    Element) für ein zweiseitig gebundenes Notizfeld je Eintrag: Tippen
    schreibt sofort in eine eigene Leaf-QuBit (`<eintragId>/note`), kein
    Speichern-Knopf, `path`+`key` statt einem manuellen `bindKey()`-Aufruf,

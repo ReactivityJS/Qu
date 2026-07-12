@@ -30,7 +30,7 @@ import { QuRuntime, QuSession, QuIdentity, /* ... */ } from './src/index.js';
 13. [Files-Modul](#files-modul) — Datei-Transfer
 14. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
 15. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
-16. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`
+16. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`/`<qu-list>`
 
 ---
 
@@ -856,21 +856,20 @@ im Barrel `src/index.js`, direkt importieren:
 import '../../../src/ui/components.js'; // Seiteneffekt: registriert <qu-view>/<qu-bind>
 ```
 
-Zwei Elemente, nicht vier: `<qu-bind>` ist `<qu-view>` plus Schreiben-zurück,
-eine überschriebene Methode statt eines zweiten Mechanismus. Es gibt
-deliberately kein drittes "Objekt"/"Liste"-Element — ein Datensatz mit
-mehreren unabhängig schreibbaren Feldern ist N Geschwister-Elemente mit
-gleichem `path`-Präfix und je eigenem `key` (dieselbe Philosophie wie
-`bindObject()`); eine Sammlung (Kind-QuBits unter einem Prefix aufzählen)
-hat kein deklaratives Gegenstück und bleibt `viewObject()` (JS) — siehe
-`docs/lab/labs/05-references-practice.mjs` für ein Beispiel, das beide
-Ebenen bewusst nebeneinander zeigt.
+Drei Elemente: `<qu-bind>` ist `<qu-view>` plus Schreiben-zurück, eine
+überschriebene Methode statt eines zweiten Mechanismus; `<qu-list>` ist die
+deklarative Form von `viewObject()` (siehe unten), gebaut ausschließlich
+auf `<qu-view>`/`<qu-bind>` + `QuSpace` — kein vierter Mechanismus. Ein
+Datensatz mit mehreren unabhängig schreibbaren Feldern ist N
+Geschwister-Elemente mit gleichem `path`-Präfix und je eigenem `key`
+(dieselbe Philosophie wie `bindObject()`); für eine SAMMLUNG solcher
+Datensätze (Kind-QuBits unter einem Prefix aufzählen) siehe `<qu-list>`.
 
-### `<qu-view path="..." key?="..." attr?="...">`
+### `<qu-view path?="..." key?="..." attr?="...">`
 One-way.
 | Attribut | Pflicht | Beschreibung |
 |---|---|---|
-| `path` | ja | Die QuBit-ID — oder, falls `key` gesetzt ist, das ID-Präfix |
+| `path` | bedingt | Die QuBit-ID — oder, falls `key` gesetzt ist, das ID-Präfix. Weglassbar, wenn der aktuelle `.qu`-Context selbst eine `.id` hat (ein `QuSpace`) — dann wird dessen eigene Id verwendet, siehe `<qu-list>` |
 | `key` | nein | Ergibt `${path}/${key}` als gebundene ID (eigene Leaf-QuBit) statt `path` selbst |
 | `attr` | nein | Welches DOM-Attribut/-Property den Wert trägt: `value`, `textContent`, `innerHTML`, `checked` (Schreib-Event `change`), oder ein beliebiges generisches HTML-Attribut (`href`, `src`, `class`, `data-*`, …). Default (`auto`/weggelassen): dieselbe Heuristik wie `bindKey()` selbst — `value` falls vorhanden, sonst `textContent` |
 
@@ -896,6 +895,11 @@ angehängt werden (`appendChild()` löst `connectedCallback()` synchron aus)
 gesetzt"-Reihenfolge ab, bevor endgültig eine Fehlermeldung in die Konsole
 geht.
 
+`.qu` muss keine `Qu`-Instanz sein — ein `QuSpace` (`qu.own`/`qu.space(id)`)
+funktioniert genauso: `container.qu = alice.own` scoped jeden Nachfahren
+relativ zu diesem Space, `path` selbst (falls gesetzt) wird dann noch
+EINMAL relativ dazu aufgelöst, nicht absolut.
+
 ```js
 import '../../../src/ui/components.js';
 
@@ -909,3 +913,38 @@ container.innerHTML = `
 
 container.querySelector('qu-bind').addEventListener('qu-error', (e) => console.error(e.detail));
 ```
+
+### `<qu-list path="...">`
+Deklarative Form von [`viewObject()`](#ui-bindings-modul) — ein `<template>`-
+Kind, einmal geklont pro Kind-QuBit unter `path`, jeder Klon-Wurzel `.qu`
+auf `qu.space(<Item-Id>)` gesetzt, sodass `<qu-view>`/`<qu-bind>` INNERHALB
+des Templates ihre Felder mit bloßem `key` adressieren können, ganz ohne
+Id-Wiederholung:
+```html
+<qu-list path="alice/todos">
+  <template>
+    <li>
+      <qu-view key="text"></qu-view>
+      <qu-bind key="done" attr="checked"><input type="checkbox"></qu-bind>
+    </li>
+  </template>
+</qu-list>
+```
+Erkennt ein Item, sobald IRGENDEIN seiner Felder existiert (Pattern
+`${path}/**`, Item-Identität = das erste Segment nach `path`) — es ist
+KEINE eigene "Wurzel"-QuBit exakt bei `${path}/<itemId>` nötig, nur die
+Leaf-Felder selbst.
+
+**Deckt nur den "Datensatz = mehrere Leaf-QuBits"-Fall ab** — denselben,
+den `<qu-view key>`/`<qu-bind key>`/`bindObject()` überall sonst auch
+voraussetzen. Ein Item, dessen Felder in EINEM kombinierten QuBit-Wert
+liegen, oder das eine `key://`/`file://`-Referenz zum Rendern auflösen
+muss, hat hier keine rein deklarative Entsprechung — dafür `viewObject()`
+direkt nutzen (siehe `docs/lab/labs/05-references-practice.mjs`, das genau
+das für sein Kategorie-/Avatar-Feld tut, während sein Notizfeld — eine
+eigene Leaf-QuBit — mit `<qu-bind>` auskommt).
+
+Löscht nie Items (dasselbe Verhalten wie `viewObject()`/das gesamte
+QuBit-Modell — es gibt kein Lösch-Konzept, nur LWW-Überschreiben). Ein
+Remount (`path` geändert, oder das Element neu verbunden) räumt zuvor
+gestempelte Items vollständig ab, bevor es neu aufbaut — keine Duplikate.
