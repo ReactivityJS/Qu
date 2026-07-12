@@ -19,6 +19,37 @@ test('subscription trie routes only the matching branch, not a linear scan of al
   assert.equal(hits, 2);
 });
 
+test('"**" mid-pattern is rejected identically by both matchers — on() and query() must never silently disagree', async () => {
+  const rt = makeRuntime();
+  // Before assertValidPattern(): query()'s regex correctly matched only
+  // ".../01" ids, but on()'s Trie stops descending at "**" and silently
+  // subscribes to everything below "posts/" instead — a split-brain bug
+  // where the initial catch-up batch looked right and the live stream
+  // quietly leaked unrelated data. Both must now refuse the pattern outright.
+  assert.throws(() => rt.on('posts/**/01', () => {}), /"\*\*" ist nur als letztes Segment erlaubt/);
+  await assert.rejects(() => rt.query('posts/**/01'), /"\*\*" ist nur als letztes Segment erlaubt/);
+});
+
+test('"**" as the final segment and "*" anywhere still work exactly as before', async () => {
+  const rt = makeRuntime();
+  const alice = await QuIdentity.generate();
+  const session = new QuSession(rt, { identity: alice });
+
+  const deepHits = [];
+  const midStarHits = [];
+  rt.on('posts/**', (q) => deepHits.push(q.id));
+  rt.on('posts/*/01', (q) => midStarHits.push(q.id)); // '*' mid-pattern — exactly one segment, no ambiguity
+
+  await session.publish('posts/2026-07/01', { title: 'a' });
+  await session.publish('posts/2026-07/02', { title: 'b' });
+
+  assert.deepEqual(deepHits.sort(), ['posts/2026-07/01', 'posts/2026-07/02']);
+  assert.deepEqual(midStarHits, ['posts/2026-07/01']);
+
+  const queried = await rt.query('posts/**');
+  assert.equal(queried.length, 2);
+});
+
 test('a Mount backed by NullAdapter behaves as a pure event bus: dispatches live, persists nothing', async () => {
   const rt = new QuRuntime({
     store: new QuStore([

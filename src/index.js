@@ -43,6 +43,7 @@ export {
   fingerprintOfUserSpace,
   randomSpaceId,
 } from './core/space.js';
+export { assertValidPattern } from './core/pattern.js';
 
 // Category 1 — storage adapters. Memory/Null are what make the Core
 // local-only/offline by default; Local/Session/IndexedDB cover the browser,

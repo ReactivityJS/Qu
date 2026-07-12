@@ -345,6 +345,91 @@ teilen, bilden zusammen genau das: eine eventually-consistent, geteilte
 Datenbank, bei der "eine Query stellen" und "auf Änderungen lauschen"
 dieselbe Operation sind (`map()`), nicht zwei getrennte APIs.
 
+### 7. Datenstruktur für wachsende Collections (z. B. ein Forum)
+
+`node.map(cb, { deep: true })`/`**` liefert IMMER die komplette Treffermenge
+— es gibt (bewusst, siehe Abschnitt 6) kein Limit/Offset im Core. Für eine
+Collection, die strukturell nur eine überschaubare Größe erreichen kann
+(z. B. die Liste der Boards eines Forums), ist das genau richtig. Für eine
+Collection, die UNBEGRENZT wächst (die Posts *innerhalb* eines aktiven
+Boards), ist `board.get('posts').map(cb, { deep: true })` ein Problem, das
+mit der Zeit nur schlimmer wird — Board-weise splitten reicht allein nicht,
+weil das nur die Anzahl der Boards begrenzt, nicht die Anzahl der Posts in
+einem einzelnen (populären) Board.
+
+**Die Regel: nie `map()`/`**` auf eine strukturell unbegrenzte Ebene
+anwenden — die ID-Struktur so wählen, dass jede Ebene, die tatsächlich
+abonniert wird, von Natur aus begrenzt ist.** Der Standard-Trick dafür ist
+Zeit-Sharding: Posts nicht flach unter `posts/<postId>` ablegen, sondern
+zusätzlich nach einem Zeit-Bucket gruppiert. Ein Client abonniert dann nie
+"alle Posts, für immer", sondern gezielt den aktuellen Bucket:
+
+```js
+const board = qu.get(`forum/${boardId}`);
+const currentBucket = new Date().toISOString().slice(0, 7); // "2026-07"
+board.get('posts').get(currentBucket).map(renderPost, { deep: true }); // nur dieser Monat
+```
+
+**Zwei gleichwertige Modelle, je nach erwarteter Datenmenge:**
+
+| Modell | Beispiel-Id | Wann |
+|---|---|---|
+| Ein Segment (Bucket als String) | `posts/2026-07/<postId>` | Standardfall — Granularität (Jahr/Monat/Woche/Tag) ist frei wählbar PRO Collection, ohne die Pfadtiefe zu ändern |
+| Mehrere Segmente (ein Level pro Kalendereinheit) | `posts/2026/07/12/<postId>` | Wenn quer über Zeiträume mit `*` gefiltert werden soll (z. B. "jeder Juli, alle Jahre": `posts/*/07/*`) |
+
+**Wichtige Regel, unabhängig vom gewählten Modell: die Anzahl der
+Datums-Segmente muss innerhalb EINER Collection immer identisch sein** —
+nicht `posts/2026-07/x` neben `posts/2026/07/x` im selben Board mischen.
+Sonst passt kein `*`/`**`-Pattern mehr konsistent auf die ganze Collection,
+und der Bucket-Index (unten) kann Buckets nicht mehr eindeutig sortieren.
+Beide Modelle — ein Segment, mehrere Segmente, oder auch gar kein
+Zeit-Segment (für strukturell kleine Collections wie die Boardliste selbst)
+— sind gültig; welches passt, hängt von App und erwarteter Datenmenge ab.
+
+ISO-Format (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`) hat einen konkreten Vorteil
+gegenüber jedem anderen Format: lexikographische String-Sortierung ist
+gleichzeitig chronologische Sortierung (`"2026-07" < "2026-08"`) — nützlich
+für den Bucket-Index unten, ganz ohne Datums-Parsing.
+
+**`*` matcht genau ein Segment, überall — auch mittig, ohne Sonderfall:**
+`posts/*/07/*` (jeder Juli, jedes Jahr, jeder Tag) funktioniert exakt wie
+erwartet. **`**` dagegen ist nur als LETZTES Segment eines Patterns gültig**
+(`assertValidPattern()`, `core/pattern.js`, wird von `query()` UND
+`on()`/`map()` durchgesetzt) — ein Pattern wie `posts/**/01` wirft jetzt
+einen klaren Fehler, statt bei `query()` korrekt zu filtern, aber bei einer
+laufenden `on()`/`map()`-Subscription still ALLES unter `posts/` zu liefern
+(ein vorher existierender, stiller Split-Brain-Bug zwischen den beiden
+Matching-Engines).
+
+**"Ältere laden" ohne Pagination-Primitiv im Core:** ein kleiner, expliziter
+Bucket-Index reicht — beim ersten Post eines neuen Buckets mitschreiben:
+```js
+// Bei jedem ersten Post eines neuen Buckets:
+await board.get('bucket-index').set({ bucket: currentBucket });
+
+// "Ältere laden": Index einmalig lesen, nächstälteren Bucket gezielt nachladen
+const rows = await board.get('bucket-index').session.query(`${board.id}/bucket-index/**`);
+const buckets = [...new Set(rows.map((q) => q.value.bucket))].sort();
+const older = buckets[buckets.indexOf(currentBucket) - 1];
+if (older) board.get('posts').get(older).map(renderPost, { deep: true, once: true });
+```
+"Eine Seite laden" wird so zu "einen Bucket laden" — Pagination als
+Datenmodell-Muster statt als Core-Feature.
+
+**Bonus: dasselbe Muster begrenzt auch Netzwerk-Traffic.** `pushTopics`/
+`sync({ topic })` sind präfixbasiert (Abschnitt 3) — mit Zeit-Buckets kann
+das Sync-Topic `forum/board1/posts/2026-07/` sein, sodass auch über das
+Netz nur der aktuelle Monat übertragen wird, nicht das ganze Board.
+
+**Für "neueste Posts über alle Boards" (Startseite):** Zeit-Sharding allein
+hilft hier nicht (Cross-Board-Aggregation). Dafür eine bewusst
+denormalisierte, gedeckelte Index-Collection (`forum/recent-index/<postId>`),
+beim Schreiben eines Posts zusätzlich dort eingetragen und von der App auf
+z. B. die letzten 100 Einträge begrenzt gehalten — der ursprüngliche Post
+bleibt unverändert bestehen (Immutable Data), nur der Index "vergisst"
+ältere Einträge. Die Startseite abonniert nur diesen kleinen Index, nie
+`forum/*/posts/**`.
+
 ## Projektstruktur
 
 ```

@@ -339,7 +339,24 @@ Direkter Store-Zugriff, keine Ver-/Entschlüsselung, keine ACL-Filterung
 
 ### `runtime.query(pattern)` → `Promise<QuBit[]>`
 `pattern` wie bei `on()` (`*` = ein Segment, `**` = Rest). Beispiel:
-`'chat/room1/**'`.
+`'chat/room1/**'`. Wirft für ein ungültiges Pattern — siehe
+`assertValidPattern()` unten.
+
+### `assertValidPattern(pattern)` (`core/pattern.js`)
+Wirft, falls `**` irgendwo außer als letztes Segment vorkommt (z. B.
+`'posts/**/01'`) — MQTT-Konvention, hier für BEIDE Matcher gemeinsam
+durchgesetzt: den Regex hinter `query()` und den Trie hinter `on()`/`map()`.
+Vor dieser Prüfung "funktionierte" ein mittiges `**` nur bei `query()`
+korrekt (Regex matcht den literalen Rest) — beim Trie brach die Traversierung
+beim ersten `**` ab, sodass alles danach im Pattern ignoriert wurde und die
+Live-Subscription faktisch zu `prefix/**` wurde (alles, nicht nur der
+gemeinte Ausschnitt). `*` (ein einzelnes Segment) ist dagegen überall,
+auch mittig, ohne Einschränkung gültig (`'posts/*/07/*'` — jeder Juli,
+jedes Jahr). Wird automatisch von `query()` und `on()`/`map()` aufgerufen;
+direkt nutzbar, um ein von außen kommendes Pattern vorab zu prüfen. Siehe
+README, [Abschnitt 7](./README.md#7-datenstruktur-für-wachsende-collections-z-b-ein-forum)
+für die volle Datenstruktur-Empfehlung (Zeit-Sharding für wachsende
+Collections).
 
 ### `runtime.on(pattern, callback, opts?)` → `() => void`
 Registriert eine Subscription im Trie. `callback(qubit)` wird bei jedem
