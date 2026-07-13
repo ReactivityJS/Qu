@@ -59,14 +59,21 @@ entgegen, ganz ohne dass irgendetwas "installiert" wurde; `use()` fügt nur
 `qu.sendMessage(spaceId, opts)`-Sugar hinzu, für wer sie will. Siehe
 [Core, Storage, Network, Data](#core-storage-network-data--wie-die-plugins-zusammenspielen) unten.
 
-**Nächster Schritt: `examples/`** — drei kurze, fokussierte Beispiele
-(lokaler User, zwei verbundene Clients, teilbare ToDo-Liste), deutlich
-kompakter als die volle Chat-Demo. Für Multi-User-Rechte, Verschlüsselung,
-Sync und Dateien: siehe [`API.md`](./API.md) (vollständige Referenz) und
-`demo/` (durchgängiges
-Beispiel). Die darunterliegenden Bausteine (`QuRuntime`, `QuSession`,
-`QuStore`, …) bleiben für fortgeschrittene Fälle direkt nutzbar —
-`qu.runtime` ist die Fluchttür dorthin.
+**Nächster Schritt: `examples/`** — vier kurze, fokussierte Module (teilbare
+ToDo-Liste, Forum mit Zeit-Sharding, App-Space über einen echten Relay,
+mehrere Sub-Spaces indexieren), jedes mit eigenem `node --test` und ohne
+Browser lesbar; Übersicht mit Links zum Quelltext unter
+[`/docs/examples.html`](http://localhost:8787/docs/examples.html) (`npm
+start`). Zum direkten Anfassen im Browser: das [Interaktive
+Lab](http://localhost:8787/docs/lab/index.html) (geführt, Schritt für
+Schritt) und der
+[Playground](http://localhost:8787/docs/playground.html) (eine bereits
+initialisierte `qu`-Instanz in der Konsole plus Copy-Paste-Beispiele,
+inklusive einer echten Relay-Verbindung). Für Multi-User-Rechte,
+Verschlüsselung, Sync und Dateien: siehe [`API.md`](./API.md)
+(vollständige Referenz). Die darunterliegenden Bausteine (`QuRuntime`,
+`QuSession`, `QuStore`, …) bleiben für fortgeschrittene Fälle direkt
+nutzbar — `qu.runtime` ist die Fluchttür dorthin.
 
 ## Grundkonzepte an Beispielen
 
@@ -816,13 +823,23 @@ docs/lab/                    interaktives Lab — der primäre Weg, QU im Browse
                                 Element) für ein zweiseitig gebundenes
                                 Notizfeld je Eintrag (tippen schreibt
                                 sofort, kein Speichern-Knopf)
-examples/
+examples/                    Übersicht mit Quelltext-Links: /docs/examples.html (npm start)
   todo-lib.mjs               Logik einer teilbaren ToDo-Liste, getrennt von jeder UI
   todo-lib.test.mjs            node:test dafür — Space + Link + FP-basiertes Schreibrecht
   forum-lib.mjs               Zeit-Sharding für wachsende Collections (Grundkonzepte, Abschnitt 7)
                             lauffähig statt nur Prosa: Boards, Posts pro Zeit-Bucket, Bucket-Index
   forum-lib.test.mjs           node:test dafür — Bucket-Isolation (live wie beim Lesen),
                             Index-Dedup/-Sortierung, kollisionssicheres gleichzeitiges Schreiben
+  app-space-lib.mjs             App-Space über einen echten WebSocket-Relay — offene vs.
+                            mitgliederbeschränkte Variante (App-Guide baut hierauf auf)
+  app-space-lib.test.mjs          node:test dafür — läuft gegen einen echten, im Test selbst
+                            gestarteten Relay-Prozess, kein Mock
+  space-index-lib.mjs           mehrere Sub-Spaces von einem App-Space aus referenzieren/
+                            indexieren ("App hat viele Spaces" statt "App ist ein Space")
+  space-index-lib.test.mjs        node:test dafür
+docs/playground.html         eine bereits initialisierte qu-Instanz in der Konsole + Copy-Paste-
+                            Beispiele (get/put/set/on/map, Spaces, Referenzen, Dateien, Relay)
+docs/examples.html            Kartenübersicht über examples/ mit Links zum Quelltext (docs/code.html)
 relay/
   ws-server.mjs              minimaler RFC-6455-WebSocket-Server, keine Abhängigkeit
   relay.mjs                    createRelay() — universeller QU-Relay-Kern, kein App-/Node-Bezug
