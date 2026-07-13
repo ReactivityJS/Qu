@@ -88,7 +88,7 @@ export { shareFile, resolveFileRef, createFileHandlerPlugin } from './data/files
 // API (see modules/spaces.js, modules/chat.js). createSpacesPlugin() is
 // what makes qu.createSpace() exist at all — the Core default ACL
 // (core/identity-acl.js) only ever grants `~<your fingerprint>`.
-export { createSpaceACLResolver, createSpace, createSpacesPlugin } from './modules/spaces.js';
+export { createSpaceACLResolver, createSpace, createSpaceAt, createSpacesPlugin } from './modules/spaces.js';
 export {
   sendMessage, listMessages, onMessage, createChatRoom,
   markRead, getReadReceipts, onReadReceipt,

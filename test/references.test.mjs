@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Qu, isReference, parseReference, objRef, keyRef, fileRef,
-  resolveReference, resolveValue, createReferenceHandlerPlugin,
+  resolveReference, resolveValue, createReferenceHandlerPlugin, createSpacesPlugin,
 } from '../src/index.js';
 
 // Every path below lives under the calling Qu's own User-Space
@@ -32,6 +32,31 @@ test('key:// resolves to the pointed-at QuBit\'s value', async () => {
   const post = await qu.get(`${base}/posts/1`);
   const resolved = await resolveValue(qu, post.value);
   assert.deepEqual(resolved.author, { name: 'Alice' });
+});
+
+test('key:// explicitly references another Space — the correct way to point at one, keyRef(space.id) not the QuSpace instance itself', async () => {
+  const qu = (await Qu.create()).use(createSpacesPlugin());
+  const otherSpace = qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] });
+  await otherSpace.ready;
+  await otherSpace.put({ hello: 'from the other space' });
+
+  const holder = qu.own.get('link');
+  await holder.put(keyRef(otherSpace.id));
+
+  const resolved = await resolveReference(qu, (await holder).value);
+  assert.deepEqual(resolved, { hello: 'from the other space' });
+});
+
+test('put(quSpaceInstance) — the instance itself, not a keyRef() string — throws instead of silently degrading into an unrecognizable bare id once serialized', async () => {
+  const qu = (await Qu.create()).use(createSpacesPlugin());
+  const otherSpace = qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] });
+  await otherSpace.ready;
+
+  await assert.rejects(
+    () => qu.own.get('link').put(otherSpace),
+    /QuSpace-Instanz als WERT/,
+  );
+  await assert.rejects(() => qu.own.get('link').set(otherSpace), /QuSpace-Instanz als WERT/, 'set() delegates to the same publish() guard');
 });
 
 test('key:// to a missing path resolves to undefined, not an error', async () => {

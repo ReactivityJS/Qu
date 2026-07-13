@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { QuIdentity, QuSession, userSpaceId, createSpaceACLResolver, createSpace, createACLPlugin } from '../src/index.js';
+import { QuIdentity, QuSession, userSpaceId, createSpaceACLResolver, createSpace, createSpaceAt, createACLPlugin } from '../src/index.js';
 import { makeRuntime } from './helpers.mjs';
 
 test('an explicit write-ACL denies a non-writer', async () => {
@@ -43,6 +43,25 @@ test('generic Space: first-write-wins bootstrap, then the manifest is enforced, 
 
   await assert.rejects(() => sessBob.publish(`${roomId}/msg1`, 'bob tries to post'));
   await assert.rejects(() => sessBob.publish(roomId, { admins: [bob.fingerprint], writers: ['*'], readers: ['*'] }));
+});
+
+test('createSpaceAt(): same manifest-bootstrap as createSpace(), but at a caller-chosen fixed id — for one well-known App-Space per app, not a fresh random room each time', async () => {
+  const rt = makeRuntime();
+  rt.use(createACLPlugin(createSpaceACLResolver(rt)));
+  const alice = await QuIdentity.generate();
+  const bob = await QuIdentity.generate();
+  const mallory = await QuIdentity.generate();
+  const sessAlice = new QuSession(rt, { identity: alice });
+  const sessBob = new QuSession(rt, { identity: bob });
+  const sessMallory = new QuSession(rt, { identity: mallory });
+
+  const APP_SPACE = 'my-fixed-app-space';
+  const returnedId = await createSpaceAt(sessAlice, APP_SPACE, { writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] });
+  assert.equal(returnedId, APP_SPACE, 'resolves with the exact id given, not a generated one');
+
+  await sessBob.publish(`${APP_SPACE}/entries/1`, 'bob writes'); // a listed writer
+  await assert.rejects(() => sessMallory.publish(`${APP_SPACE}/entries/2`, 'mallory writes'), 'not a listed writer');
+  await assert.rejects(() => sessBob.publish(APP_SPACE, { admins: [bob.fingerprint], writers: ['*'], readers: ['*'] }), 'a writer, not an admin, cannot rewrite the manifest itself');
 });
 
 test('Inbox is not a framework concept — it is a Space (writers:[*], readers:[owner]) discovered via a profile reference', async () => {

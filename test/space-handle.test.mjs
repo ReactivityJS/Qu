@@ -101,6 +101,22 @@ test('createSpace() returns a QuSpace, not a raw string — but behaves like one
   assert.deepEqual(JSON.parse(JSON.stringify({ room })), { room: room.id });
 });
 
+test('qu.createSpaceAt(id, opts): same synchronous/space.ready shape as createSpace(), but at a fixed id — the App-Space pattern (one well-known id, not a fresh room each time)', async () => {
+  const alice = (await Qu.create()).use(createSpacesPlugin());
+  const bob = await Qu.create({ runtime: alice.runtime });
+  const APP_SPACE = 'my-fixed-app-space';
+
+  const space = alice.createSpaceAt(APP_SPACE, { writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] }); // synchronous, like createSpace()
+  assert.ok(space instanceof QuSpace);
+  assert.equal(space.id, APP_SPACE);
+  await space.ready;
+
+  // The exact same id, addressed independently by another instance, IS this App-Space:
+  const carol = await Qu.create({ runtime: alice.runtime });
+  await bob.get(APP_SPACE).get('entries').set({ text: 'bob writes' });
+  assert.equal((await carol.get(APP_SPACE)).value.writers.length, 2);
+});
+
 test('createSpace() handle is independently reconstructible via qu.get(existingId) — e.g. loading a room by its UUID from a link', async () => {
   const alice = (await Qu.create()).use(createSpacesPlugin());
   const room = alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] });

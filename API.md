@@ -27,10 +27,11 @@ import { QuRuntime, QuSession, QuIdentity, /* ... */ } from './src/index.js';
 10. [Plugins](#plugins) — Verify & ACL
 11. [Spaces-Modul](#spaces-modul) — ACL-Resolver
 12. [Replication-Modul](#replication-modul) — Sync
-13. [Files-Modul](#files-modul) — Datei-Transfer
-14. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
-15. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
-16. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`/`<qu-list>`
+13. [References-Modul](#references-modul) — `obj://`/`key://`/`file://`
+14. [Files-Modul](#files-modul) — Datei-Transfer
+15. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
+16. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
+17. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`/`<qu-list>`
 
 ---
 
@@ -163,6 +164,18 @@ Manifest-Wert hindurchgereicht statt ihn zurückzugeben, weil `QuSpace`
 thenable ist und jedes Promise, das mit einem Thenable auflöst, dieses
 automatisch "durchreicht" (Promise-Spezifikation) — dieselbe "kein await
 navigiert, await liest"-Regel wie überall sonst in dieser API.
+
+`qu.createSpaceAt(id, { writers?, readers?, admins? })` → `QuSpace` —
+identisch zu `createSpace()`, nur mit einer selbst gewählten, festen `id`
+statt einer zufällig erzeugten. Für "genau EIN wohlbekannter Space pro
+App" (ein App-Space, siehe [`APP-GUIDE.md`](./APP-GUIDE.md)) statt "viele
+unabhängig erzeugte Räume" (wofür `createSpace()`s zufällige Id gedacht
+ist, z. B. [`examples/todo-lib.mjs`](./examples/todo-lib.mjs)) — die feste
+Id ist dann gleichzeitig Adressierung (`qu.get(id)`) UND
+`pushTopics`/`sync({ topic })`-Präfix, ohne dass ein separates
+"Topic"-Konzept nötig wäre. Derselbe First-Write-Wins-Bootstrap wie
+`createSpace()` gilt unverändert (siehe `createSpaceACLResolver` oben) —
+nur racet jetzt die selbst gewählte Id, nicht eine frische zufällige.
 
 ### Presets: `QU_PRESETS`
 `src/presets.js` bündelt gängige `plugins`-Listen für `Qu.create({ plugins })`:
@@ -375,11 +388,11 @@ Aufrufe darüber (`put`/`set`/`on`/`map`/`await`).
 **Fünf Verben, ein Objekt-Typ:**
 | Verb | Signatur | Beschreibung |
 |---|---|---|
-| `get` | `node.get(subpath)` → `QuSpace` | Navigiert — Node gebunden an `${node.id}/${subpath}`. Synchron, keine I/O. Weggelassenes/leeres `subpath` liefert `node` selbst zurück. |
-| `put` | `node.put(value, opts?)` → `Promise` | Schreibt AN diesem Node (LWW-Register). Datei-Bytes werden automatisch erkannt, wenn ein `FileHandler` konfiguriert ist (siehe `putDispatch` unten). |
-| `set` | `node.set(value, opts?)` → `Promise` | Kollisionssicher: hängt `${fingerprint}-${ts}` als EIN Pfadsegment an, bevor es denselben `put()`-Pfad durchläuft — für Sammlungen mit mehreren unabhängigen Schreibern. Genauso eine Ebene tief wie eine `put()`-Sammlung. |
-| `on` | `node.on(cb, opts?)` → `() => void` | Live-Subscription auf DIESEN Node — `{ initial?, once? }`, gleiche Semantik wie `QuSession.on()`. |
-| `map` | `node.map(cb, opts?)` → `() => void` | Live-Subscription auf die KINDER dieses Nodes — `${id}/*` (findet `set()`-Sammlungen bereits ohne `deep`, s. o.); `opts.deep: true` → `${id}/**`, nur für eine Hierarchie, die eine App selbst tiefer gebaut hat. Default `{ initial: true }` (anders als `on()`). |
+| `get` | `node.get(subpath)` → `QuSpace` | Navigiert — Node gebunden an `${node.id}/${subpath}`. Synchron, keine I/O, LÖST NIE eine Referenz auf (auch nicht mid-path) — siehe References-Modul. Weggelassenes/leeres `subpath` liefert `node` selbst zurück. |
+| `put` | `node.put(value, opts?)` → `Promise` | Schreibt AN diesem Node (LWW-Register) — EIN benannter, veränderlicher Wert; `await node` liest ihn, ein zweiter `put()` überschreibt ihn. Löst `node.id` zuerst durch eine `key://`-Kette auf (mit installiertem ReferenceHandler, Default AN — `{ raw: true }` schaltet ab), DANN erkennt es Datei-Bytes automatisch, wenn ein `FileHandler` konfiguriert ist (siehe `putDispatch` unten). |
+| `set` | `node.set(value, opts?)` → `Promise` | Kollisionssicher, ARRAY-artig: der Node selbst wird nie beschrieben (`await node` bleibt `null`), jeder Aufruf legt stattdessen ein neues Kind an (`${fingerprint}-${ts}` als EIN Pfadsegment) — für Sammlungen mit mehreren unabhängigen Schreibern. Genauso eine Ebene tief wie eine `put()`-Sammlung; die Liste selbst liest man über `node.map()`/`query()`, nie über den Node direkt. Löst `node.id` wie `put()` zuerst auf (`{ raw: true }` schaltet ab). |
+| `on` | `node.on(cb, opts?)` → `() => void` | Live-Subscription auf DIESEN Node — `{ initial?, once? }`, gleiche Semantik wie `QuSession.on()`. Löst `node.id` einmalig beim Aktivieren auf (nicht pro Event) — `{ raw: true }` für das alte, rein synchrone Verhalten ohne Auflösung. |
+| `map` | `node.map(cb, opts?)` → `() => void` | Live-Subscription auf die KINDER dieses Nodes — `${id}/*` (findet `set()`-Sammlungen bereits ohne `deep`, s. o.); `opts.deep: true` → `${id}/**`, nur für eine Hierarchie, die eine App selbst tiefer gebaut hat. Default `{ initial: true }` (anders als `on()`). Löst `node.id` wie `on()` einmalig beim Aktivieren auf (`{ raw: true }` schaltet ab). |
 
 **Thenable:** `await node` (bzw. `node.then()`) liest den aktuellen Wert AN
 diesem Node (delegiert an `session.get(node.id)`). Navigieren (`get()`) und
@@ -391,18 +404,24 @@ die Promise-Spezifikation "chased" jeden Thenable, den ein Promise als
 Auflösungswert bekommt, automatisch bis zum Ende durch (siehe `createSpace()`
 unten, das deshalb bewusst synchron ist, nicht `async`).
 
-Drei Wege, einen Node zu bekommen (siehe [Qu — Facade](#qu-facade-empfohlener-einstieg)):
+Vier Wege, einen Node zu bekommen (siehe [Qu — Facade](#qu-facade-empfohlener-einstieg)):
 - `qu.own` — gebunden an den eigenen User-Space, immer verfügbar.
 - `qu.get(spaceId)` — gebunden an jeden bekannten Space (eigener, `~<fremder-fp>`, generisch).
-- `qu.createSpace(opts)` — legt einen neuen generischen Space an (Spaces-Plugin nötig), **synchron**, gibt sofort einen Node dafür zurück.
+- `qu.createSpace(opts)` — legt einen neuen generischen Space mit zufälliger Id an (Spaces-Plugin nötig), **synchron**, gibt sofort einen Node dafür zurück.
+- `qu.createSpaceAt(id, opts)` — dasselbe, aber mit einer selbst gewählten festen Id statt einer zufälligen — der App-Space-Fall.
 
-### `new QuSpace(session, spaceId, { guest?, putDispatch? })`
+### `new QuSpace(session, spaceId, { guest?, putDispatch?, resolveDispatch? })`
 Niedrigerer Konstruktor — `qu.own`/`qu.get()` nutzen ihn intern, direkt
 aufrufbar für eine `QuSession` ganz ohne `Qu`-Fassade. `putDispatch(session,
 id, value, opts)` (optional) ersetzt das Standard-`put()`-Verhalten (Default:
 `session.publish(id, value, opts)`) — der Mechanismus, über den
 `createFileHandlerPlugin()`/`qu.setPutHandler()` Datei-Auto-Detect
 nachrüsten, ohne dass diese Klasse Files/Plugins kennen muss.
+`resolveDispatch(session, id) => Promise<string>` (optional) ersetzt die
+Standard-Identitätsfunktion `async (s, id) => id` — der gleiche Mechanismus
+für `key://`-Auflösung, den `createReferenceHandlerPlugin()`/
+`qu.setResolveHandler()` nachrüsten (siehe [References-Modul](#references-modul)
+und [README Abschnitt 8](./README.md#8-referenzen-automatisch-folgen-key)).
 
 ### `space.id` → `string`
 Die rohe Space-Id.
@@ -867,6 +886,14 @@ const roomId = await createSpace(session, { writers: [alice.fingerprint, bob.fin
 await session.publish(`${roomId}/msg1`, { text: 'hi' });
 ```
 
+### `createSpaceAt(session, id, { writers?, readers?, admins? })` → `Promise<SpaceId>`
+Wie `createSpace()`, aber mit einer selbst gewählten `id` statt einer
+generierten UUID — liefert exakt diese `id` zurück, erst nachdem das
+Manifest wirklich geschrieben ist. Für einen App-weiten, fest bekannten
+Space (ein App-Space) statt eines neu erzeugten Raums pro Aufruf; die
+Fassaden-Sugar-Entsprechung ist `qu.createSpaceAt(id, opts)` (siehe
+[`QuSpace`](#quspace) oben).
+
 ---
 
 ## Replication-Modul
@@ -911,6 +938,126 @@ Server-Prozess mit vielen gleichzeitig verbundenen Clients.
   `DefaultReplication` mit dem bewiesenen Fingerprint.
 - **`hub.detach(channelId)`**, **`hub.get(channelId)`**, **`hub.size`**,
   **`hub.broadcastSync({ topic })`**.
+
+---
+
+## References-Modul
+
+`src/data/references.js` — ein URI-Schema für Verweise zwischen QuBits, rein
+manuell/opt-in (kein automatischer Read-Hook in `get()`, gleiche Philosophie
+wie überall: der Core bleibt ein dummer Store, die App entscheidet, wann sie
+einem Link folgt). Nichts hier schreibt eine Referenz automatisch — auch der
+`FileHandler` nicht (siehe unten): das Schreiben einer Referenz ist immer
+ein expliziter, eigener Aufruf.
+
+### `isReference(value)` → `boolean`
+`true`, wenn `value` ein String im Format `obj://…`/`key://…`/`file://…` ist.
+
+### `parseReference(ref)` → `{ scheme, path }`
+Zerlegt einen Referenz-String. Wirft, falls `ref` keinem der drei Schemata entspricht.
+
+### `keyRef(path)` / `objRef(path)` / `fileRef(manifestId)` → `string`
+Bauen den jeweiligen Referenz-String, statt ihn von Hand zusammenzusetzen
+(`` `key://${path}` `` usw.) — bevorzugt gegenüber manuellem
+Zusammenbau, damit ein Tippfehler im Schema-Präfix nicht erst beim
+Auflösen aussieht wie "keine Referenz gefunden".
+
+**Explizit eine Referenz AUF EINEN ANDEREN SPACE schreiben** — die direkte
+Antwort auf "wie schreibe ich selbst eine Referenz": eine Referenz ist
+IMMER ein normaler `put()`/`set()`-Aufruf mit einem `key://`/`obj://`-String
+als `value`, nichts Spezielleres:
+
+```js
+const otherSpace = qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] });
+await otherSpace.ready;
+
+// Zeigt auf GENAU EINEN Wert — hier: den Space selbst (sein Root-QuBit,
+// z. B. das Manifest oder was auch immer dort per put() liegt):
+await myNode.put(keyRef(otherSpace.id));
+
+// Zeigt auf die DIREKTEN KINDER eines Pfads, zu einem Objekt/Array
+// gesammelt — für "eine Liste/Sammlung referenzieren", nicht den Space
+// selbst. `obj://<spaceId>` OHNE Unterpfad sammelt nur, was direkt AN
+// `spaceId` selbst hängt (`${spaceId}/*`) — meist eher
+// `obj://<spaceId>/<collectionPath>`, z. B. eine set()-Sammlung:
+await myNode.put(objRef(`${otherSpace.id}/entries`));
+```
+
+`myNode.put(otherSpace)` (die `QuSpace`-INSTANZ direkt als Wert, nicht als
+String) ist dagegen KEINE gültige Referenz und wirft jetzt einen klaren
+Fehler: lokal sähe es noch fast richtig aus (die Instanz landet einfach roh
+im `MemoryAdapter`), aber sobald der QuBit eine echte Serialisierungsgrenze
+überquert (Netzwerk-Versand, Persistenz über einen echten
+`StorageAdapter`), kollabiert `JSON.stringify` die Instanz über ihre
+`toJSON()` zur nackten Id — OHNE `key://`-Präfix, für
+`isReference()`/`resolveReference()` danach nicht mehr als Referenz
+erkennbar. `node.put(keyRef(otherSpace.id))` (die explizite String-Form)
+ist der einzige korrekte Weg.
+
+### `resolveReference(qu, ref, { maxDepth?, asArray?, fileHandler? })` → `Promise<any>`
+Löst einen einzelnen Referenz-String auf. `maxDepth` (Default `1`) begrenzt,
+wie viele weitere Referenzen INNERHALB des aufgelösten Werts noch
+kaskadiert werden (die übergebene Referenz selbst wird immer aufgelöst,
+unabhängig vom Budget); ein Ref, der auf sich selbst zurückführt, bleibt ab
+dem zweiten Auftreten im selben Pfad unaufgelöst statt zu hängen.
+`asArray: true` (nur `obj://`) liefert ein nach Zeilenschlüssel sortiertes
+Array statt eines Objekts. `fileHandler` (optional) lässt `file://` zu
+echten Bytes auflösen statt zum rohen Manifest (siehe Files-Modul unten).
+
+### `resolveValue(qu, value, opts)` → `Promise<any>`
+Wie `resolveReference()`, aber läuft einen beliebigen Wert (z. B. ein
+ganzes `qubit.value`) ab und löst JEDE Referenz-Zeichenkette auf, die
+irgendwo darin gefunden wird — statt zu verlangen, dass der Top-Level-Wert
+selbst schon eine Referenz ist.
+
+### `resolveKeyChain(session, id, { maxHops? })` → `Promise<{ id, qubit }>`
+Folgt einer Kette von `key://`-Weiterleitungen, beginnend AN `id` selbst
+(nicht an einem Wert darin) — der Mechanismus hinter der transparenten
+Referenz-Auflösung in `put`/`set`/`on`/`map`/`await` (siehe unten und
+[README Abschnitt 8](./README.md#8-referenzen-automatisch-folgen-key)).
+Bewusst enger als `resolveReference()`/`resolveValue()`: nur `key://` wird
+gefolgt (ein Wert AN einer anderen Id — der "weiter navigieren"-Fall).
+`obj://` (eine Sammlung) und `file://` (Bytes) werden auch hier NICHT
+automatisch weiterverfolgt — deren aufgelöste FORM ist keine "Wert an
+einer Id" (ein Array/Objekt bzw. rohe Bytes), das würde den Rückgabetyp
+unvorhersagbar machen. Liefert `{ id, qubit }` — die finale,
+nicht-weiterleitende Id und was dort tatsächlich liegt (`qubit: null`,
+falls nichts). `id` spiegelt wider, wo die Auflösung TATSÄCHLICH gelandet
+ist, nicht die übergebene Id — so navigiert man ohne eigenes Verb weiter:
+`qu.get(result.id)`. `maxHops` (Default `8`) begrenzt verkettete
+Weiterleitungen; wirft einen klaren Fehler bei einem Zyklus (dieselbe Id
+taucht in der Kette erneut auf) oder wenn das Budget überschritten wird.
+
+### `createReferenceHandlerPlugin({ maxDepth?, asArray?, fileHandler?, maxHops? })`
+`qu.use(...)` hängt `qu.resolveReference(ref, opts)`/`qu.resolveValue(value, opts)`
+mit `maxDepth`/`asArray`/`fileHandler` als Defaults an (weiterhin pro
+Aufruf überschreibbar), UND installiert per `qu.setResolveHandler()` den
+`resolveKeyChain()`-basierten Resolver, den JEDER `QuSpace`-Node
+(`qu.get(id)`/`qu.own`/`qu.createSpace()`/`qu.createSpaceAt()`) für
+`put`/`set`/`on`/`map`/`await` standardmäßig nutzt (`maxHops` steuert
+dessen Ketten-Budget). Ohne dieses Plugin ist `resolveDispatch` die
+Identitätsfunktion — Core importiert diese Datei nie und weiß nicht, dass
+`key://` etwas Besonderes bedeutet.
+
+**Transparente Referenz-Auflösung — Default AN, `{ raw: true }` schaltet
+sie ab:** mit installiertem Plugin folgen `await node`, `node.put()`,
+`node.set()`, `node.on()`, `node.map()` einer `key://`-Referenz AN der Id,
+auf der sie jeweils aufgerufen werden, transparent — kein zusätzlicher
+Read gegenüber heute im referenzfreien Normalfall (der Wert wird ohnehin
+gelesen). Vollständige Erklärung, Beispiele und die vier Fallstricke (kein
+Mid-Path-Auflösen, nur `key://` automatisch, `on`/`map` lösen einmalig
+beim Aktivieren nicht pro Event, `{ raw: true }`/`node.session.get(node.id)`
+als Escape-Hatches) stehen in
+[README Abschnitt 8](./README.md#8-referenzen-automatisch-folgen-key) —
+hier nur die Kurzfassung pro Verb:
+
+| Verb | Verhalten mit installiertem ReferenceHandler |
+|---|---|
+| `await node` | Löst `node.id` durch eine `key://`-Kette auf; das zurückgegebene QuBit trägt die ECHTE aufgelöste `.id`, nicht den Alias-Pfad. Kein `raw`-Parameter möglich (Thenable-Protokoll) — `await node.session.get(node.id)` ist die unaufgelöste Entsprechung. |
+| `node.put(value, opts)` | Löst `node.id` zuerst auf, schreibt dann am aufgelösten Ziel (dessen ACL gilt). `{ raw: true }` schreibt an der wörtlichen Id. |
+| `node.set(value, opts)` | Wie `put()`, aber der neue Sammlungs-Eintrag landet unter der aufgelösten Ziel-Id. `{ raw: true }` verhält sich wie zuvor. |
+| `node.on(cb, opts)` | Löst `node.id` EINMALIG beim Aktivieren auf, abonniert danach die aufgelöste Id — nie erneut pro Event. Liefert weiterhin sofort eine Unsubscribe-Funktion zurück (Auflösung + echtes Abonnement laufen im Hintergrund, Abbruch vorher ist sicher). `{ raw: true }` verhält sich exakt wie vor dieser Funktion (rein synchron, kein Setup-Gap). |
+| `node.map(cb, opts)` | Wie `on()`, aber das aufgelöste Ziel wird mit `*`/`**` für die Kinder-Subscription verwendet. `{ raw: true }` wie zuvor. |
 
 ---
 

@@ -74,6 +74,20 @@ export async function createSpace(session, opts) {
 }
 
 /**
+ * Same manifest-bootstrap as createSpace(), but for a caller-CHOSEN id
+ * instead of a random one — for the "one well-known Space per app" case
+ * (an App-Space), where there's exactly one id, known upfront, that an app
+ * always uses, rather than "many independently created rooms" each needing
+ * their own fresh, unpredictable id. Same first-write-wins bootstrap race
+ * as createSpace() (see createSpaceACLResolver above) applies identically —
+ * only now it's the app's own chosen id racing, not a fresh random one.
+ */
+export async function createSpaceAt(session, id, opts) {
+  await session.publish(id, buildManifest(session.fingerprint, opts));
+  return id;
+}
+
+/**
  * `qu.use(createSpacesPlugin())` — swaps the Core's identity-only default
  * ACL for this manifest-aware one (via `qu.setACLResolver()`, affecting
  * every Qu instance sharing this Runtime, not just the caller) and attaches
@@ -101,7 +115,10 @@ export async function createSpace(session, opts) {
  * immediately try to use it, or writing again to the SAME id right after)
  * has two reliable options: `await space.ready` (the actual write's own
  * Promise, exposed on the returned node) or the standalone, awaitable
- * `createSpace(session, opts)` below.
+ * `createSpace(session, opts)` below. `qu.createSpaceAt(id, opts)` is the
+ * same synchronous shape for a caller-chosen id (see createSpaceAt() above)
+ * — for an App-Space, where the id is fixed and known upfront rather than
+ * freshly generated.
  */
 export function createSpacesPlugin() {
   return {
@@ -113,6 +130,13 @@ export function createSpacesPlugin() {
         const space = qu.get(spaceId);
         space.ready = qu.session.publish(spaceId, buildManifest(qu.fingerprint, opts));
         space.ready.catch((e) => console.error(`[Spaces] createSpace(): manifest write for ${spaceId} failed:`, e));
+        return space;
+      };
+      qu.createSpaceAt = (id, opts) => {
+        if (qu.isGuest) throw new Error('[Spaces] Guest-Sessions haben kein Schreibrecht (versucht: createSpaceAt). Mit Qu.create({ identity }) eine echte Identität verwenden.');
+        const space = qu.get(id);
+        space.ready = qu.session.publish(id, buildManifest(qu.fingerprint, opts));
+        space.ready.catch((e) => console.error(`[Spaces] createSpaceAt(): manifest write for ${id} failed:`, e));
         return space;
       };
     },

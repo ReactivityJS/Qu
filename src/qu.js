@@ -63,6 +63,15 @@ const defaultPutDispatch = (session, id, value, opts) => {
 };
 
 /**
+ * Default resolve() dispatcher — the identity function, no `key://`
+ * following at all. `createReferenceHandlerPlugin()` replaces this (via
+ * `setResolveHandler()`) with one based on `resolveKeyChain()`
+ * (data/references.js) so put/set/on/map/await transparently chase
+ * chained `key://` redirects.
+ */
+const defaultResolveDispatch = async (session, id) => id;
+
+/**
  * Qu is the class most applications should actually instantiate — it wraps
  * Runtime + Store + Session behind a small set of instance methods, so a
  * caller doesn't need to assemble those pieces by hand for the common case.
@@ -113,6 +122,7 @@ export class Qu {
   #session;
   #aclResolver;
   #putResolver;
+  #resolveResolver;
   #guest;
 
   /**
@@ -181,6 +191,7 @@ export class Qu {
     this.#guest = guest;
     this.#aclResolver = aclResolver ?? { current: createIdentityACL() };
     this.#putResolver = { current: defaultPutDispatch };
+    this.#resolveResolver = { current: defaultResolveDispatch };
     this.#session = new QuSession(runtime, { identity, getACL: (id) => this.#aclResolver.current(id) });
   }
 
@@ -241,7 +252,13 @@ export class Qu {
    * lazily, exactly as if you'd called the equivalent Session method with
    * the full id yourself.
    */
-  get(id) { return new QuSpace(this.#session, id, { guest: this.#guest, putDispatch: (...args) => this.#putResolver.current(...args) }); }
+  get(id) {
+    return new QuSpace(this.#session, id, {
+      guest: this.#guest,
+      putDispatch: (...args) => this.#putResolver.current(...args),
+      resolveDispatch: (...args) => this.#resolveResolver.current(...args),
+    });
+  }
 
   /** `qu.own` is `qu.get(qu.userSpaceId)` — the ergonomic default for "my own Space", always available without any plugin. */
   get own() { return this.get(this.userSpaceId); }
@@ -291,6 +308,20 @@ export class Qu {
    */
   setPutHandler(putDispatch) {
     this.#putResolver.current = putDispatch;
+    return this;
+  }
+
+  /**
+   * Replaces the `resolve(session, id) => Promise<string>` dispatcher every
+   * node `qu.get(id)`/`qu.own` produces uses for put/set/on/map/await —
+   * this is how `createReferenceHandlerPlugin()` makes those verbs
+   * transparently follow chained `key://` redirects instead of treating
+   * every id as literal, without core/space-handle.js needing to know
+   * References/plugins exist. Unlike `setACLResolver()`, this is
+   * per-Qu-instance, not per-Runtime — same reasoning as `setPutHandler()`.
+   */
+  setResolveHandler(resolveDispatch) {
+    this.#resolveResolver.current = resolveDispatch;
     return this;
   }
 

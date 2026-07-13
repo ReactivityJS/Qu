@@ -91,15 +91,44 @@ const repl = await alice.connect(channel, { pushTopics: ['my-app/'] });
 Core-Default (`core/identity-acl.js`) nur Schreibzugriffe auf den eigenen
 `~fingerprint`-Space zu — ein geteilter App-Space (egal ob offen oder
 mitgliederbeschränkt) braucht dessen manifest-bewusste ACL-Auflösung.
-`pushTopics` hier ist, was ALICE selbst nach außen pusht — für Live-Empfang
-muss derselbe Präfix (wie oben erklärt) auch beim Relay selbst konfiguriert
-sein.
+
+`pushTopics` hier ist, was ALICE selbst nach außen pusht. **Es gibt kein
+separates "Topic"-Konzept in QU** — ein Topic ist einfach ein
+String-Präfix, der gegen QuBit-Ids geprüft wird (`id.startsWith(präfix)`).
+Die robusteste Wahl dafür ist deshalb IMMER die App-Space-Id selbst
+(unten): `'my-app'` ist hier kein austauschbares Label, das zufällig zum
+späteren App-Space passt — es IST die App-Space-Id, vorgezogen, weil sie
+für diese eine App bereits jetzt feststeht (siehe Schritt 3). Für
+Live-Empfang muss derselbe Präfix (wie oben erklärt) auch beim Relay
+selbst konfiguriert sein.
 
 ## Schritt 3: Das App-Space-Muster
 
 Ein App-Space ist kein neues Konzept — derselbe Space wie überall sonst in
-QU (Whitepaper §8), nur mit einem der App selbst bekannten Namen statt
-einer zufälligen Nutzer-Id. Zwei Varianten:
+QU (Whitepaper §8), nur mit EINER der App selbst bekannten, festen Id statt
+einer bei jedem Aufruf neu erzeugten. Genau diese Eigenschaft — eine feste,
+vorher bekannte Id statt einer zufälligen — ist es, die die App-Space-Id
+zur natürlichen Wahl für `pushTopics`/`sync({ topic })` macht: Adressierung
+im Code (`qu.get(id)`) und Netzwerk-Topic sind dieselbe Zeichenkette, nicht
+zwei getrennte Dinge, die zufällig übereinstimmen müssen. Zwei Varianten,
+beide mit fester Id:
+
+> **In einer echten App: die feste Id selbst per `crypto.randomUUID()`
+> erzeugen, nicht einen lesbaren Namen wie `'my-app'` wählen.** Space-Ids
+> sind global — läuft die App auf geteilter Infrastruktur (ein öffentlicher
+> Demo-Relay, ein Multi-Tenant-Server), kollidiert ein lesbarer Name mit
+> jeder anderen App, die zufällig denselben gewählt hat; eine UUID
+> praktisch nie. Der Mechanismus ändert sich dadurch NICHT — `'my-app'`
+> unten ist nur zur Lesbarkeit dieser Anleitung gewählt, in echtem Code
+> wäre es `const APP_SPACE_ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';`
+> (einmalig erzeugt, fest im Quellcode). Einen lesbaren Namen braucht die
+> App trotzdem oft — der gehört dann als eigenes Datenfeld AN den Space,
+> nicht IN dessen Id (siehe [`setLabel()`/`getLabel()`](./examples/space-index-lib.mjs)
+> unten): `appSpace.get('label').put('Mein App-Name')`, exakt dieselbe
+> Konvention wie `~<fp>/alias` fürs Nutzerprofil (README Abschnitt 2).
+> Extra-Felder direkt in `createSpace()`/`createSpaceAt()`s `opts`
+> (`{ writers, readers, label }`) werden dagegen stillschweigend verworfen
+> — das Manifest kennt nur `admins`/`writers`/`readers`/`createdAt`.
 
 **Offen** — ein fest verabredeter Name, ohne eigenes Manifest. Die
 Bootstrap-Regel des Spaces-Plugins ("kein Manifest = jeder darf
@@ -115,32 +144,47 @@ const appSpace = alice.get('my-app'); // navigiert nur — keine I/O, kein Manif
 Passend für eine öffentliche Instanz/Demo, nicht für echte
 Zugriffskontrolle — jeder, der den Namen kennt, darf schreiben.
 
-**Mitgliederbeschränkt** — `qu.createSpace({ writers, readers })`, die
-entstehende zufällige Id wird z. B. über einen Link verteilt (dasselbe
-Muster wie [`examples/todo-lib.mjs`](./examples/todo-lib.mjs)):
+**Mitgliederbeschränkt** — `qu.createSpaceAt(id, { writers, readers })`:
+dieselbe manifest-basierte Zugriffskontrolle wie `qu.createSpace(opts)`
+(README Abschnitt 2), nur mit einer selbst gewählten statt einer
+zufälligen Id — für genau diesen einen Zweck gemacht (eine App hat EINEN
+App-Space, nicht viele unabhängig angelegte Räume; für "viele Räume", z. B.
+mehrere ToDo-Listen oder Chat-Räume mit je einer eigenen, unvorhersehbaren
+Id, ist `qu.createSpace(opts)` weiterhin das richtige Werkzeug — siehe
+[`examples/todo-lib.mjs`](./examples/todo-lib.mjs)):
 
 ```js
-const appSpace = alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] });
-await appSpace.ready; // wirklich auf das Manifest warten, bevor die Id weitergegeben wird
-console.log(appSpace.id); // diese Id an weitere Mitglieder verteilen
+const APP_SPACE = 'my-app';
+const appSpace = alice.createSpaceAt(APP_SPACE, { writers: [alice.fingerprint], readers: ['*'] });
+await appSpace.ready; // wirklich auf das Manifest warten, bevor andere Mitglieder mitschreiben
 ```
+
+Derselbe First-Write-Wins-Bootstrap wie bei `qu.createSpace()` gilt
+unverändert: bis zu diesem allerersten Schreiben darf jeder unter dieser
+Id schreiben (auch das Manifest selbst) — für eine feste, im Quellcode
+sichtbare Id ist das Fenster meist kurz (die erste Instanz, die die App
+startet, gewinnt), aber es ist kein Zufalls-Wettlauf mehr wie bei einer
+frisch generierten UUID, sondern ein Deployment-Detail: wer die App zuerst
+mit Netzwerkzugriff startet, sollte diesen ersten Schreibvorgang auslösen.
 
 Ein zweites Mitglied hinzufügen (nur Admins dürfen das, siehe README
 Abschnitt 2/Whitepaper §8.3):
 
 ```js
-const manifest = (await alice.get(appSpace.id)).value;
-await alice.get(appSpace.id).put({ ...manifest, writers: [...manifest.writers, bob.fingerprint] });
+const manifest = (await alice.get(APP_SPACE)).value;
+await alice.get(APP_SPACE).put({ ...manifest, writers: [...manifest.writers, bob.fingerprint] });
 ```
 
-Für eine zufällige Id (statt eines festen Namens) reicht `pushTopics` beim
-`connect()` nicht als Präfix aus, sofern der Relay nicht ebenfalls exakt
-diese Id kennt — siehe den Kasten oben. Ein Relay, der beliebige, zur
-Laufzeit erzeugte App-Spaces unterstützen soll, braucht entweder ein
-breites `pushTopics`-Präfix (z. B. `''`, alles) oder eine
-anwendungsspezifische Konvention (z. B. `apps/<app-name>/`, sodass EIN
-`pushTopics`-Eintrag beliebig viele zur Laufzeit erzeugte Spaces
-darunter abdeckt).
+Weil `APP_SPACE` fest und vorher bekannt ist, deckt derselbe
+`pushTopics: [APP_SPACE]`/`pushTopics: ['my-app/']`-Präfix aus Schritt 2
+sowohl das Manifest (`id === APP_SPACE`, kein Slash) als auch alle
+verschachtelten Inhalte (`${APP_SPACE}/entries/...`) ab — kein separater
+Präfix, keine Sonderbehandlung nötig. (Nur bei `qu.createSpace()`s
+zufälliger Id, die erst zur Laufzeit entsteht, bräuchte ein Relay
+zusätzlich entweder ein breites `pushTopics`-Präfix wie `''` oder eine
+anwendungsspezifische Elternpräfix-Konvention wie `apps/<app-name>/`, um
+beliebig viele davon abzudecken — bei einer festen App-Space-Id entfällt
+das.)
 
 ## Schritt 4: Daten schreiben, lesen, live beobachten
 
@@ -221,6 +265,73 @@ sowie [API.md](./API.md#profil-qupublishprofile-qureadprofilefingerprint)):
 await alice.publishProfile({ alias: 'Alice' });
 await bob.publishProfile({ alias: 'Bob' });
 ```
+
+## Schritt 8: Mehrere Boards/ToDo-Listen — Sub-Spaces referenzieren
+
+Bisher: EIN App-Space für die ganze App. Braucht die App mehrere davon
+(mehrere Boards, mehrere ToDo-Listen, ein Space pro Team), ist das kein
+neuer Mechanismus, nur eine Ebene mehr: eine Id ist eine Id, und ein
+QuBit-Feld kann ganz gewöhnlich die Id eines ANDEREN Space enthalten.
+`qu.get(diese-id)` navigiert dorthin, egal ob "diese-id" aus dem eigenen
+Space kommt oder nicht.
+
+```
+App-Space --(Label "Team Alpha")--> Sub-Space-Id --(qu.get)--> Sub-Space (eigenes Manifest)
+```
+
+Jeder Sub-Space entsteht ganz normal mit `qu.createSpace({ writers, readers })`
+(frische, zufällige Id — anders als der App-Space selbst braucht ein
+einzelnes Board KEINE feste, vorher bekannte Id, siehe
+[`examples/todo-lib.mjs`](./examples/todo-lib.mjs)) und bekommt dadurch
+sein EIGENES, vom App-Space komplett unabhängiges Manifest:
+
+```js
+const boardAlpha = alice.createSpace({ writers: ['*'], readers: ['*'] });
+await boardAlpha.ready;
+await boardAlpha.get('label').put('Team Alpha');
+
+const boardBeta = alice.createSpace({ writers: ['*'], readers: ['*'] });
+await boardBeta.ready;
+await boardBeta.get('label').put('Team Beta');
+
+// Im App-Space registrieren — set(), weil mehrere Nutzer unabhängig
+// voneinander neue Boards/Listen anlegen können:
+await appSpace.get('boards').set({ label: 'Team Alpha', spaceId: boardAlpha.id });
+await appSpace.get('boards').set({ label: 'Team Beta', spaceId: boardBeta.id });
+
+// Auflisten (einmalig) oder live abonnieren:
+const index = await appSpace.session.query(`${appSpace.id}/boards/**`);
+appSpace.get('boards').map((q) => console.log('neu registriert:', q.value.label));
+
+// Navigieren: die referenzierte Id ist ein ganz normaler Space.
+const board = alice.get(index[0].value.spaceId);
+```
+
+Ein Board mit mitgliederbeschränktem Zugriff (statt `writers: ['*']`) folgt
+exakt demselben Muster wie der mitgliederbeschränkte App-Space in Schritt 3
+(feste `readers`-Liste, `publishProfile()` für automatische Verschlüsselung,
+siehe Schritt 7) — der Index-Eintrag selbst kennt keinen Unterschied
+zwischen einem offenen und einem eingeschränkten Ziel, er trägt in beiden
+Fällen nur `{ label, spaceId }`. Ein vollständiges, getestetes Beispiel
+inklusive eines mitgliederbeschränkten Boards neben einem offenen (rein
+lokal, ohne Netzwerk-Overhead, dafür mit derselben ACL-Logik) steht in
+`examples/space-index-lib.test.mjs`.
+
+**Wichtig, leicht zu übersehen:** der Index-EINTRAG (Label + Sub-Space-Id)
+ist nur so privat wie der App-Space selbst, NICHT so privat wie der
+referenzierte Sub-Space. Wer den App-Space lesen darf, sieht IMMER
+Label + Id jedes registrierten Boards — auch eines, dessen INHALT er gar
+nicht lesen darf (dessen Inhalt bleibt trotzdem durch die eigene ACL
+geschützt, nur Existenz+Label sind sichtbar). Für ein wirklich geheimes
+Board (dessen Existenz selbst verborgen bleiben soll) den Index-Eintrag
+nicht im offenen App-Space ablegen, sondern die Id z. B. per Direktlink
+verteilen, wie in Schritt 3.
+
+Fertige, getestete Bibliothek für dieses Muster (`setLabel`/`getLabel`/
+`registerSpace`/`listSpaces`/`onSpaceRegistered`), inklusive Test für genau
+diese Sichtbarkeits-Falle:
+[`examples/space-index-lib.mjs`](./examples/space-index-lib.mjs) +
+[`examples/space-index-lib.test.mjs`](./examples/space-index-lib.test.mjs).
 
 ## Vollständiges Beispiel
 

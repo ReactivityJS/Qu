@@ -145,6 +145,26 @@ await room.get('msg1').put('hallo');              // erlaubt, weil room's Manife
 await bob.get(`${room}/msg2`).put('hi zurück');   // room funktioniert auch weiterhin wie ein roher String — ${room} interpoliert zur Id
 ```
 
+`qu.createSpace(opts)` erzeugt jedes Mal eine neue, zufällige Id — richtig
+für "viele unabhängig angelegte Räume" (ToDo-Listen, Chat-Räume). Für
+"genau EIN wohlbekannter Space für diese ganze App" (ein **App-Space**,
+siehe [`APP-GUIDE.md`](./APP-GUIDE.md)) `qu.createSpaceAt(id, opts)` —
+identisch, nur mit einer selbst gewählten statt einer zufälligen Id. Diese
+feste Id ist dann gleichzeitig Adressierung im Code (`qu.get(id)`) UND der
+`pushTopics`/`sync({ topic })`-Präfix für den Netzwerk-Abgleich (Abschnitt
+3) — es gibt kein separates "Topic"-Konzept in QU, ein Topic ist einfach
+ein String-Präfix auf QuBit-Ids, und die robusteste Wahl dafür ist immer
+die Space-Id selbst — in echtem Code idealerweise eine einmalig erzeugte
+UUID statt eines lesbaren Namens (Kollisionsfreiheit auf geteilter
+Infrastruktur), mit einem menschenlesbaren Namen als eigenes Datenfeld
+daneben (`space.get('label').put(...)`), nicht als Teil der Id selbst.
+Braucht eine App MEHRERE solcher Spaces (mehrere Boards, mehrere
+ToDo-Listen), lässt sich das genauso über eine Id-Referenz lösen: ein
+Space kann die Id eines anderen ganz gewöhnlich als Feld tragen
+(`qu.get(dieseId)` navigiert dorthin, egal woher die Id stammt) — siehe
+[`APP-GUIDE.md`, Schritt 8](./APP-GUIDE.md#schritt-8-mehrere-boardstodo-listen-sub-spaces-referenzieren)
+und [`examples/space-index-lib.mjs`](./examples/space-index-lib.mjs).
+
 Einen bereits bekannten Space **laden** (statt neu anzulegen) — egal ob
 dein eigener, der einer anderen Person (`~<ihr-fingerprint>`), oder ein
 geteilter Raum, dessen Id z. B. über einen Link ankam:
@@ -159,16 +179,22 @@ const sameRoomAgain = bob.get(room.id);          // dieselbe room-Id, jetzt aus 
 wie derselbe Aufruf mit dem vollen Pfad direkt auf `qu` es auch wäre;
 `qu.own` ist nichts als `qu.get(qu.userSpaceId)`.
 
-`put(value)` überschreibt (LWW, benanntes Register); `set(value)` hängt
-automatisch `${fingerprint}-${ts}` als ein Pfadsegment an — für Sammlungen
-mit mehreren unabhängigen Schreibern (Chat, Kommentare), die strukturell
-nie kollidieren können, aber genauso eine Ebene tief bleiben wie eine
-`put()`-basierte Sammlung — `node.map(cb)` (ohne `deep`) findet beide Arten
-gleich:
+**`put(value)` und `set(value)` sind zwei grundlegend verschiedene Formen:**
+`put(value)` ist EIN benannter, veränderlicher Wert — der Node selbst
+trägt ihn, `await node` liest ihn, ein zweiter `put()` überschreibt ihn
+(nichts akkumuliert). `set(value)` ist ARRAY-artig — der Node selbst wird
+NIE beschrieben (`await node` bleibt `null`), stattdessen legt jeder
+`set()`-Aufruf ein neues, eigenes Kind an (`${fingerprint}-${ts}` als ein
+Pfadsegment, kollisionssicher über mehrere unabhängige Schreiber hinweg,
+genauso eine Ebene tief wie eine `put()`-basierte Sammlung). Die wachsende
+Liste selbst liest man nie über den Node direkt, sondern über
+`node.map(cb)`/`session.query()`:
 
 ```js
 await room.get('msgs').set({ text: 'erste Nachricht' });  // landet unter room/msgs/<alice-fp>-<ts>
 await bob.get(`${room}/msgs`).set({ text: 'zweite Nachricht' }); // eigener Namensraum, keine Kollision möglich
+console.log(await room.get('msgs'));                       // null — an msgs selbst wurde nie put()-geschrieben
+const all = await room.session.query(`${room}/msgs/**`);   // so liest man die Liste: alle Einträge, wie ein Array
 ```
 
 **Verschlüsselung ist der Default, sobald ein Space nicht öffentlich lesbar
@@ -462,6 +488,85 @@ Schreiben mehrerer Autoren; [`examples/forum-lib.test.mjs`](./examples/forum-lib
 zeigt jede Garantie (Bucket-Isolation live wie beim Lesen, Dedup/Sortierung
 des Index, keine Kollision) als laufenden Test.
 
+### 8. Referenzen automatisch folgen (`key://`)
+
+Mit [`createReferenceHandlerPlugin()`](./API.md#references-modul) installiert
+folgen `await`/`.put()`/`.set()`/`.on()`/`.map()` einer `key://`-Referenz
+(siehe References-Modul) transparent, statt den rohen String
+zurückzugeben — für den häufigsten Fall "diese Id ist eigentlich nur ein
+Alias auf einen anderen Space/Wert":
+
+```js
+import { Qu, createSpacesPlugin, createReferenceHandlerPlugin, keyRef } from './src/index.js';
+
+const alice = (await Qu.create()).use(createSpacesPlugin()).use(createReferenceHandlerPlugin());
+const board = alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] });
+await board.ready;
+
+await alice.own.get('currentBoard').put(keyRef(board.id)); // ein Alias, kein Duplikat
+
+const resolved = await alice.own.get('currentBoard'); // liest transparent DURCH die Referenz
+console.log(resolved.value);       // der Wert AN board.id, nicht der "key://…"-String
+console.log(resolved.id);          // board.id — die ECHTE Adresse, nicht der Alias-Pfad
+
+// weiter navigieren: die aufgelöste Id einfach übernehmen
+const sameBoard = alice.get(resolved.id);
+```
+
+**Kostenlos für den referenzfreien Normalfall:** geprüft wird nur der Wert
+AN der Id, die ein Verb tatsächlich aufruft — kein zusätzlicher Read
+gegenüber heute, weil dieser Wert ohnehin gelesen werden musste, um ihn
+zurückzugeben. Ohne `createReferenceHandlerPlugin()` bleibt das Verhalten
+exakt wie vorher (Core kennt `key://` nicht, `resolveDispatch` ist die
+Identitätsfunktion).
+
+**Vier Fallstricke, die die Doku statt eine Ausnahme im Code löst:**
+
+1. **Kein Mid-Path-Auflösen.** `node.get(subpath)` bleibt reine, synchrone
+   Pfad-Konkatenation — es prüft nie, ob ein bereits gebautes Zwischenstück
+   des Pfads selbst eine Referenz ist. Aufgelöst wird nur die Id, auf der
+   ein Verb (`await`/`put`/`set`/`on`/`map`) tatsächlich aufgerufen wird:
+   ```js
+   await appSpace.get('currentBoard').get('posts').set({...}); // KEINE Auflösung — 'posts' wird
+                                                                   // wörtlich an den Alias-Pfad gehängt
+   const board = alice.get((await appSpace.get('currentBoard')).id); // EIN expliziter Schritt …
+   await board.get('posts').set({...});                              // … dann normal weiterarbeiten
+   ```
+   Das ist kein Bug, sondern der Normalfall: "durch Referenzen navigieren"
+   ist ein Helfer für den EINEN Auflösungs-Schritt, nicht dafür gedacht,
+   dass man nie mehr merkt, wo man gerade ist. Der empfohlene App-Aufbau
+   bleibt: erst auflösen (`app -> boards -> myBoard`), danach ganz normal
+   im Ziel-Space weiterarbeiten (siehe [Schritt 8 im APP-GUIDE.md](./APP-GUIDE.md#schritt-8-mehrere-boardstodo-listen-sub-spaces-referenzieren)).
+   Dieselbe Eigenschaft ist auch ein Sicherheitsnetz: ein unaufgelöster
+   Mid-Path-Schreibvorgang landet strukturell dort, wo `.get()` ihn baut —
+   nie versehentlich in einem fremden, referenzierten Space.
+2. **Nur `key://` folgt automatisch.** `obj://` (eine Sammlung) und
+   `file://` (Bytes) werden bewusst NICHT automatisch aufgelöst — ihr
+   Ergebnis ist strukturell etwas anderes als "ein Wert an einer Id"
+   (ein Array/Objekt bzw. rohe Bytes), das würde den Rückgabetyp von
+   `await node` unvorhersagbar machen. Dafür weiterhin explizit
+   `resolveReference()`/`resolveFileRef()` (References-Modul).
+3. **`on()`/`.map()` lösen genau EINMAL auf, beim Aktivieren — nie pro
+   Event.** Zeigt eine Referenz später auf ein anderes Ziel um, folgt eine
+   bereits laufende Subscription NICHT automatisch nach (Abmelden +
+   neu Abonnieren, falls gewünscht). `on()` ohne `{ raw: true }` ist
+   dadurch nicht mehr rein synchron/lückenlos wie zuvor (ein einmaliger,
+   kurzer Setup-Schritt läuft vorher) — `{ raw: true }` stellt das alte,
+   exakt synchrone Verhalten wieder her.
+4. **`{ raw: true }`** (bei `put`/`set`/`on`/`map`) schreibt/liest an der
+   wörtlichen Id, ohne Auflösung — Escape-Hatch für den seltenen Fall, den
+   rohen `key://…`-String selbst sehen/schreiben zu wollen. Für `await
+   node` (keine Options-Parameter, das Thenable-Protokoll) ist die
+   Entsprechung `await node.session.get(node.id)`.
+
+**ACL folgt immer dem ZIEL-Space, nicht dem Alias-Besitzer** — verifiziert:
+jeder darf sich einen eigenen Alias auf einen fremden, restriktiven Space
+anlegen (der Alias selbst ist nur eine Referenz unter dem eigenen, immer
+beschreibbaren Space), aber ein Schreibversuch DURCH den Alias wird exakt
+so geprüft, als hätte man die Ziel-Id direkt angesprochen — kein
+Sonderfall im ACL-Code, das folgt automatisch daraus, dass die aufgelöste
+Id am Ende ein ganz normaler, unveränderter Aufruf ist.
+
 ## Projektstruktur
 
 ```
@@ -713,6 +818,25 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
      kaskadiert werden — inklusive Zyklenschutz (ein Ref, der auf sich
      selbst zurückführt, bleibt ab dem zweiten Auftreten im selben Pfad
      unaufgelöst statt zu hängen).
+   - **Referenzen schreibt man immer explizit** — nichts davon passiert
+     beim Schreiben automatisch: `put(bytes)` mit konfiguriertem
+     `FileHandler` chunked+manifestiert automatisch, aber das Einbetten des
+     zurückgegebenen `file://`-Strings woanders (z. B. in eine
+     Chat-Nachricht) ist ein eigener, expliziter Schritt der App
+     (`sendMessage()`s `refs`-Parameter, Chat-Modul); `set()`-Sammlungen
+     sind einfach viele eigene QuBits, `obj://<pfad>` muss explizit
+     aufgerufen werden, um sie zu einer Liste zusammenzufassen. Eine
+     Referenz AUF EINEN SPACE selbst schreibt man genauso explizit:
+     `node.put(keyRef(otherSpace.id))` — **nicht**
+     `node.put(otherSpace)` (die `QuSpace`-Instanz direkt als Wert wirft
+     jetzt einen klaren Fehler, siehe [References-Modul](./API.md#references-modul)).
+   - **Beim LESEN/SCHREIBEN/ABONNIEREN folgt `key://` dagegen automatisch**,
+     sobald `createReferenceHandlerPlugin()` installiert ist —
+     `put`/`set`/`on`/`map`/`await` lösen eine `key://`-Referenz AN der Id,
+     auf der sie aufgerufen werden, transparent auf (Default AN,
+     `{ raw: true }` schaltet ab). `obj://`/`file://` bleiben auch hier
+     explizit (`resolveReference()`/`resolveFileRef()`). Volle Erklärung,
+     Beispiele und die vier Fallstricke: [Abschnitt 8](#8-referenzen-automatisch-folgen-key).
 4. **Spaces** (`src/modules/spaces.js`, `createSpacesPlugin()`) — löst den
    Core-Default (nur `~<eigener-fingerprint>`) durch manifest-bewusste ACL-
    Auflösung ab: generische (UUID-)Spaces mit `writers`/`readers`/`admins`,
