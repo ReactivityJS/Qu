@@ -514,7 +514,10 @@ src/
                           rate-limiter.js (Relay-Schutz gegen einen
                           flutenden Peer, siehe requireDirectWriter/
                           rateLimiter oben), index.js (createNetworkPlugin
-                          — qu.connect()/qu.router/qu.webrtc()-Sugar)
+                          — qu.connect()/qu.router-Sugar), webrtc-plugin.js
+                          (createWebRTCPlugin — qu.webrtc()-Sugar, bewusst
+                          eigenes Plugin statt Teil von createNetworkPlugin,
+                          siehe Bundle-Größe)
   data/                  Kategorie 3 — Referenzen & Dateien: references.js
                           (obj://, key://, file:// — ReferenceHandler, Tiefen-
                           limit konfigurierbar), files/{manifest,transfer}.js
@@ -676,12 +679,16 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
    an `QuStore`-Mounts übergeben, nichts sonst ändert sich.
 2. **Network** (`src/network/`, `createNetworkPlugin()`) — Replication,
    Router (Subscription/Routing über mehrere Transport-Wege wie WS-Relay
-   und WebRTC), Handshake, WebSocket-/WebRTC-Transporte. `qu.use(createNetworkPlugin())`
-   fügt `qu.connect()`/`qu.router`/`qu.webrtc()` hinzu — vorher existieren
-   diese Methoden schlicht nicht auf der Qu-Instanz. Node Relay/Router/
-   StorageMirror (`relay/`) sind Deployments *dieser* Kategorie, kein
-   Sonderbau: `Router{role:'mirror'}` + ein durables `StorageAdapter` +
-   `relay/relay.mjs` ergeben zusammen einen StorageMirror.
+   und WebRTC), Handshake, WebSocket-Transport. `qu.use(createNetworkPlugin())`
+   fügt `qu.connect()`/`qu.router` hinzu — vorher existieren diese Methoden
+   schlicht nicht auf der Qu-Instanz. Node Relay/Router/StorageMirror
+   (`relay/`) sind Deployments *dieser* Kategorie, kein Sonderbau:
+   `Router{role:'mirror'}` + ein durables `StorageAdapter` +
+   `relay/relay.mjs` ergeben zusammen einen StorageMirror. **WebRTC ist ein
+   eigenes, drittes Plugin** (`createWebRTCPlugin()`, fügt `qu.webrtc()`
+   hinzu, braucht `createNetworkPlugin()` bereits installiert) — bewusst
+   nicht Teil von `createNetworkPlugin()` selbst, siehe
+   [Bundle-Größe](#bundle-größe) unten.
 3. **Data — Referenzen & Dateien** (`src/data/`) — `obj://`/`key://`/`file://`
    als URI-Schema, additiv zum bestehenden `refs`-Array:
    - `key://<pfad>` zeigt auf **einen** QuBit-Wert (Foreign-Key-artig).
@@ -712,6 +719,25 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
    Bestätigung). Kein Storage-/Netzwerk-Bezug, also weiterhin
    offline-sicher — aber eine echte Policy-Entscheidung, kein struktureller
    Core-Bestandteil, deshalb Plugin statt Default.
+
+### Bundle-Größe
+
+Real gemessen (esbuild, `--bundle --minify`, nicht geschätzt):
+
+| Bundle | minifiziert | + gzip |
+|---|---|---|
+| Core (Runtime/Store/Session/Identity/Space-Handle/Clock/ACL/Verify/Crypto/Sign + `qu.js` + Memory/Null-Adapter) | 17,5 KB | 6,2 KB |
+| + Store (Local/Session/IndexedDB/MemoryFileStorage) | 20,0 KB | 6,8 KB |
+| + Network (`createNetworkPlugin()` + Spaces, **ohne** WebRTC) | 27,6 KB | 9,2 KB |
+| + `createWebRTCPlugin()` obendrauf | 32,6 KB | 10,8 KB |
+
+WebRTC ist deshalb ein eigenes Plugin (siehe oben): Apps, die nur über
+einen eigenen Relay per WebSocket synchronisieren — der häufigste Fall —
+zahlen die ~5 KB minifiziert / ~1,6 KB gzip für `RTCPeerConnection`-Code
+nicht mit, den sie nie aufrufen. Vor dieser Trennung importierte
+`createNetworkPlugin()` `PeerConnectionManager` unbedingt, wodurch **jede**
+`qu.connect()`-Nutzung WebRTC zwangsweise mitbündelte — real gemessen
+**~29 % / ~11,5 KB** weniger für den WebRTC-losen Fall seit der Trennung.
 
 **`QuSpace`** (`src/core/space-handle.js`) ist dagegen Core, nicht Plugin —
 ein reines Adressierungs-Hilfsmittel, kein Policy-Entscheid, kostet keinen
@@ -911,7 +937,8 @@ danach **erneuter QU-Handshake über den neuen Datenkanal** (WebRTC/DTLS
 verschlüsselt, beweist aber keine Identität — das übernimmt weiterhin
 unser Challenge-Response), erst danach Freigabe für Replication.
 
-`qu.webrtc(signalingChannel)` liefert einen `PeerConnectionManager`;
+`qu.webrtc(signalingChannel)` (über `qu.use(createWebRTCPlugin())` — ein
+eigenes Plugin, siehe [Bundle-Größe](#bundle-größe)) liefert einen `PeerConnectionManager`;
 `.connectDirect(fingerprint, { pushTopics, group, metric })` baut eine
 Direktverbindung auf. Primärer Anwendungsfall: Weg zu einer Node ohne
 Relay (Ausfall oder bewusst gewünscht) — spätere Audio/Video-Erweiterung
@@ -1077,7 +1104,7 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Status
 
-156 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+157 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
 CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
 Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
 Dieselben Fälle laufen auch im vereinheitlichten Browser-Dashboard

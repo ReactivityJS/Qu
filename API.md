@@ -183,10 +183,10 @@ hat weiterhin `.sync()`/`.repair()`/`.snapshot()`/`.peerFingerprint`/`.close()`.
 identisches Verhalten wie zuvor. Mit `role: 'mirror'` oder `role: 'sync'`
 wird die Verbindung zusätzlich bei `qu.router` registriert (siehe
 [`Router`](#router-webrtc)) und deren Push-Entscheidung fortan davon
-mitbestimmt. `qu.router` (lazy, bei erstem Zugriff erzeugt) und
-`qu.webrtc(signalingChannel, opts?)` (liefert einen
-`PeerConnectionManager`, siehe dort) — Details siehe
-[Router & WebRTC](#router-webrtc) weiter unten.
+mitbestimmt. `qu.router` (lazy, bei erstem Zugriff erzeugt) — Details siehe
+[Router & WebRTC](#router-webrtc) weiter unten. `qu.webrtc(...)` kommt NICHT
+von hier, sondern von einem zweiten, separaten Plugin
+(`createWebRTCPlugin()`) — siehe dort für den Grund.
 
 `requireDirectWriter`/`rateLimiter` sind ebenfalls optional und additiv,
 betreffen aber nur **eingehende** `qu.push`-Nachrichten (nicht das oben
@@ -207,6 +207,23 @@ router.addRoute({ channelId, channel, pushTopics, role: 'sync', group: `peer:${f
 `DefaultReplication` bekommt den Router optional (`router`-Option am
 Konstruktor bzw. via `qu.connect(channel, { role, group?, metric? })`) —
 ohne Router unverändertes Verhalten.
+
+**`qu.use(createWebRTCPlugin())`** (`network/webrtc-plugin.js`) — ein
+eigenständiges, zweites Plugin, nicht Teil von `createNetworkPlugin()`:
+`webrtc-peer-manager.js` zieht echtes `RTCPeerConnection`-Gewicht nach
+sich (`transports/webrtc-browser.js`), das eine App, die nur mit ihrem
+eigenen Relay über WebSocket spricht, nie mitbündeln sollte. Getrennt
+gehalten seit einem echten Fund: `createNetworkPlugin()` importierte
+`PeerConnectionManager` vorher unbedingt, wodurch **jede** `qu.connect()`-
+Nutzung WebRTC-Code mitbündelte, ob gebraucht oder nicht — real gemessen
+(esbuild, minifiziert) macht die Trennung **~29 % / ~11,5 KB** aus, siehe
+[README-Abschnitt zur Bundle-Größe](./README.md#core-storage-network-data-wie-die-plugins-zusammenspielen).
+**Braucht `createNetworkPlugin()` bereits installiert** (teilt sich dessen
+`qu.router`, keinen zweiten, unabhängigen Router) — `install()` wirft sonst
+einen klaren Fehler statt still einen zwecklosen zweiten Router
+aufzubauen. `QU_PRESETS.networkWebRTC` bündelt beide zusammen mit Spaces
+(`src/presets.js`), für Apps, denen die Größe egal ist und die einfach
+alles wollen.
 
 `PeerConnectionManager` (`qu.webrtc(signalingChannel, opts?)`) baut
 WebRTC-Direktverbindungen zu einzelnen Fingerprints auf

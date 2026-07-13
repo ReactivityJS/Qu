@@ -1,12 +1,14 @@
-// Network plugin: the `qu.connect()`/`qu.router`/`qu.webrtc()` sugar that
-// used to be hardcoded into the Qu facade. DefaultReplication, Router and
-// PeerConnectionManager remain directly usable without this (see
-// replication/default.js, router.js, webrtc-peer-manager.js) — this only
-// adds the convenience layer, and only for Qu instances that opt into it.
+// Network plugin: the `qu.connect()`/`qu.router` sugar that used to be
+// hardcoded into the Qu facade. DefaultReplication and Router remain
+// directly usable without this (see replication/default.js, router.js) —
+// this only adds the convenience layer, and only for Qu instances that opt
+// into it. Deliberately does NOT import webrtc-peer-manager.js (that's
+// network/webrtc-plugin.js, a separate opt-in plugin) — WebRTC pulls in
+// real, non-trivial RTCPeerConnection wiring that an app talking only to
+// its own relay over WebSocket should never have to bundle.
 import { authenticateChannel } from './handshake.js';
 import { Router } from './router.js';
 import { DefaultReplication } from './replication/default.js';
-import { PeerConnectionManager } from './webrtc-peer-manager.js';
 
 /**
  * `qu.use(createNetworkPlugin())` attaches:
@@ -15,10 +17,13 @@ import { PeerConnectionManager } from './webrtc-peer-manager.js';
  *     channel. `role`/`group`/`metric` are opt-in — see network/router.js.
  *     `requireDirectWriter`/`rateLimiter` are opt-in incoming-push
  *     protections — see replication/default.js.
- *   - `qu.router` — the Router instance `connect()`/`webrtc()` share,
- *     created lazily on first use.
- *   - `qu.webrtc(signalingChannel, opts)` — a PeerConnectionManager for
- *     direct peer connections (see network/webrtc-peer-manager.js).
+ *   - `qu.router` — the Router instance `connect()` (and, if also
+ *     installed, `createWebRTCPlugin()`'s `qu.webrtc()`) shares, created
+ *     lazily on first use.
+ *
+ * For direct peer-to-peer connections (`qu.webrtc(...)`), additionally
+ * `qu.use(createWebRTCPlugin())` (network/webrtc-plugin.js) — kept separate
+ * so it's only ever bundled by apps that actually use it.
  */
 export function createNetworkPlugin() {
   let router = null;
@@ -38,7 +43,6 @@ export function createNetworkPlugin() {
         return repl;
       };
       Object.defineProperty(qu, 'router', { get: getRouter, configurable: true });
-      qu.webrtc = (signalingChannel, opts = {}) => new PeerConnectionManager(qu, { router: getRouter(), signalingChannel, ...opts });
     },
   };
 }
