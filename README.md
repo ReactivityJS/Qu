@@ -739,6 +739,18 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
      kaskadiert werden — inklusive Zyklenschutz (ein Ref, der auf sich
      selbst zurückführt, bleibt ab dem zweiten Auftreten im selben Pfad
      unaufgelöst statt zu hängen).
+   - **Referenzen sind IMMER explizit, auch bei Dateien und Listen** —
+     nichts davon passiert automatisch: `put(bytes)` mit konfiguriertem
+     `FileHandler` chunked+manifestiert automatisch, aber das Einbetten des
+     zurückgegebenen `file://`-Strings woanders (z. B. in eine
+     Chat-Nachricht) ist ein eigener, expliziter Schritt der App
+     (`sendMessage()`s `refs`-Parameter, Chat-Modul); `set()`-Sammlungen
+     sind einfach viele eigene QuBits, `obj://<pfad>` muss explizit
+     aufgerufen werden, um sie zu einer Liste zusammenzufassen. Eine
+     Referenz AUF EINEN SPACE selbst schreibt man genauso explizit:
+     `node.put(keyRef(otherSpace.id))` — **nicht**
+     `node.put(otherSpace)` (die `QuSpace`-Instanz direkt als Wert wirft
+     jetzt einen klaren Fehler, siehe [References-Modul](./API.md#references-modul)).
 4. **Spaces** (`src/modules/spaces.js`, `createSpacesPlugin()`) — löst den
    Core-Default (nur `~<eigener-fingerprint>`) durch manifest-bewusste ACL-
    Auflösung ab: generische (UUID-)Spaces mit `writers`/`readers`/`admins`,

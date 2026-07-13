@@ -4,6 +4,7 @@ import { filterForReader } from './acl.js';
 import { debug } from './debug.js';
 import { subscribeWithOptions } from './subscribe-with-options.js';
 import { spaceIdOf, userSpaceId, isReservedProfilePath } from './space.js';
+import { QuSpace } from './space-handle.js';
 
 const ECDH_ALG = { name: 'ECDH', namedCurve: 'P-256' };
 
@@ -113,6 +114,19 @@ export class QuSession {
 
   async publish(id, plainValue, { ts, encryptFor: recipients, refs } = {}) {
     id = String(id); // tolerate anything with a sensible toString() (e.g. QuSpace), not just plain strings
+    // A QuSpace as the ID (above) is fine — String(node) is exactly its SpaceId.
+    // A QuSpace as the VALUE is almost certainly a mistake: it looks like it
+    // works locally (the raw instance sits in a MemoryAdapter's Map, and
+    // signing already narrows it via JSON.stringify -> its toJSON() -> the
+    // bare id), but the STORED value is not that string, it's the live
+    // instance — the moment this qubit crosses any real serialization
+    // boundary (network send, disk persistence via a real StorageAdapter),
+    // it collapses to the bare id with no `key://` prefix, silently
+    // unrecognizable as a reference by isReference()/resolveReference().
+    // Fail loudly here instead of shipping that footgun.
+    if (plainValue instanceof QuSpace) {
+      throw new Error(`[Session] publish()/put()/set() erhielt eine QuSpace-Instanz als WERT, nicht als Id — das ist fast immer ein Versehen. Für eine explizite Referenz auf einen anderen Space: node.put(keyRef(otherSpace.id)) (data/references.js), nicht node.put(otherSpace).`);
+    }
     let value = plainValue;
     if (recipients === undefined) recipients = await this.#defaultRecipients(id);
     if (recipients && recipients.length) {

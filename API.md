@@ -27,10 +27,11 @@ import { QuRuntime, QuSession, QuIdentity, /* ... */ } from './src/index.js';
 10. [Plugins](#plugins) — Verify & ACL
 11. [Spaces-Modul](#spaces-modul) — ACL-Resolver
 12. [Replication-Modul](#replication-modul) — Sync
-13. [Files-Modul](#files-modul) — Datei-Transfer
-14. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
-15. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
-16. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`/`<qu-list>`
+13. [References-Modul](#references-modul) — `obj://`/`key://`/`file://`
+14. [Files-Modul](#files-modul) — Datei-Transfer
+15. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
+16. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
+17. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`/`<qu-list>`
 
 ---
 
@@ -932,6 +933,91 @@ Server-Prozess mit vielen gleichzeitig verbundenen Clients.
   `DefaultReplication` mit dem bewiesenen Fingerprint.
 - **`hub.detach(channelId)`**, **`hub.get(channelId)`**, **`hub.size`**,
   **`hub.broadcastSync({ topic })`**.
+
+---
+
+## References-Modul
+
+`src/data/references.js` — ein URI-Schema für Verweise zwischen QuBits, rein
+manuell/opt-in (kein automatischer Read-Hook in `get()`, gleiche Philosophie
+wie überall: der Core bleibt ein dummer Store, die App entscheidet, wann sie
+einem Link folgt). Nichts hier schreibt eine Referenz automatisch — auch der
+`FileHandler` nicht (siehe unten): das Schreiben einer Referenz ist immer
+ein expliziter, eigener Aufruf.
+
+### `isReference(value)` → `boolean`
+`true`, wenn `value` ein String im Format `obj://…`/`key://…`/`file://…` ist.
+
+### `parseReference(ref)` → `{ scheme, path }`
+Zerlegt einen Referenz-String. Wirft, falls `ref` keinem der drei Schemata entspricht.
+
+### `keyRef(path)` / `objRef(path)` / `fileRef(manifestId)` → `string`
+Bauen den jeweiligen Referenz-String, statt ihn von Hand zusammenzusetzen
+(`` `key://${path}` `` usw.) — bevorzugt gegenüber manuellem
+Zusammenbau, damit ein Tippfehler im Schema-Präfix nicht erst beim
+Auflösen aussieht wie "keine Referenz gefunden".
+
+**Explizit eine Referenz AUF EINEN ANDEREN SPACE schreiben** — die direkte
+Antwort auf "wie schreibe ich selbst eine Referenz": eine Referenz ist
+IMMER ein normaler `put()`/`set()`-Aufruf mit einem `key://`/`obj://`-String
+als `value`, nichts Spezielleres:
+
+```js
+const otherSpace = qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] });
+await otherSpace.ready;
+
+// Zeigt auf GENAU EINEN Wert — hier: den Space selbst (sein Root-QuBit,
+// z. B. das Manifest oder was auch immer dort per put() liegt):
+await myNode.put(keyRef(otherSpace.id));
+
+// Zeigt auf die DIREKTEN KINDER eines Pfads, zu einem Objekt/Array
+// gesammelt — für "eine Liste/Sammlung referenzieren", nicht den Space
+// selbst. `obj://<spaceId>` OHNE Unterpfad sammelt nur, was direkt AN
+// `spaceId` selbst hängt (`${spaceId}/*`) — meist eher
+// `obj://<spaceId>/<collectionPath>`, z. B. eine set()-Sammlung:
+await myNode.put(objRef(`${otherSpace.id}/entries`));
+```
+
+`myNode.put(otherSpace)` (die `QuSpace`-INSTANZ direkt als Wert, nicht als
+String) ist dagegen KEINE gültige Referenz und wirft jetzt einen klaren
+Fehler: lokal sähe es noch fast richtig aus (die Instanz landet einfach roh
+im `MemoryAdapter`), aber sobald der QuBit eine echte Serialisierungsgrenze
+überquert (Netzwerk-Versand, Persistenz über einen echten
+`StorageAdapter`), kollabiert `JSON.stringify` die Instanz über ihre
+`toJSON()` zur nackten Id — OHNE `key://`-Präfix, für
+`isReference()`/`resolveReference()` danach nicht mehr als Referenz
+erkennbar. `node.put(keyRef(otherSpace.id))` (die explizite String-Form)
+ist der einzige korrekte Weg.
+
+### `resolveReference(qu, ref, { maxDepth?, asArray?, fileHandler? })` → `Promise<any>`
+Löst einen einzelnen Referenz-String auf. `maxDepth` (Default `1`) begrenzt,
+wie viele weitere Referenzen INNERHALB des aufgelösten Werts noch
+kaskadiert werden (die übergebene Referenz selbst wird immer aufgelöst,
+unabhängig vom Budget); ein Ref, der auf sich selbst zurückführt, bleibt ab
+dem zweiten Auftreten im selben Pfad unaufgelöst statt zu hängen.
+`asArray: true` (nur `obj://`) liefert ein nach Zeilenschlüssel sortiertes
+Array statt eines Objekts. `fileHandler` (optional) lässt `file://` zu
+echten Bytes auflösen statt zum rohen Manifest (siehe Files-Modul unten).
+
+### `resolveValue(qu, value, opts)` → `Promise<any>`
+Wie `resolveReference()`, aber läuft einen beliebigen Wert (z. B. ein
+ganzes `qubit.value`) ab und löst JEDE Referenz-Zeichenkette auf, die
+irgendwo darin gefunden wird — statt zu verlangen, dass der Top-Level-Wert
+selbst schon eine Referenz ist.
+
+### `createReferenceHandlerPlugin({ maxDepth?, asArray?, fileHandler? })`
+`qu.use(...)` hängt `qu.resolveReference(ref, opts)`/`qu.resolveValue(value, opts)`
+mit diesen Defaults an (weiterhin pro Aufruf überschreibbar).
+
+**Was NICHT automatisch referenziert wird, obwohl es sich so anfühlen
+könnte:** weder Listen-Einträge (`set()`-Sammlungen sind einfach viele
+eigene QuBits — `obj://<pfad>` MUSS explizit aufgerufen werden, um sie zu
+einer Liste zusammenzufassen) noch Dateien (siehe Files-Modul: `put(bytes)`
+chunked+manifestiert automatisch, wenn ein `FileHandler` konfiguriert ist,
+aber das Einbetten des zurückgegebenen `file://`-Strings irgendwo ANDERS
+— z. B. in ein Chat-Nachrichten-QuBit — ist immer ein eigener, expliziter
+Schritt der App, siehe `sendMessage()`s `refs`-Parameter im Chat-Modul
+unten).
 
 ---
 
