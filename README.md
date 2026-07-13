@@ -154,7 +154,16 @@ feste Id ist dann gleichzeitig Adressierung im Code (`qu.get(id)`) UND der
 `pushTopics`/`sync({ topic })`-Präfix für den Netzwerk-Abgleich (Abschnitt
 3) — es gibt kein separates "Topic"-Konzept in QU, ein Topic ist einfach
 ein String-Präfix auf QuBit-Ids, und die robusteste Wahl dafür ist immer
-die Space-Id selbst.
+die Space-Id selbst — in echtem Code idealerweise eine einmalig erzeugte
+UUID statt eines lesbaren Namens (Kollisionsfreiheit auf geteilter
+Infrastruktur), mit einem menschenlesbaren Namen als eigenes Datenfeld
+daneben (`space.get('label').put(...)`), nicht als Teil der Id selbst.
+Braucht eine App MEHRERE solcher Spaces (mehrere Boards, mehrere
+ToDo-Listen), lässt sich das genauso über eine Id-Referenz lösen: ein
+Space kann die Id eines anderen ganz gewöhnlich als Feld tragen
+(`qu.get(dieseId)` navigiert dorthin, egal woher die Id stammt) — siehe
+[`APP-GUIDE.md`, Schritt 8](./APP-GUIDE.md#schritt-8-mehrere-boardstodo-listen-sub-spaces-referenzieren)
+und [`examples/space-index-lib.mjs`](./examples/space-index-lib.mjs).
 
 Einen bereits bekannten Space **laden** (statt neu anzulegen) — egal ob
 dein eigener, der einer anderen Person (`~<ihr-fingerprint>`), oder ein

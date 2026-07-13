@@ -113,6 +113,23 @@ im Code (`qu.get(id)`) und Netzwerk-Topic sind dieselbe Zeichenkette, nicht
 zwei getrennte Dinge, die zufällig übereinstimmen müssen. Zwei Varianten,
 beide mit fester Id:
 
+> **In einer echten App: die feste Id selbst per `crypto.randomUUID()`
+> erzeugen, nicht einen lesbaren Namen wie `'my-app'` wählen.** Space-Ids
+> sind global — läuft die App auf geteilter Infrastruktur (ein öffentlicher
+> Demo-Relay, ein Multi-Tenant-Server), kollidiert ein lesbarer Name mit
+> jeder anderen App, die zufällig denselben gewählt hat; eine UUID
+> praktisch nie. Der Mechanismus ändert sich dadurch NICHT — `'my-app'`
+> unten ist nur zur Lesbarkeit dieser Anleitung gewählt, in echtem Code
+> wäre es `const APP_SPACE_ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';`
+> (einmalig erzeugt, fest im Quellcode). Einen lesbaren Namen braucht die
+> App trotzdem oft — der gehört dann als eigenes Datenfeld AN den Space,
+> nicht IN dessen Id (siehe [`setLabel()`/`getLabel()`](./examples/space-index-lib.mjs)
+> unten): `appSpace.get('label').put('Mein App-Name')`, exakt dieselbe
+> Konvention wie `~<fp>/alias` fürs Nutzerprofil (README Abschnitt 2).
+> Extra-Felder direkt in `createSpace()`/`createSpaceAt()`s `opts`
+> (`{ writers, readers, label }`) werden dagegen stillschweigend verworfen
+> — das Manifest kennt nur `admins`/`writers`/`readers`/`createdAt`.
+
 **Offen** — ein fest verabredeter Name, ohne eigenes Manifest. Die
 Bootstrap-Regel des Spaces-Plugins ("kein Manifest = jeder darf
 schreiben", `modules/spaces.js`) macht daraus einen für jeden mit
@@ -248,6 +265,73 @@ sowie [API.md](./API.md#profil-qupublishprofile-qureadprofilefingerprint)):
 await alice.publishProfile({ alias: 'Alice' });
 await bob.publishProfile({ alias: 'Bob' });
 ```
+
+## Schritt 8: Mehrere Boards/ToDo-Listen — Sub-Spaces referenzieren
+
+Bisher: EIN App-Space für die ganze App. Braucht die App mehrere davon
+(mehrere Boards, mehrere ToDo-Listen, ein Space pro Team), ist das kein
+neuer Mechanismus, nur eine Ebene mehr: eine Id ist eine Id, und ein
+QuBit-Feld kann ganz gewöhnlich die Id eines ANDEREN Space enthalten.
+`qu.get(diese-id)` navigiert dorthin, egal ob "diese-id" aus dem eigenen
+Space kommt oder nicht.
+
+```
+App-Space --(Label "Team Alpha")--> Sub-Space-Id --(qu.get)--> Sub-Space (eigenes Manifest)
+```
+
+Jeder Sub-Space entsteht ganz normal mit `qu.createSpace({ writers, readers })`
+(frische, zufällige Id — anders als der App-Space selbst braucht ein
+einzelnes Board KEINE feste, vorher bekannte Id, siehe
+[`examples/todo-lib.mjs`](./examples/todo-lib.mjs)) und bekommt dadurch
+sein EIGENES, vom App-Space komplett unabhängiges Manifest:
+
+```js
+const boardAlpha = alice.createSpace({ writers: ['*'], readers: ['*'] });
+await boardAlpha.ready;
+await boardAlpha.get('label').put('Team Alpha');
+
+const boardBeta = alice.createSpace({ writers: ['*'], readers: ['*'] });
+await boardBeta.ready;
+await boardBeta.get('label').put('Team Beta');
+
+// Im App-Space registrieren — set(), weil mehrere Nutzer unabhängig
+// voneinander neue Boards/Listen anlegen können:
+await appSpace.get('boards').set({ label: 'Team Alpha', spaceId: boardAlpha.id });
+await appSpace.get('boards').set({ label: 'Team Beta', spaceId: boardBeta.id });
+
+// Auflisten (einmalig) oder live abonnieren:
+const index = await appSpace.session.query(`${appSpace.id}/boards/**`);
+appSpace.get('boards').map((q) => console.log('neu registriert:', q.value.label));
+
+// Navigieren: die referenzierte Id ist ein ganz normaler Space.
+const board = alice.get(index[0].value.spaceId);
+```
+
+Ein Board mit mitgliederbeschränktem Zugriff (statt `writers: ['*']`) folgt
+exakt demselben Muster wie der mitgliederbeschränkte App-Space in Schritt 3
+(feste `readers`-Liste, `publishProfile()` für automatische Verschlüsselung,
+siehe Schritt 7) — der Index-Eintrag selbst kennt keinen Unterschied
+zwischen einem offenen und einem eingeschränkten Ziel, er trägt in beiden
+Fällen nur `{ label, spaceId }`. Ein vollständiges, getestetes Beispiel
+inklusive eines mitgliederbeschränkten Boards neben einem offenen (rein
+lokal, ohne Netzwerk-Overhead, dafür mit derselben ACL-Logik) steht in
+`examples/space-index-lib.test.mjs`.
+
+**Wichtig, leicht zu übersehen:** der Index-EINTRAG (Label + Sub-Space-Id)
+ist nur so privat wie der App-Space selbst, NICHT so privat wie der
+referenzierte Sub-Space. Wer den App-Space lesen darf, sieht IMMER
+Label + Id jedes registrierten Boards — auch eines, dessen INHALT er gar
+nicht lesen darf (dessen Inhalt bleibt trotzdem durch die eigene ACL
+geschützt, nur Existenz+Label sind sichtbar). Für ein wirklich geheimes
+Board (dessen Existenz selbst verborgen bleiben soll) den Index-Eintrag
+nicht im offenen App-Space ablegen, sondern die Id z. B. per Direktlink
+verteilen, wie in Schritt 3.
+
+Fertige, getestete Bibliothek für dieses Muster (`setLabel`/`getLabel`/
+`registerSpace`/`listSpaces`/`onSpaceRegistered`), inklusive Test für genau
+diese Sichtbarkeits-Falle:
+[`examples/space-index-lib.mjs`](./examples/space-index-lib.mjs) +
+[`examples/space-index-lib.test.mjs`](./examples/space-index-lib.test.mjs).
 
 ## Vollständiges Beispiel
 
