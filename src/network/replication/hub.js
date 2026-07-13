@@ -21,10 +21,10 @@ import { DefaultFileTransfer } from '../../data/files/transfer.js';
  * dependency from the Replication module onto the Files module's
  * internals.
  *
- * `requireDirectWriter`/`rateLimiter` are opt-in incoming-push protections,
- * applied identically to every channel this Hub attaches — see
- * DefaultReplication's own doc comment for what each does. Off by default,
- * same as there.
+ * `requireDirectWriter`/`rateLimiter`/`ingestGate` are opt-in incoming-push
+ * protections, applied identically to every channel this Hub attaches —
+ * see DefaultReplication's own doc comment (and network/ingest-gate.js) for
+ * what each does. Off/empty by default, same as there.
  */
 export class ReplicationHub {
   #runtime;
@@ -37,8 +37,9 @@ export class ReplicationHub {
   #byFingerprint = new Map(); // fingerprint -> channel.id (last-attached wins for a given fingerprint)
   #requireDirectWriter;
   #rateLimiter;
+  #ingestGate;
 
-  constructor(runtime, { identity = null, getACL = async () => null, pushTopics = [], fileStorage = null, requireDirectWriter = false, rateLimiter = null } = {}) {
+  constructor(runtime, { identity = null, getACL = async () => null, pushTopics = [], fileStorage = null, requireDirectWriter = false, rateLimiter = null, ingestGate = [] } = {}) {
     this.#runtime = runtime;
     this.#identity = identity;
     this.#getACL = getACL;
@@ -46,6 +47,7 @@ export class ReplicationHub {
     this.#fileStorage = fileStorage;
     this.#requireDirectWriter = requireDirectWriter;
     this.#rateLimiter = rateLimiter;
+    this.#ingestGate = ingestGate;
   }
 
   async attach(channel) {
@@ -56,6 +58,7 @@ export class ReplicationHub {
       pushTopics: this.#pushTopics,
       requireDirectWriter: this.#requireDirectWriter,
       rateLimiter: this.#rateLimiter,
+      ingestGate: this.#ingestGate,
     });
     this.#repls.set(channel.id, repl);
 

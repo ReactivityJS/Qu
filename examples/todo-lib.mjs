@@ -67,5 +67,5 @@ export async function listItems(qu, listId) {
 }
 
 export function onItemsChange(qu, listId, callback) {
-  return qu.get(listId).get('items').map(callback, { deep: true });
+  return qu.get(listId).get('items').map(callback);
 }

@@ -26,8 +26,8 @@ test('a message id containing another writer\'s fingerprint does not change the 
   await room.ready;
 
   // Mallory deliberately crafts a path that *looks* like Alice's namespace.
-  await mallory.get(`${room.id}/msgs/${alice.fingerprint}/999`).put({ text: 'pretending to be alice' });
-  const forged = await alice.get(`${room.id}/msgs/${alice.fingerprint}/999`);
+  await mallory.get(`${room.id}/msgs/${alice.fingerprint}-999`).put({ text: 'pretending to be alice' });
+  const forged = await alice.get(`${room.id}/msgs/${alice.fingerprint}-999`);
 
   assert.equal(forged.writer, mallory.fingerprint, 'the verified writer field must never be confused with the path text');
   assert.notEqual(forged.writer, alice.fingerprint);

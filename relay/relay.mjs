@@ -47,11 +47,17 @@ export async function createRelay({
   //     a single fingerprint may push through THIS relay. `null` (default)
   //     leaves the relay unprotected against flooding — pass one in for
   //     anything reachable beyond localhost/trusted clients.
+  //   ingestGate — additional `(ctx, next) => Promise<void>` middleware
+  //     (network/ingest-gate.js), run after requireDirectWriter/rateLimiter,
+  //     for a custom incoming-push policy this relay's own deployment needs
+  //     that isn't one of the two built-ins — a fourth protection is a
+  //     function passed in here, not a new parameter on this signature.
   requireDirectWriter = false,
   rateLimiter = null,
+  ingestGate = [],
 } = {}) {
   const relay = (await Qu.create({ store, identity })).use(createSpacesPlugin()); // generic (non-User) rooms — the relay's own Runtime enforces this on every incoming push, exactly like any other write
-  const hub = new ReplicationHub(relay.runtime, { identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter });
+  const hub = new ReplicationHub(relay.runtime, { identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter, ingestGate });
   const connected = new Map(); // fingerprint -> { channel, fileTransfer }
 
   // Proactively mirror a file's chunks from its uploader while they're

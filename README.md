@@ -8,7 +8,8 @@ Laufzeit-Abhängigkeiten, läuft in Node ≥ 20 und modernen Browsern
 Die vollständige Architektur-Spezifikation steht in
 [`qu-whitepaper-v0.6.md`](./qu-whitepaper-v0.6.md), die vollständige
 Aufrufreferenz jeder Funktion/Klasse in [`API.md`](./API.md) — dieses README
-ist der Schnelleinstieg.
+ist der Schnelleinstieg. Eine vernetzte App über einen echten Relay bauen
+(mehrere Instanzen, gemeinsamer App-Space): [`APP-GUIDE.md`](./APP-GUIDE.md).
 
 ## Installation
 
@@ -159,12 +160,14 @@ wie derselbe Aufruf mit dem vollen Pfad direkt auf `qu` es auch wäre;
 `qu.own` ist nichts als `qu.get(qu.userSpaceId)`.
 
 `put(value)` überschreibt (LWW, benanntes Register); `set(value)` hängt
-automatisch `/${fingerprint}/${ts}` an — für Sammlungen mit mehreren
-unabhängigen Schreibern (Chat, Kommentare), die strukturell nie
-kollidieren können:
+automatisch `${fingerprint}-${ts}` als ein Pfadsegment an — für Sammlungen
+mit mehreren unabhängigen Schreibern (Chat, Kommentare), die strukturell
+nie kollidieren können, aber genauso eine Ebene tief bleiben wie eine
+`put()`-basierte Sammlung — `node.map(cb)` (ohne `deep`) findet beide Arten
+gleich:
 
 ```js
-await room.get('msgs').set({ text: 'erste Nachricht' });  // landet unter room/msgs/<alice-fp>/<ts>
+await room.get('msgs').set({ text: 'erste Nachricht' });  // landet unter room/msgs/<alice-fp>-<ts>
 await bob.get(`${room}/msgs`).set({ text: 'zweite Nachricht' }); // eigener Namensraum, keine Kollision möglich
 ```
 
@@ -299,11 +302,12 @@ Beide Optionen sind rein additiv — `Qu.create()` ganz ohne sie verhält sich
 exakt wie bisher, komplett lokal, keine Plugins geladen.
 
 **Live beobachten:** `node.on(callback, { initial?, once? })` (dieser eine
-Node) bzw. `node.map(callback, { deep?, initial?, once? })` (seine Kinder,
-`deep: true` für Sammlungen, die zwei Segmente tief namensraumisieren wie
-`set()`) — `initial: true` (bei `map()` der Default) liefert erst alles
-bereits Passende, danach laufend Neues; `once: true` liefert nur den
-aktuellen Stand, keine laufende Subscription.
+Node) bzw. `node.map(callback, { deep?, initial?, once? })` (seine Kinder —
+`set()`-Sammlungen sind genauso eine Ebene tief wie `put()`-Sammlungen,
+`deep: true` braucht es nur für eine Hierarchie, die eine App selbst tiefer
+gebaut hat, z. B. Leaf-per-Field-Items) — `initial: true` (bei `map()` der
+Default) liefert erst alles bereits Passende, danach laufend Neues;
+`once: true` liefert nur den aktuellen Stand, keine laufende Subscription.
 
 ### 5. Trigger & Listen: Events auslösen und darauf reagieren
 
@@ -357,7 +361,7 @@ bei der jede klassische DB-Frage eine direkte Entsprechung hat:
 | Wie repliziere ich zu einer entfernten Kopie? | `qu.connect()` + `pushTopics`/`role: 'mirror'` — derselbe Space, gespiegelt auf einen Relay-Prozess (Abschnitt 3) |
 | Wie sind Rechte modelliert? | Pro Space (nicht pro Tabelle/Zeile): ein Manifest mit `writers`/`readers`/`admins`, write-seitig als Middleware erzwungen (`runtime.ingest()`), read-seitig gefiltert (`filterForReader()`) |
 | Wie adressiere ich relativ statt jedes Mal den vollen Pfad? | `QuSpace` (`qu.own`, `qu.get(id)`, `qu.createSpace()`) — ein Node, an einen Space gebunden, `put`/`set`/`on`/`map` relativ dazu, gleichzeitig thenable (`await node` liest) (Abschnitt 2) |
-| Ordering-Garantie? | Hybrid-Logical-Clock (`runtime.nextTs()`) statt Wall-Clock — konsistente Ordering-Entscheidungen auch über mehrere Schreiber/Geräte hinweg |
+| Ordering-Garantie? | Hybrid-Logical-Clock (`runtime.nextTs()`) statt Wall-Clock — konsistente Ordering-Entscheidungen auch über mehrere Schreiber/Geräte hinweg. Ein exaktes `ts`-Gleichstand (zwei unabhängige Geräte, seltener Zufall) wird deterministisch über `writer` aufgelöst (`compareQubits()`, `core/store.js`) — jedes Replikat kommt unabhängig vom Ankunftszeitpunkt zum selben Ergebnis |
 
 Ein Client, der lokal schreibt, ein Relay mit durablem Storage, und beliebig
 viele weitere Clients, die sich über `sync()`/Live-Push denselben Space
@@ -367,17 +371,17 @@ dieselbe Operation sind (`map()`), nicht zwei getrennte APIs.
 
 ### 7. Datenstruktur für wachsende Collections (z. B. ein Forum)
 
-`node.map(cb, { deep: true })`/`**` liefert IMMER die komplette Treffermenge
-— es gibt (bewusst, siehe Abschnitt 6) kein Limit/Offset im Core. Für eine
-Collection, die strukturell nur eine überschaubare Größe erreichen kann
-(z. B. die Liste der Boards eines Forums), ist das genau richtig. Für eine
-Collection, die UNBEGRENZT wächst (die Posts *innerhalb* eines aktiven
-Boards), ist `board.get('posts').map(cb, { deep: true })` ein Problem, das
-mit der Zeit nur schlimmer wird — Board-weise splitten reicht allein nicht,
+`node.map(cb)` liefert IMMER die komplette Treffermenge — es gibt (bewusst,
+siehe Abschnitt 6) kein Limit/Offset im Core. Für eine Collection, die
+strukturell nur eine überschaubare Größe erreichen kann (z. B. die Liste der
+Boards eines Forums), ist das genau richtig. Für eine Collection, die
+UNBEGRENZT wächst (die Posts *innerhalb* eines aktiven Boards), ist
+`board.get('posts').map(cb)` ein Problem, das mit der Zeit nur schlimmer
+wird — Board-weise splitten reicht allein nicht,
 weil das nur die Anzahl der Boards begrenzt, nicht die Anzahl der Posts in
 einem einzelnen (populären) Board.
 
-**Die Regel: nie `map()`/`**` auf eine strukturell unbegrenzte Ebene
+**Die Regel: nie `map()` auf eine strukturell unbegrenzte Ebene
 anwenden — die ID-Struktur so wählen, dass jede Ebene, die tatsächlich
 abonniert wird, von Natur aus begrenzt ist.** Der Standard-Trick dafür ist
 Zeit-Sharding: Posts nicht flach unter `posts/<postId>` ablegen, sondern
@@ -387,7 +391,7 @@ zusätzlich nach einem Zeit-Bucket gruppiert. Ein Client abonniert dann nie
 ```js
 const board = qu.get(`forum/${boardId}`);
 const currentBucket = new Date().toISOString().slice(0, 7); // "2026-07"
-board.get('posts').get(currentBucket).map(renderPost, { deep: true }); // nur dieser Monat
+board.get('posts').get(currentBucket).map(renderPost); // nur dieser Monat
 ```
 
 **Zwei gleichwertige Modelle, je nach erwarteter Datenmenge:**
@@ -431,7 +435,7 @@ await board.get('bucket-index').set({ bucket: currentBucket });
 const rows = await board.get('bucket-index').session.query(`${board.id}/bucket-index/**`);
 const buckets = [...new Set(rows.map((q) => q.value.bucket))].sort();
 const older = buckets[buckets.indexOf(currentBucket) - 1];
-if (older) board.get('posts').get(older).map(renderPost, { deep: true, once: true });
+if (older) board.get('posts').get(older).map(renderPost, { once: true });
 ```
 "Eine Seite laden" wird so zu "einen Bucket laden" — Pagination als
 Datenmodell-Muster statt als Core-Feature.
@@ -512,9 +516,14 @@ src/
                           replication/{Default,Hub,Provider}, transports/
                           {WebSocket,WebRTC}, WebRTC-Peer-Manager,
                           rate-limiter.js (Relay-Schutz gegen einen
-                          flutenden Peer, siehe requireDirectWriter/
-                          rateLimiter oben), index.js (createNetworkPlugin
-                          — qu.connect()/qu.router/qu.webrtc()-Sugar)
+                          flutenden Peer), ingest-gate.js (die Middleware-
+                          Pipeline für eingehende Pushes — requireDirectWriter/
+                          rateLimiter sind Kurzformen für die beiden
+                          eingebauten Gates hier drin, siehe oben), index.js
+                          (createNetworkPlugin — qu.connect()/qu.router-Sugar),
+                          webrtc-plugin.js (createWebRTCPlugin —
+                          qu.webrtc()-Sugar, bewusst eigenes Plugin statt Teil
+                          von createNetworkPlugin, siehe Bundle-Größe)
   data/                  Kategorie 3 — Referenzen & Dateien: references.js
                           (obj://, key://, file:// — ReferenceHandler, Tiefen-
                           limit konfigurierbar), files/{manifest,transfer}.js
@@ -676,12 +685,16 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
    an `QuStore`-Mounts übergeben, nichts sonst ändert sich.
 2. **Network** (`src/network/`, `createNetworkPlugin()`) — Replication,
    Router (Subscription/Routing über mehrere Transport-Wege wie WS-Relay
-   und WebRTC), Handshake, WebSocket-/WebRTC-Transporte. `qu.use(createNetworkPlugin())`
-   fügt `qu.connect()`/`qu.router`/`qu.webrtc()` hinzu — vorher existieren
-   diese Methoden schlicht nicht auf der Qu-Instanz. Node Relay/Router/
-   StorageMirror (`relay/`) sind Deployments *dieser* Kategorie, kein
-   Sonderbau: `Router{role:'mirror'}` + ein durables `StorageAdapter` +
-   `relay/relay.mjs` ergeben zusammen einen StorageMirror.
+   und WebRTC), Handshake, WebSocket-Transport. `qu.use(createNetworkPlugin())`
+   fügt `qu.connect()`/`qu.router` hinzu — vorher existieren diese Methoden
+   schlicht nicht auf der Qu-Instanz. Node Relay/Router/StorageMirror
+   (`relay/`) sind Deployments *dieser* Kategorie, kein Sonderbau:
+   `Router{role:'mirror'}` + ein durables `StorageAdapter` +
+   `relay/relay.mjs` ergeben zusammen einen StorageMirror. **WebRTC ist ein
+   eigenes, drittes Plugin** (`createWebRTCPlugin()`, fügt `qu.webrtc()`
+   hinzu, braucht `createNetworkPlugin()` bereits installiert) — bewusst
+   nicht Teil von `createNetworkPlugin()` selbst, siehe
+   [Bundle-Größe](#bundle-größe) unten.
 3. **Data — Referenzen & Dateien** (`src/data/`) — `obj://`/`key://`/`file://`
    als URI-Schema, additiv zum bestehenden `refs`-Array:
    - `key://<pfad>` zeigt auf **einen** QuBit-Wert (Foreign-Key-artig).
@@ -712,6 +725,25 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
    Bestätigung). Kein Storage-/Netzwerk-Bezug, also weiterhin
    offline-sicher — aber eine echte Policy-Entscheidung, kein struktureller
    Core-Bestandteil, deshalb Plugin statt Default.
+
+### Bundle-Größe
+
+Real gemessen (esbuild, `--bundle --minify`, nicht geschätzt):
+
+| Bundle | minifiziert | + gzip |
+|---|---|---|
+| Core (Runtime/Store/Session/Identity/Space-Handle/Clock/ACL/Verify/Crypto/Sign + `qu.js` + Memory/Null-Adapter) | 17,5 KB | 6,2 KB |
+| + Store (Local/Session/IndexedDB/MemoryFileStorage) | 20,0 KB | 6,8 KB |
+| + Network (`createNetworkPlugin()` + Spaces, **ohne** WebRTC) | 27,6 KB | 9,2 KB |
+| + `createWebRTCPlugin()` obendrauf | 32,6 KB | 10,8 KB |
+
+WebRTC ist deshalb ein eigenes Plugin (siehe oben): Apps, die nur über
+einen eigenen Relay per WebSocket synchronisieren — der häufigste Fall —
+zahlen die ~5 KB minifiziert / ~1,6 KB gzip für `RTCPeerConnection`-Code
+nicht mit, den sie nie aufrufen. Vor dieser Trennung importierte
+`createNetworkPlugin()` `PeerConnectionManager` unbedingt, wodurch **jede**
+`qu.connect()`-Nutzung WebRTC zwangsweise mitbündelte — real gemessen
+**~29 % / ~11,5 KB** weniger für den WebRTC-losen Fall seit der Trennung.
 
 **`QuSpace`** (`src/core/space-handle.js`) ist dagegen Core, nicht Plugin —
 ein reines Adressierungs-Hilfsmittel, kein Policy-Entscheid, kostet keinen
@@ -806,9 +838,15 @@ Neustart) — derselbe `StorageAdapter`-Contract in beiden Fällen, austauschbar
 ohne dass der Relay-Kern selbst etwas davon weiß.
 
 **Schutz vor einem einzelnen flutenden oder fremd-weiterleitenden Peer:**
-zwei unabhängige, additive Optionen auf `DefaultReplication`/`qu.connect()`/
-`createRelay()` — beide betreffen nur eingehende Pushes, nie das ausgehende
-Routing. `rateLimiter` (ein `createRateLimiter()`, gleitendes Zeitfenster
+jeder eingehende `qu.push` läuft durch eine kleine Middleware-Pipeline
+("Ingest-Gate", dieselbe Grundform wie `Runtime.ingest()`s eigene Verify-/
+ACL-Pipeline, `core/pipeline.js`), bevor er überhaupt bei `runtime.ingest()`
+ankommt — bewusst so gebaut, damit eine künftige dritte Schutzregel eine
+weitere Middleware-Funktion ist, kein neuer, hart codierter Sonderfall.
+Zwei eingebaute Kurzformen auf `DefaultReplication`/`qu.connect()`/
+`createRelay()`, plus eine `ingestGate`-Option für eigene Middleware —
+alle drei betreffen nur eingehende Pushes, nie das ausgehende Routing.
+`rateLimiter` (ein `createRateLimiter()`, gleitendes Zeitfenster
 pro Fingerprint) begrenzt, wie viele Writes ein einzelner Peer pro Sekunde
 durch diese Verbindung schleusen darf — im Demo-Deployment (`index.js`)
 standardmäßig **aktiv** (200/s, `QU_RATE_LIMIT_MAX`/
@@ -820,8 +858,9 @@ strikten Stern-Topologie: ein Push wird nur akzeptiert, wenn `qubit.writer`
 exakt der per Handshake bewiesene Fingerprint dieser einen Verbindung ist —
 kein Drittweiterleiten fremder (wenn auch gültig signierter) QuBits über
 diesen Relay. Details, inklusive warum das kein Core-Default ist (bricht
-legitime Mesh-/Gossip-Weiterleitung), stehen in
-[API.md](./API.md#relay-schutz-requiredirectwriter-ratelimiter).
+legitime Mesh-/Gossip-Weiterleitung) und wie eine eigene `ingestGate`-Regel
+aussieht, stehen in
+[API.md](./API.md#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate).
 
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,
@@ -911,7 +950,8 @@ danach **erneuter QU-Handshake über den neuen Datenkanal** (WebRTC/DTLS
 verschlüsselt, beweist aber keine Identität — das übernimmt weiterhin
 unser Challenge-Response), erst danach Freigabe für Replication.
 
-`qu.webrtc(signalingChannel)` liefert einen `PeerConnectionManager`;
+`qu.webrtc(signalingChannel)` (über `qu.use(createWebRTCPlugin())` — ein
+eigenes Plugin, siehe [Bundle-Größe](#bundle-größe)) liefert einen `PeerConnectionManager`;
 `.connectDirect(fingerprint, { pushTopics, group, metric })` baut eine
 Direktverbindung auf. Primärer Anwendungsfall: Weg zu einer Node ohne
 Relay (Ausfall oder bewusst gewünscht) — spätere Audio/Video-Erweiterung
@@ -1077,7 +1117,7 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Status
 
-156 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+160 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
 CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
 Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
 Dieselben Fälle laufen auch im vereinheitlichten Browser-Dashboard

@@ -37,6 +37,21 @@ test('qu.own.put()/get() with no subpath addresses the Space root itself', async
   assert.deepEqual((await alice.own).value, { hello: 'root' });
 });
 
+test('set() namespaces one path segment deep, not two — node.map(cb) (no { deep: true }) already finds set()-created entries', async () => {
+  const alice = (await Qu.create()).use(createSpacesPlugin());
+  const bob = await Qu.create({ runtime: alice.runtime });
+  const room = alice.createSpace({ writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] });
+  await room.ready;
+
+  await room.get('msgs').set({ text: 'from alice' });
+  await bob.get(room.id).get('msgs').set({ text: 'from bob' });
+
+  const seenShallow = [];
+  room.get('msgs').map((q) => seenShallow.push(q.value.text), { once: true });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(seenShallow.sort(), ['from alice', 'from bob'], 'the collision-safe writer-fingerprint namespacing must not require callers to know/pass { deep: true } to see the data');
+});
+
 test('qu.get(id) works for any known Space — reading another user\'s public profile fields', async () => {
   const alice = await Qu.create();
   const bob = await Qu.create({ runtime: alice.runtime });

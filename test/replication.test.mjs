@@ -47,6 +47,36 @@ test('sync() delivers only what a wide read-ACL allows, and repair() re-delivery
   clientRepl.close();
 });
 
+test('sync() includes the topic\'s own root document (e.g. a Space manifest), not just what\'s nested under it', async () => {
+  // `${topic}/**` alone structurally excludes the bare topic id itself
+  // (patternToRegExp requires a literal '/' after it) — a Space's manifest
+  // lives exactly at that bare id. Without this, a late-joining client
+  // could sync() a room's messages but never learn who's allowed to
+  // read/write it unless it happened to be connected at the exact moment
+  // the manifest was written.
+  const server = makeRuntime();
+  server.use(createACLPlugin(async () => ({ writers: ['*'], readers: ['*'] })));
+  const alice = await QuIdentity.generate();
+  const sessServer = new QuSession(server, { identity: alice });
+  await sessServer.publish('room1', { writers: [alice.fingerprint], readers: ['*'] }); // the "manifest" itself, at the bare topic id
+  await sessServer.publish('room1/msgs/a', 'hello');
+
+  const client = makeRuntime();
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+  const serverRepl = new DefaultReplication(server, chA, { getACL: async () => ({ writers: ['*'], readers: ['*'] }), peerFingerprint: 'client-fp' });
+  const clientRepl = new DefaultReplication(client, chB, {});
+
+  await clientRepl.sync({ topic: 'room1', since: 0 });
+
+  const manifest = await client.get('room1');
+  assert.ok(manifest, 'the topic\'s own root document must be included in a sync(), not just its children');
+  assert.deepEqual(manifest.value.writers, [alice.fingerprint]);
+  assert.equal((await client.query('room1/**')).length, 1, 'nested content must still sync exactly as before — this is additive, not a replacement');
+
+  serverRepl.close();
+  clientRepl.close();
+});
+
 test('reciprocal sync: a single client-initiated sync() also flushes the server\'s view of the client\'s offline writes', async () => {
   const rtServer = makeRuntime();
   const rtClient = makeRuntime();

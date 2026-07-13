@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { compareQubits } from '../core/store.js';
 
 /**
  * Persists QuBits to an append-only NDJSON log (one JSON line per write),
@@ -38,7 +39,10 @@ export class FileSystemStorageAdapter {
       try {
         const q = JSON.parse(line);
         const existing = this.#map.get(q.id);
-        if (!existing || q.ts >= existing.ts) this.#map.set(q.id, q);
+        // compareQubits() (core/store.js) — same tiebreak QuStore.put() uses,
+        // so reload reconciliation never disagrees with the live write path
+        // about which of two same-`ts` qubits wins.
+        if (!existing || compareQubits(q, existing) >= 0) this.#map.set(q.id, q);
       } catch { /* skip a corrupt line rather than fail startup */ }
     }
   }

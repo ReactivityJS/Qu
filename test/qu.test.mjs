@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu, QuIdentity, userSpaceId, createLoopbackChannelPair, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
+import { Qu, QuIdentity, userSpaceId, createLoopbackChannelPair, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createWebRTCPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
 
 test('Qu.create() generates an identity and can put/read — under its own User-Space, with zero plugins installed', async () => {
   const alice = await Qu.create();
@@ -144,10 +144,15 @@ test('qu.connect() with role/group/metric registers a route; without them, behav
 });
 
 test('qu.webrtc() creates a PeerConnectionManager wired to this Qu instance\'s router', async () => {
-  const alice = (await Qu.create()).use(createNetworkPlugin());
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createWebRTCPlugin());
   const { a: signalA } = createLoopbackChannelPair();
   const pm = alice.webrtc(signalA);
   assert.ok(pm);
   assert.deepEqual(pm.connectedFingerprints, []);
   pm.close();
+});
+
+test('createWebRTCPlugin() requires createNetworkPlugin() to already be installed (shares its Router)', async () => {
+  const alice = await Qu.create();
+  assert.throws(() => alice.use(createWebRTCPlugin()), /createNetworkPlugin\(\)/);
 });

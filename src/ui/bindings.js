@@ -41,12 +41,13 @@ export function viewKey(node, render) {
 
 /**
  * One-way, a collection: every QuBit directly under `node` (or, with
- * `deep: true`, at any depth — the shape a `set()`-based collection like
- * chat messages needs, since it namespaces two segments deep) gets its own
- * item via `createItem(qubit)` (called once, the first time that key is
- * seen) and `render(item, value, qubit)` (called on first render and every
- * update). `key(qubit)` picks the item identity (default: `qubit.id`).
- * Same (id, ts)-per-item dedup as viewKey.
+ * `deep: true`, at any depth — for a hierarchy an app built itself, e.g.
+ * leaf-per-field items) gets its own item via `createItem(qubit)` (called
+ * once, the first time that key is seen) and `render(item, value, qubit)`
+ * (called on first render and every update). `key(qubit)` picks the item
+ * identity (default: `qubit.id`). Same (id, ts)-per-item dedup as viewKey.
+ * A `set()`-based collection (chat messages, comments) is already one
+ * level deep — `deep: true` is not needed for it.
  *
  * `createItem`'s return value is opaque to this function — typically a
  * DOM element the caller has already inserted into a container, but

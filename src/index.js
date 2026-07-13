@@ -25,11 +25,12 @@ export { QU_PRESETS } from './presets.js';
 
 // Underlying primitives — still directly usable for advanced composition.
 export { QuRuntime } from './core/runtime.js';
-export { QuStore } from './core/store.js';
+export { QuStore, compareQubits } from './core/store.js';
 export { QuSession } from './core/session.js';
 export { QuIdentity } from './core/identity.js';
 export { QuSpace } from './core/space-handle.js';
 export { QuClock } from './core/clock.js';
+export { QuPipeline } from './core/pipeline.js';
 export { debug, onDebug, enableConsoleDebug } from './core/debug.js';
 export { assertChannel, createLoopbackChannelPair } from './core/channel.js';
 export { assertStorageAdapter } from './core/storage.js';
@@ -65,11 +66,13 @@ export { sendRoutedEvent, onRoutedEvent } from './network/routed-events.js';
 export { createWebSocketChannel } from './network/transports/websocket-browser.js';
 export { createWebRTCChannel } from './network/transports/webrtc-browser.js';
 export { PeerConnectionManager } from './network/webrtc-peer-manager.js';
+export { createWebRTCPlugin } from './network/webrtc-plugin.js';
 export { DefaultReplication } from './network/replication/default.js';
 export { ReplicationHub } from './network/replication/hub.js';
 export { assertReplicationProvider } from './network/replication/provider.js';
 export { createNetworkPlugin } from './network/index.js';
 export { createRateLimiter } from './network/rate-limiter.js';
+export { requireDirectWriterGate, rateLimitGate } from './network/ingest-gate.js';
 
 // Category 3 — data: references (obj://, key://, file://) and files.
 export {

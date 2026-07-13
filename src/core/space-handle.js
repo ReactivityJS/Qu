@@ -19,15 +19,19 @@
 //                             writing raw bytes as an opaque "value".
 //   node.set(value, opts)     collision-safe write into a shared
 //                             collection at this node (many independent
-//                             writers, e.g. chat messages) — see
+//                             writers, e.g. chat messages) — namespaces the
+//                             id by writer fingerprint, one path segment
+//                             deep, same as put(id).get(itemId) — see
 //                             QuSession.append().
 //   node.on(callback, opts)   live subscription to THIS node's own value
 //                             (`{ initial, once }`, same semantics as
 //                             QuSession.on()).
 //   node.map(callback, opts)  live subscription to this node's CHILDREN —
-//                             `${id}/*` (opts.deep: true -> `${id}/**`,
-//                             for collections written via set(), which
-//                             namespace two segments deep). Same
+//                             `${id}/*`, which already finds set()-created
+//                             entries too (one segment deep either way).
+//                             `opts.deep: true` -> `${id}/**` for a
+//                             genuinely deeper hierarchy an app built
+//                             itself (e.g. leaf-per-field items). Same
 //                             `{ initial, once }`.
 //
 // A node is also THENABLE — `await node` (or `.then()`) reads the node's
@@ -117,13 +121,16 @@ export class QuSpace {
   on(callback, opts) { return this.#session.on(this.#id, callback, opts); }
 
   /**
-   * Live subscription to this node's children — `${id}/*`, or `${id}/**`
-   * with `{ deep: true }` (for set()-based collections, which namespace two
-   * segments deep). Defaults to `initial: true` (deliver what already
-   * exists, then keep delivering live) — unlike on(), which defaults to
-   * forward-only, map()'s whole point is "give me everything here, kept
-   * live", matching what every current caller (viewObject(), <qu-list>)
-   * already wants; pass `{ initial: false }` for forward-only.
+   * Live subscription to this node's children — `${id}/*` (already matches
+   * set()-created entries too, since set() namespaces one segment deep,
+   * same as a directly-keyed put() collection), or `${id}/**` with
+   * `{ deep: true }` for a genuinely deeper hierarchy an app built itself
+   * (e.g. leaf-per-field items, <qu-list>). Defaults to `initial: true`
+   * (deliver what already exists, then keep delivering live) — unlike
+   * on(), which defaults to forward-only, map()'s whole point is "give me
+   * everything here, kept live", matching what every current caller
+   * (viewObject(), <qu-list>) already wants; pass `{ initial: false }` for
+   * forward-only.
    */
   map(callback, { deep = false, initial = true, ...opts } = {}) {
     const pattern = deep ? `${this.#id}/**` : `${this.#id}/*`;
