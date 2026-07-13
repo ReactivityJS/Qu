@@ -512,12 +512,14 @@ src/
                           replication/{Default,Hub,Provider}, transports/
                           {WebSocket,WebRTC}, WebRTC-Peer-Manager,
                           rate-limiter.js (Relay-Schutz gegen einen
-                          flutenden Peer, siehe requireDirectWriter/
-                          rateLimiter oben), index.js (createNetworkPlugin
-                          — qu.connect()/qu.router-Sugar), webrtc-plugin.js
-                          (createWebRTCPlugin — qu.webrtc()-Sugar, bewusst
-                          eigenes Plugin statt Teil von createNetworkPlugin,
-                          siehe Bundle-Größe)
+                          flutenden Peer), ingest-gate.js (die Middleware-
+                          Pipeline für eingehende Pushes — requireDirectWriter/
+                          rateLimiter sind Kurzformen für die beiden
+                          eingebauten Gates hier drin, siehe oben), index.js
+                          (createNetworkPlugin — qu.connect()/qu.router-Sugar),
+                          webrtc-plugin.js (createWebRTCPlugin —
+                          qu.webrtc()-Sugar, bewusst eigenes Plugin statt Teil
+                          von createNetworkPlugin, siehe Bundle-Größe)
   data/                  Kategorie 3 — Referenzen & Dateien: references.js
                           (obj://, key://, file:// — ReferenceHandler, Tiefen-
                           limit konfigurierbar), files/{manifest,transfer}.js
@@ -832,9 +834,15 @@ Neustart) — derselbe `StorageAdapter`-Contract in beiden Fällen, austauschbar
 ohne dass der Relay-Kern selbst etwas davon weiß.
 
 **Schutz vor einem einzelnen flutenden oder fremd-weiterleitenden Peer:**
-zwei unabhängige, additive Optionen auf `DefaultReplication`/`qu.connect()`/
-`createRelay()` — beide betreffen nur eingehende Pushes, nie das ausgehende
-Routing. `rateLimiter` (ein `createRateLimiter()`, gleitendes Zeitfenster
+jeder eingehende `qu.push` läuft durch eine kleine Middleware-Pipeline
+("Ingest-Gate", dieselbe Grundform wie `Runtime.ingest()`s eigene Verify-/
+ACL-Pipeline, `core/pipeline.js`), bevor er überhaupt bei `runtime.ingest()`
+ankommt — bewusst so gebaut, damit eine künftige dritte Schutzregel eine
+weitere Middleware-Funktion ist, kein neuer, hart codierter Sonderfall.
+Zwei eingebaute Kurzformen auf `DefaultReplication`/`qu.connect()`/
+`createRelay()`, plus eine `ingestGate`-Option für eigene Middleware —
+alle drei betreffen nur eingehende Pushes, nie das ausgehende Routing.
+`rateLimiter` (ein `createRateLimiter()`, gleitendes Zeitfenster
 pro Fingerprint) begrenzt, wie viele Writes ein einzelner Peer pro Sekunde
 durch diese Verbindung schleusen darf — im Demo-Deployment (`index.js`)
 standardmäßig **aktiv** (200/s, `QU_RATE_LIMIT_MAX`/
@@ -846,8 +854,9 @@ strikten Stern-Topologie: ein Push wird nur akzeptiert, wenn `qubit.writer`
 exakt der per Handshake bewiesene Fingerprint dieser einen Verbindung ist —
 kein Drittweiterleiten fremder (wenn auch gültig signierter) QuBits über
 diesen Relay. Details, inklusive warum das kein Core-Default ist (bricht
-legitime Mesh-/Gossip-Weiterleitung), stehen in
-[API.md](./API.md#relay-schutz-requiredirectwriter-ratelimiter).
+legitime Mesh-/Gossip-Weiterleitung) und wie eine eigene `ingestGate`-Regel
+aussieht, stehen in
+[API.md](./API.md#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate).
 
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,
@@ -1104,7 +1113,7 @@ Schreibrecht), ganz ohne UI, per `node --test` prüfbar.
 
 ## Status
 
-157 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
+160 `node:test`-Fälle (mehrere Assertions pro thematischem Test), alle grün,
 CLI geprüft — inklusive echtem WebSocket-Relay (native Clients, nicht nur
 Loopback) und echten, manuell konstruierten fragmentierten WS-Frames.
 Dieselben Fälle laufen auch im vereinheitlichten Browser-Dashboard

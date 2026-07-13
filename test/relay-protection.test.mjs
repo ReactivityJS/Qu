@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { QuIdentity, QuSession, createLoopbackChannelPair, DefaultReplication, createRateLimiter } from '../src/index.js';
+import { QuIdentity, QuSession, createLoopbackChannelPair, DefaultReplication, createRateLimiter, requireDirectWriterGate, rateLimitGate } from '../src/index.js';
 import { makeRuntime } from './helpers.mjs';
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -90,4 +90,74 @@ test('rateLimiter: pushes beyond the per-writer budget are rejected (never inges
 
   serverRepl.close();
   clientRepl.close();
+});
+
+test('ingestGate: a custom middleware can reject a push for its own reason, without requireDirectWriter/rateLimiter involved', async () => {
+  const server = makeRuntime();
+  const alice = await QuIdentity.generate();
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+
+  const blockedIds = [];
+  const rejectAnythingMentioningBanned = async (ctx, next) => {
+    if (ctx.qubit.id.includes('banned')) { blockedIds.push(ctx.qubit.id); throw new Error('custom policy: id contains "banned"'); }
+    return next();
+  };
+  const serverRepl = new DefaultReplication(server, chA, { peerFingerprint: alice.fingerprint, ingestGate: [rejectAnythingMentioningBanned] });
+
+  await chB.send({ type: 'qu.push', qubit: { id: 'room/banned-item', value: 1, ts: 1, writer: alice.fingerprint } });
+  await chB.send({ type: 'qu.push', qubit: { id: 'room/fine-item', value: 2, ts: 2, writer: alice.fingerprint } });
+  await wait(20);
+
+  assert.deepEqual(blockedIds, ['room/banned-item']);
+  assert.equal(await server.get('room/banned-item'), null, 'a custom gate rejection must behave exactly like the built-in ones — never reach ingest()');
+  assert.notEqual(await server.get('room/fine-item'), null, 'a push the custom gate allows through must still be ingested normally');
+
+  serverRepl.close();
+});
+
+test('ingestGate: built-in gates (requireDirectWriter/rateLimiter) and custom middleware compose in one pipeline, built-ins run first', async () => {
+  const server = makeRuntime();
+  const alice = await QuIdentity.generate();
+  const mallory = await QuIdentity.generate();
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+
+  const seenByCustomGate = [];
+  const serverRepl = new DefaultReplication(server, chA, {
+    peerFingerprint: alice.fingerprint,
+    requireDirectWriter: true,
+    ingestGate: [async (ctx, next) => { seenByCustomGate.push(ctx.qubit.id); return next(); }],
+  });
+
+  // Rejected by the built-in requireDirectWriter gate — must never reach the custom one.
+  await chB.send({ type: 'qu.push', qubit: { id: 'room/forged', value: 1, ts: 1, writer: mallory.fingerprint } });
+  // Passes requireDirectWriter — reaches the custom gate, then ingest().
+  await chB.send({ type: 'qu.push', qubit: { id: 'room/legit', value: 2, ts: 2, writer: alice.fingerprint } });
+  await wait(20);
+
+  assert.deepEqual(seenByCustomGate, ['room/legit'], 'the custom gate must only see what already passed the built-in requireDirectWriter check');
+  assert.equal(await server.get('room/forged'), null);
+  assert.notEqual(await server.get('room/legit'), null);
+
+  serverRepl.close();
+});
+
+test('requireDirectWriterGate()/rateLimitGate() are directly composable via ingestGate, without the boolean/instance shortcuts', async () => {
+  const server = makeRuntime();
+  const alice = await QuIdentity.generate();
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+
+  const limiter = createRateLimiter({ maxPerWindow: 1, windowMs: 5000 });
+  const serverRepl = new DefaultReplication(server, chA, {
+    peerFingerprint: alice.fingerprint,
+    ingestGate: [rateLimitGate(limiter), requireDirectWriterGate()],
+  });
+
+  await chB.send({ type: 'qu.push', qubit: { id: 'room/first', value: 1, ts: 1, writer: alice.fingerprint } });
+  await chB.send({ type: 'qu.push', qubit: { id: 'room/second', value: 2, ts: 2, writer: alice.fingerprint } }); // over the manual rate limiter's budget
+  await wait(20);
+
+  assert.notEqual(await server.get('room/first'), null);
+  assert.equal(await server.get('room/second'), null, 'the manually-composed rateLimitGate() must reject exactly like the requireDirectWriter/rateLimiter shorthand would');
+
+  serverRepl.close();
 });

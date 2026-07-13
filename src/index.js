@@ -30,6 +30,7 @@ export { QuSession } from './core/session.js';
 export { QuIdentity } from './core/identity.js';
 export { QuSpace } from './core/space-handle.js';
 export { QuClock } from './core/clock.js';
+export { QuPipeline } from './core/pipeline.js';
 export { debug, onDebug, enableConsoleDebug } from './core/debug.js';
 export { assertChannel, createLoopbackChannelPair } from './core/channel.js';
 export { assertStorageAdapter } from './core/storage.js';
@@ -71,6 +72,7 @@ export { ReplicationHub } from './network/replication/hub.js';
 export { assertReplicationProvider } from './network/replication/provider.js';
 export { createNetworkPlugin } from './network/index.js';
 export { createRateLimiter } from './network/rate-limiter.js';
+export { requireDirectWriterGate, rateLimitGate } from './network/ingest-gate.js';
 
 // Category 3 — data: references (obj://, key://, file://) and files.
 export {

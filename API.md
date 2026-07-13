@@ -191,7 +191,7 @@ von hier, sondern von einem zweiten, separaten Plugin
 `requireDirectWriter`/`rateLimiter` sind ebenfalls optional und additiv,
 betreffen aber nur **eingehende** `qu.push`-Nachrichten (nicht das oben
 beschriebene ausgehende Push-Routing) — siehe
-[Relay-Schutz: requireDirectWriter & rateLimiter](#relay-schutz-requiredirectwriter-ratelimiter)
+[Relay-Schutz: die Ingest-Gate-Pipeline](#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate)
 weiter unten.
 
 ### Router & WebRTC
@@ -237,15 +237,25 @@ beweist aber keine Identität. Ausführliche Architektur-Diskussion (Rolle
 des Relays als Storage-Mirror, Routing- vs. Subscription-Frage) steht im
 Whitepaper.
 
-### Relay-Schutz: `requireDirectWriter` & `rateLimiter`
-Zwei unabhängige, additive Optionen auf `DefaultReplication` (Konstruktor,
-`ReplicationHub`, `qu.connect()`, `createRelay()` — dieselben Namen überall),
-die ausschließlich **eingehende** `qu.push`-Nachrichten einer einzelnen
-Verbindung betreffen. Beide standardmäßig aus (unverändertes Verhalten ohne
-sie); ausgehendes Push-Routing (`pushTopics`/ACL/Router) bleibt komplett
-unberührt.
+### Relay-Schutz: die Ingest-Gate-Pipeline (`requireDirectWriter`, `rateLimiter`, `ingestGate`)
+Jeder eingehende `qu.push` einer Verbindung läuft zuerst durch eine
+**Ingest-Gate-Pipeline**, bevor überhaupt `runtime.ingest()` aufgerufen
+wird — dieselbe Middleware-Grundform (`(ctx, next) => Promise<void>`,
+`QuPipeline`, `core/pipeline.js`) wie `Runtime.ingest()`s eigene Verify-/
+ACL-Pipeline, nur mit einem anderen `ctx`:
+`{ qubit, peerFingerprint, channelId }` für genau diese eine Verbindung.
+Eine Gate-Middleware **wirft**, um abzulehnen (dieselbe Konvention wie
+`core/acl.js`s `createACLPlugin`) — `DefaultReplication` fängt das ab,
+loggt via `debug()`, verwirft den Push still, ohne die Verbindung zu
+schließen. Ausgehendes Push-Routing (`pushTopics`/ACL/Router) bleibt davon
+komplett unberührt.
 
-**`requireDirectWriter: true`** — akzeptiert einen `qu.push` nur, wenn
+Drei Wege, Middleware in diese Pipeline zu bringen — dieselben Optionen auf
+`DefaultReplication` (Konstruktor), `ReplicationHub`, `qu.connect()` und
+`createRelay()`:
+
+**1. `requireDirectWriter: true`** — Kurzform für die eingebaute
+`requireDirectWriterGate()` (`network/ingest-gate.js`). Akzeptiert einen `qu.push` nur, wenn
 `qubit.writer` exakt dem per Handshake bewiesenen Fingerprint DIESER
 Verbindung entspricht. Erzwingt eine strikte Stern-Topologie: dieser Relay
 hört einen Write ausschließlich direkt von seiner/seinem tatsächlichen
@@ -258,7 +268,8 @@ Mirror-Verbindung zum Relay weiterreicht) braucht genau den Fall
 `writer !== peerFingerprint` — das darf nicht kaputtgehen, nur weil ein
 Relay diese striktere Policy für sich selbst wählt.
 
-**`rateLimiter`** — eine `createRateLimiter({ maxPerWindow?, windowMs?, maxTrackedKeys? })`-Instanz
+**2. `rateLimiter`** — Kurzform für die eingebaute `rateLimitGate()`.
+Eine `createRateLimiter({ maxPerWindow?, windowMs?, maxTrackedKeys? })`-Instanz
 (`network/rate-limiter.js`, gleitendes Zeitfenster pro Schlüssel, Default
 100 Writes/Sekunde) oder jedes kompatible `{ allow(key) => boolean }`.
 Schlüssel ist `qubit.writer` (Fallback: `peerFingerprint`, dann die
@@ -274,9 +285,44 @@ const limiter = createRateLimiter({ maxPerWindow: 100, windowMs: 1000 });
 await qu.connect(channel, { requireDirectWriter: true, rateLimiter: limiter });
 ```
 
-`createRelay({ requireDirectWriter?, rateLimiter? })` (`relay/relay.mjs`)
-reicht beide Optionen identisch an jede über `attachChannel()` angehängte
-Verbindung durch. Das Demo-Deployment (`index.js`) hat `rateLimiter`
+**3. `ingestGate: [(ctx, next) => ...]`** — eigene Middleware, **ohne** dass
+`DefaultReplication` (oder irgendeine andere Datei) dafür geändert werden
+muss. Läuft nach den beiden eingebauten Gates (falls aktiv), in
+Array-Reihenfolge; `ctx.qubit`/`ctx.peerFingerprint`/`ctx.channelId` stehen
+zur Verfügung, `next()` lässt durch, ein Wurf lehnt ab. Genau das war der
+Punkt der Umstellung von zwei hart codierten `if`-Prüfungen auf eine
+Pipeline: eine dritte/vierte Schutzregel ist eine weitere Funktion in
+diesem Array, kein neuer Konstruktor-Parameter und kein neuer Sonderfall in
+`#handleMessage()`.
+
+```js
+const blockOversizedPayloads = async (ctx, next) => {
+  if (JSON.stringify(ctx.qubit.value).length > 10_000) {
+    throw new Error(`payload too large from ${ctx.qubit.writer}`);
+  }
+  return next();
+};
+
+await qu.connect(channel, { requireDirectWriter: true, ingestGate: [blockOversizedPayloads] });
+```
+
+Die beiden eingebauten Gates sind auch direkt importierbar
+(`requireDirectWriterGate()`, `rateLimitGate(limiter)`, beide aus
+`network/ingest-gate.js`) — für volle Kontrolle über die Reihenfolge, ganz
+ohne die `requireDirectWriter`/`rateLimiter`-Kurzformen:
+
+```js
+import { requireDirectWriterGate, rateLimitGate, createRateLimiter } from './src/index.js';
+
+await qu.connect(channel, {
+  ingestGate: [rateLimitGate(createRateLimiter({ maxPerWindow: 50 })), requireDirectWriterGate()],
+});
+```
+
+`createRelay({ requireDirectWriter?, rateLimiter?, ingestGate? })`
+(`relay/relay.mjs`) reicht alle drei identisch an jede über
+`attachChannel()` angehängte Verbindung durch. Das Demo-Deployment
+(`index.js`) hat `rateLimiter`
 **standardmäßig aktiv** (200/Sekunde, `QU_RATE_LIMIT_MAX`/
 `QU_RATE_LIMIT_WINDOW_MS` einstellbar, `QU_RATE_LIMIT=0` schaltet komplett
 ab) — anders als z. B. `QU_ENABLE_TEST_ENDPOINT` (aus per Default, weil der
