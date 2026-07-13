@@ -25,7 +25,7 @@ export { QU_PRESETS } from './presets.js';
 
 // Underlying primitives — still directly usable for advanced composition.
 export { QuRuntime } from './core/runtime.js';
-export { QuStore } from './core/store.js';
+export { QuStore, compareQubits } from './core/store.js';
 export { QuSession } from './core/session.js';
 export { QuIdentity } from './core/identity.js';
 export { QuSpace } from './core/space-handle.js';

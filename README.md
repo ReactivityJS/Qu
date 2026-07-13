@@ -357,7 +357,7 @@ bei der jede klassische DB-Frage eine direkte Entsprechung hat:
 | Wie repliziere ich zu einer entfernten Kopie? | `qu.connect()` + `pushTopics`/`role: 'mirror'` — derselbe Space, gespiegelt auf einen Relay-Prozess (Abschnitt 3) |
 | Wie sind Rechte modelliert? | Pro Space (nicht pro Tabelle/Zeile): ein Manifest mit `writers`/`readers`/`admins`, write-seitig als Middleware erzwungen (`runtime.ingest()`), read-seitig gefiltert (`filterForReader()`) |
 | Wie adressiere ich relativ statt jedes Mal den vollen Pfad? | `QuSpace` (`qu.own`, `qu.get(id)`, `qu.createSpace()`) — ein Node, an einen Space gebunden, `put`/`set`/`on`/`map` relativ dazu, gleichzeitig thenable (`await node` liest) (Abschnitt 2) |
-| Ordering-Garantie? | Hybrid-Logical-Clock (`runtime.nextTs()`) statt Wall-Clock — konsistente Ordering-Entscheidungen auch über mehrere Schreiber/Geräte hinweg |
+| Ordering-Garantie? | Hybrid-Logical-Clock (`runtime.nextTs()`) statt Wall-Clock — konsistente Ordering-Entscheidungen auch über mehrere Schreiber/Geräte hinweg. Ein exaktes `ts`-Gleichstand (zwei unabhängige Geräte, seltener Zufall) wird deterministisch über `writer` aufgelöst (`compareQubits()`, `core/store.js`) — jedes Replikat kommt unabhängig vom Ankunftszeitpunkt zum selben Ergebnis |
 
 Ein Client, der lokal schreibt, ein Relay mit durablem Storage, und beliebig
 viele weitere Clients, die sich über `sync()`/Live-Push denselben Space

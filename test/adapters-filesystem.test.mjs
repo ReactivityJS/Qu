@@ -55,6 +55,23 @@ test('FileSystemStorageAdapter: a later write with a lower ts does not lose the 
   await fsp.rm(dir, { recursive: true, force: true });
 });
 
+test('FileSystemStorageAdapter: an exact-ts collision on reload resolves the same deterministic way QuStore.put() itself would (writer tiebreak, not "last line in the file wins")', async () => {
+  const dir = await tmpDir('store-tiebreak');
+  const filePath = path.join(dir, 'log.ndjson');
+  const first = new FileSystemStorageAdapter(filePath);
+  // Same id, same ts, different writer — written in an order where the
+  // LOSING writer's line is deliberately LAST in the file, so a naive
+  // "last line wins" reload would get this wrong.
+  await first.put('x', { id: 'x', value: 'from bob', ts: 100, writer: 'bob' });
+  await first.put('x', { id: 'x', value: 'from alice', ts: 100, writer: 'alice' });
+
+  const second = new FileSystemStorageAdapter(filePath);
+  const row = await second.get('x');
+  assert.equal(row.writer, 'bob', '"bob" > "alice" lexicographically — same tiebreak as compareQubits()/QuStore.put(), regardless of line order in the log');
+
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
 test('FileSystemFileStorageAdapter: chunk round-trip and persistence across restart', async () => {
   const dir = await tmpDir('chunks');
   const bytes = new Uint8Array([1, 2, 3, 4, 5]);
