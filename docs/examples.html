@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Beispiele</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <main>
+    <a class="back" href="/index.html">&larr; Zurück</a>
+    <h1>QU — Beispiele</h1>
+    <p class="lede">
+      Vier kurze, fokussierte Module unter <code>examples/</code> — jedes trennt die Logik
+      (<code>*-lib.mjs</code>) bewusst von jeder Oberfläche, damit man sie ganz ohne Browser lesen
+      und mit <code>node --test</code> nachvollziehen kann. Für "im Browser anfassen" siehe stattdessen
+      das <a href="/docs/lab/index.html">Interaktive Lab</a> oder den <a href="/docs/playground.html">Playground</a>.
+    </p>
+
+    <nav class="cards">
+      <div class="card">
+        <a href="/docs/code.html?file=/examples/todo-lib.mjs"><h2>ToDo-Liste teilen</h2></a>
+        <p>Ein Space als teilbare Liste: Link = Space-Id, Schreibrecht per Fingerprint gewähren.
+        <br><code>examples/todo-lib.mjs</code> · <a href="/docs/code.html?file=/examples/todo-lib.test.mjs">Test ansehen</a></p>
+      </div>
+      <div class="card">
+        <a href="/docs/code.html?file=/examples/forum-lib.mjs"><h2>Forum mit Zeit-Sharding</h2></a>
+        <p>Wachsende Collections ohne "alle Posts für immer" abonnieren — Posts pro Monats-Bucket.
+        <br><code>examples/forum-lib.mjs</code> · <a href="/docs/code.html?file=/examples/forum-lib.test.mjs">Test ansehen</a></p>
+      </div>
+      <div class="card">
+        <a href="/docs/code.html?file=/examples/app-space-lib.mjs"><h2>App-Space über echten Relay</h2></a>
+        <p>Offener vs. mitgliederbeschränkter App-Space, verbunden über einen echten WebSocket-Relay.
+        <br><code>examples/app-space-lib.mjs</code> · <a href="/docs/code.html?file=/examples/app-space-lib.test.mjs">Test ansehen</a></p>
+      </div>
+      <div class="card">
+        <a href="/docs/code.html?file=/examples/space-index-lib.mjs"><h2>Mehrere Sub-Spaces indexieren</h2></a>
+        <p>Ein App-Space verweist auf mehrere Boards/Listen — "App hat viele Spaces" statt "App ist ein Space".
+        <br><code>examples/space-index-lib.mjs</code> · <a href="/docs/code.html?file=/examples/space-index-lib.test.mjs">Test ansehen</a></p>
+      </div>
+    </nav>
+
+    <p class="console-hint" style="margin-top: 2rem;">
+      Lokal ausführen: <code>node --test examples/todo-lib.test.mjs</code> (oder jede andere
+      <code>*-lib.test.mjs</code> einzeln, bzw. <code>npm test</code> für die gesamte Suite inkl. Core).
+    </p>
+  </main>
+</body>
+</html>

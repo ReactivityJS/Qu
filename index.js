@@ -83,6 +83,13 @@ const rateLimiter = process.env.QU_RATE_LIMIT === '0' ? null : createRateLimiter
 });
 const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 
-const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'], requireDirectWriter, rateLimiter });
+// allowDynamicSubscribe: true — on top of the static 'qu-demo-room/' below
+// (kept for docs/lab/'s Network section, which relies on a fixed room), any
+// connected client may additionally register its own topic at runtime via
+// qu.subscribe() (network/replication/default.js) — what the Playground's
+// "Bob" step and examples/app-space-lib.mjs's runtime-created App-Spaces
+// rely on. Still fully ACL-gated per push, never a wider grant than the
+// static case (README "Sync, Mirror, Relay").
+const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter });
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
 

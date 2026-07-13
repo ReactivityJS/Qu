@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Playground</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <main>
+    <a class="back" href="/index.html">&larr; Zurück</a>
+    <h1>QU — Playground</h1>
+    <p class="lede">
+      Beim Laden dieser Seite wurde bereits <code>window.qu</code> angelegt — eine echte,
+      voll funktionsfähige <code>Qu</code>-Instanz (Spaces, Netzwerk, Dateien). Öffne die
+      Browser-Konsole und tippe direkt <code>await qu.own.get('note').put('hallo')</code>.
+      Jeder Codeblock unten ist copy-paste-lauffähig gegen genau dieses <code>qu</code>.
+    </p>
+
+    <div class="step">
+      <h2>Setup (bereits ausgeführt)</h2>
+      <p class="step-desc">Dieser Code lief schon, bevor die Seite fertig gerendert war.</p>
+      <pre class="step-code"><code>import { Qu, QU_PRESETS, createFileHandlerPlugin, MemoryFileStorageAdapter } from '/src/index.js';
+
+const qu = await Qu.create({
+  plugins: [...QU_PRESETS.network, createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })],
+});
+window.qu = qu; // Konsole: qu.get(...), qu.own, qu.createSpace(...), qu.connect(...), …</code></pre>
+      <dl class="kv">
+        <dt>qu.fingerprint</dt><dd id="fingerprint">…</dd>
+        <dt>qu.userSpaceId</dt><dd id="userspace">…</dd>
+      </dl>
+    </div>
+
+    <div class="step">
+      <h2>1 · Lesen &amp; Schreiben — <code>get/put/set</code></h2>
+      <p class="step-desc">
+        <code>put()</code> ist "letzter Schreiber gewinnt" (ein Wert an einer festen Adresse),
+        <code>set()</code> hängt kollisionssicher an (mehrere Schreiber, ein Eintrag pro Aufruf).
+      </p>
+      <pre class="step-code"><code>await qu.own.get('note').put('hallo Welt');       // LWW — überschreibt den vorigen Wert
+const q = await qu.own.get('note');                // lesen: QuBit { value, ts, writer, ... } oder null
+console.log(q.value);
+
+await qu.own.get('todos').set({ text: 'Milch kaufen' }); // set() statt put(): kollisionssicherer Eintrag
+await qu.own.get('todos').set({ text: 'Brot kaufen' });</code></pre>
+      <div class="lab-toolbar">
+        <input id="note-input" class="lib-input" type="text" placeholder="Text für qu.own.get('note').put(...)" />
+        <button id="write-btn" class="run-btn">put()</button>
+      </div>
+      <p class="console-hint">live über <code>.on()</code> beobachtet: <strong id="note-live">(leer)</strong></p>
+    </div>
+
+    <div class="step">
+      <h2>2 · Live beobachten — <code>on()</code> / <code>map()</code></h2>
+      <p class="step-desc">
+        <code>on(cb)</code> hört auf GENAU diesen Knoten, <code>map(cb)</code> auf seine direkten
+        Kinder (z. B. alle Einträge einer <code>set()</code>-Sammlung). Beides bleibt aktiv, bis
+        die zurückgegebene Funktion aufgerufen wird.
+      </p>
+      <pre class="step-code"><code>const unsubscribe = qu.own.get('note').on((q) => console.log('note ist jetzt:', q?.value));
+const unsubscribeTodos = qu.own.get('todos').map((q) => console.log('todo:', q.value.text), { initial: true });
+// … später: unsubscribe(); unsubscribeTodos();</code></pre>
+    </div>
+
+    <div class="step">
+      <h2>3 · Spaces &amp; Zugriffsrechte</h2>
+      <p class="step-desc">
+        Ein Space hat ein eigenes Manifest (<code>admins</code>/<code>writers</code>/<code>readers</code>).
+        Ohne <code>createSpacesPlugin()</code> (hier schon Teil von <code>QU_PRESETS.network</code>)
+        darf nur der eigene <code>~fingerprint</code>-Bereich beschrieben werden.
+      </p>
+      <pre class="step-code"><code>const space = qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] }); // '*' = jeder darf lesen
+await space.ready; // auf das erste, ACL-setzende Schreiben warten
+await space.get('title').put('Mein Space');
+console.log(space.id); // fest — merken, um später erneut mit qu.get(space.id) dorthin zu navigieren</code></pre>
+    </div>
+
+    <div class="step">
+      <h2>4 · Referenzen — <code>key://</code> automatisch folgen</h2>
+      <p class="step-desc">
+        Ein Wert der Form <code>key://&lt;pfad&gt;</code> wird von <code>await</code>/<code>put</code>/
+        <code>set</code>/<code>on</code>/<code>map</code> transparent aufgelöst — einmalig, beim
+        jeweiligen Aufruf, nicht mitten im Pfad. <code>{'{'} raw: true {'}'}</code> schaltet es ab.
+      </p>
+      <pre class="step-code"><code>import { keyRef } from '/src/index.js';
+
+await qu.own.get('team-alias').put(keyRef(qu.userSpaceId)); // Referenz statt Kopie
+const resolved = await qu.get(qu.userSpaceId).get('team-alias'); // folgt automatisch bis zum Ziel-QuBit
+console.log(resolved.id); // === qu.userSpaceId, nicht 'team-alias'</code></pre>
+    </div>
+
+    <div class="step">
+      <h2>5 · Dateien</h2>
+      <p class="step-desc">
+        <code>put()</code> erkennt <code>Uint8Array</code>/<code>File</code>/<code>Blob</code> automatisch
+        und chunked+manifestiert statt roh zu schreiben — vorausgesetzt ein <code>FileHandlerPlugin</code>
+        ist installiert (hier bereits der Fall).
+      </p>
+      <pre class="step-code"><code>const file = document.querySelector('#file-input').files[0];
+await qu.own.get('avatar').put(file);
+const manifest = await qu.own.get('avatar');
+console.log(manifest.value); // { name, size, mime, chunks, hash, ... }</code></pre>
+    </div>
+
+    <div class="step">
+      <h2>6 · Netzwerk: mit dem Relay verbinden</h2>
+      <p class="step-desc">
+        Derselbe WebSocket-Relay, der diese Seite ausliefert (<code>index.js</code>). Der
+        Handshake beweist zuerst den Fingerprint der Gegenseite, danach ist die Verbindung eine
+        normale <code>DefaultReplication</code>. <code>pushTopics</code> ist, was DIESE Verbindung
+        selbst nach außen pusht.
+      </p>
+      <pre class="step-code"><code>import { createNetworkPlugin, createWebSocketChannel } from '/src/index.js'; // createNetworkPlugin ist schon installiert
+
+const channel = createWebSocketChannel(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/relay`);
+await channel.connect();
+const repl = await qu.connect(channel, { pushTopics: ['playground/'] });</code></pre>
+      <div class="lab-toolbar">
+        <button id="connect-btn" class="run-btn">Mit Relay verbinden</button>
+        <span id="connect-status" class="lab-status">nicht verbunden</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <h2>7 · Eine zweite Instanz (Bob) — dynamisches Subscribe</h2>
+      <p class="step-desc">
+        <code>bob</code> kennt <code>'playground/'</code> nicht als eigenes <code>pushTopics</code> —
+        er bekommt es trotzdem live zugestellt, weil <code>.map()</code> beim Aktivieren automatisch
+        ein <code>qu.subscribe</code> an den Relay schickt (<code>allowDynamicSubscribe</code>, siehe
+        README Abschnitt 3). Erst <strong>6 · Netzwerk</strong> oben verbinden, dann hier bob starten.
+      </p>
+      <pre class="step-code"><code>const bob = await Qu.create({ plugins: QU_PRESETS.network });
+const channelBob = createWebSocketChannel(relayUrl());
+await channelBob.connect();
+await bob.connect(channelBob, { pushTopics: [] }); // bob pusht nichts eigenes — reiner Leser
+
+bob.get('playground').get('messages').map((q) => console.log('bob sieht:', q.value.text));
+// ^ löst automatisch repl.ensureSynced('playground/messages') aus — sync + live subscribe, einmalig
+
+await qu.get('playground').get('messages').set({ text: 'hallo bob' });</code></pre>
+      <div class="lab-toolbar">
+        <button id="bob-btn" class="run-btn" disabled>bob erzeugen + verbinden</button>
+        <input id="msg-input" class="lib-input" type="text" placeholder="Nachricht für playground/messages" />
+        <button id="send-btn" class="run-btn" disabled>senden</button>
+      </div>
+      <p class="lab-status" id="bob-status">bob wartet auf Schritt 6</p>
+      <ul id="bob-log" class="lib-list"></ul>
+    </div>
+  </main>
+
+  <script type="module">
+    import {
+      Qu, QU_PRESETS, createWebSocketChannel, createFileHandlerPlugin, MemoryFileStorageAdapter, keyRef,
+    } from '/src/index.js';
+
+    function relayUrl() {
+      return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/relay`;
+    }
+    window.relayUrl = relayUrl;
+    window.keyRef = keyRef;
+
+    const qu = await Qu.create({
+      plugins: [...QU_PRESETS.network, createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })],
+    });
+    window.qu = qu;
+
+    document.getElementById('fingerprint').textContent = qu.fingerprint;
+    document.getElementById('userspace').textContent = qu.userSpaceId;
+
+    qu.own.get('note').on((q) => {
+      document.getElementById('note-live').textContent = q?.value ?? '(leer)';
+    });
+    document.getElementById('write-btn').addEventListener('click', async () => {
+      const input = document.getElementById('note-input');
+      if (!input.value) return;
+      await qu.own.get('note').put(input.value);
+      input.value = '';
+    });
+
+    // --- 6 · Netzwerk ---
+    const connectBtn = document.getElementById('connect-btn');
+    const connectStatus = document.getElementById('connect-status');
+    const bobBtn = document.getElementById('bob-btn');
+    connectBtn.addEventListener('click', async () => {
+      connectBtn.disabled = true;
+      connectStatus.textContent = 'verbinde…';
+      connectStatus.className = 'lab-status';
+      try {
+        const channel = createWebSocketChannel(relayUrl());
+        await channel.connect();
+        const repl = await qu.connect(channel, { pushTopics: ['playground/'] });
+        window.repl = repl;
+        connectStatus.textContent = 'verbunden — window.repl';
+        connectStatus.className = 'lab-status ok';
+        bobBtn.disabled = false;
+      } catch (e) {
+        connectStatus.textContent = `Fehler: ${e.message}`;
+        connectStatus.className = 'lab-status warn';
+        connectBtn.disabled = false;
+      }
+    });
+
+    // --- 7 · Bob ---
+    const bobStatus = document.getElementById('bob-status');
+    const bobLog = document.getElementById('bob-log');
+    const sendBtn = document.getElementById('send-btn');
+    const msgInput = document.getElementById('msg-input');
+    bobBtn.addEventListener('click', async () => {
+      bobBtn.disabled = true;
+      bobStatus.textContent = 'bob verbindet…';
+      try {
+        const bob = await Qu.create({ plugins: QU_PRESETS.network });
+        window.bob = bob;
+        const channelBob = createWebSocketChannel(relayUrl());
+        await channelBob.connect();
+        await bob.connect(channelBob, { pushTopics: [] });
+        bob.get('playground').get('messages').map((q) => {
+          const li = document.createElement('li');
+          li.className = 'lib-entry';
+          li.textContent = `${q.value.text} (von ${q.writer.slice(0, 8)}…)`;
+          bobLog.appendChild(li);
+        });
+        bobStatus.textContent = 'bob verbunden — window.bob, hört live auf playground/messages';
+        bobStatus.className = 'lab-status ok';
+        sendBtn.disabled = false;
+      } catch (e) {
+        bobStatus.textContent = `Fehler: ${e.message}`;
+        bobStatus.className = 'lab-status warn';
+        bobBtn.disabled = false;
+      }
+    });
+    sendBtn.addEventListener('click', async () => {
+      if (!msgInput.value) return;
+      await qu.get('playground').get('messages').set({ text: msgInput.value });
+      msgInput.value = '';
+    });
+  </script>
+</body>
+</html>
