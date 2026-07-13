@@ -44,7 +44,7 @@ export async function listPosts(qu, boardId, bucket = currentBucket()) {
 
 /** Live-Abonnement auf GENAU einen Bucket (Default: der aktuelle) — nie auf das ganze Board. */
 export function onPosts(qu, boardId, callback, { bucket = currentBucket(), ...opts } = {}) {
-  return qu.get(boardId).get('posts').get(bucket).map(callback, { deep: true, ...opts });
+  return qu.get(boardId).get('posts').get(bucket).map(callback, opts);
 }
 
 /** Alle bekannten Buckets dieses Boards, chronologisch sortiert (String-Sortierung reicht dank "YYYY-MM"). */

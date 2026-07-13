@@ -160,12 +160,14 @@ wie derselbe Aufruf mit dem vollen Pfad direkt auf `qu` es auch wäre;
 `qu.own` ist nichts als `qu.get(qu.userSpaceId)`.
 
 `put(value)` überschreibt (LWW, benanntes Register); `set(value)` hängt
-automatisch `/${fingerprint}/${ts}` an — für Sammlungen mit mehreren
-unabhängigen Schreibern (Chat, Kommentare), die strukturell nie
-kollidieren können:
+automatisch `${fingerprint}-${ts}` als ein Pfadsegment an — für Sammlungen
+mit mehreren unabhängigen Schreibern (Chat, Kommentare), die strukturell
+nie kollidieren können, aber genauso eine Ebene tief bleiben wie eine
+`put()`-basierte Sammlung — `node.map(cb)` (ohne `deep`) findet beide Arten
+gleich:
 
 ```js
-await room.get('msgs').set({ text: 'erste Nachricht' });  // landet unter room/msgs/<alice-fp>/<ts>
+await room.get('msgs').set({ text: 'erste Nachricht' });  // landet unter room/msgs/<alice-fp>-<ts>
 await bob.get(`${room}/msgs`).set({ text: 'zweite Nachricht' }); // eigener Namensraum, keine Kollision möglich
 ```
 
@@ -300,11 +302,12 @@ Beide Optionen sind rein additiv — `Qu.create()` ganz ohne sie verhält sich
 exakt wie bisher, komplett lokal, keine Plugins geladen.
 
 **Live beobachten:** `node.on(callback, { initial?, once? })` (dieser eine
-Node) bzw. `node.map(callback, { deep?, initial?, once? })` (seine Kinder,
-`deep: true` für Sammlungen, die zwei Segmente tief namensraumisieren wie
-`set()`) — `initial: true` (bei `map()` der Default) liefert erst alles
-bereits Passende, danach laufend Neues; `once: true` liefert nur den
-aktuellen Stand, keine laufende Subscription.
+Node) bzw. `node.map(callback, { deep?, initial?, once? })` (seine Kinder —
+`set()`-Sammlungen sind genauso eine Ebene tief wie `put()`-Sammlungen,
+`deep: true` braucht es nur für eine Hierarchie, die eine App selbst tiefer
+gebaut hat, z. B. Leaf-per-Field-Items) — `initial: true` (bei `map()` der
+Default) liefert erst alles bereits Passende, danach laufend Neues;
+`once: true` liefert nur den aktuellen Stand, keine laufende Subscription.
 
 ### 5. Trigger & Listen: Events auslösen und darauf reagieren
 
@@ -368,17 +371,17 @@ dieselbe Operation sind (`map()`), nicht zwei getrennte APIs.
 
 ### 7. Datenstruktur für wachsende Collections (z. B. ein Forum)
 
-`node.map(cb, { deep: true })`/`**` liefert IMMER die komplette Treffermenge
-— es gibt (bewusst, siehe Abschnitt 6) kein Limit/Offset im Core. Für eine
-Collection, die strukturell nur eine überschaubare Größe erreichen kann
-(z. B. die Liste der Boards eines Forums), ist das genau richtig. Für eine
-Collection, die UNBEGRENZT wächst (die Posts *innerhalb* eines aktiven
-Boards), ist `board.get('posts').map(cb, { deep: true })` ein Problem, das
-mit der Zeit nur schlimmer wird — Board-weise splitten reicht allein nicht,
+`node.map(cb)` liefert IMMER die komplette Treffermenge — es gibt (bewusst,
+siehe Abschnitt 6) kein Limit/Offset im Core. Für eine Collection, die
+strukturell nur eine überschaubare Größe erreichen kann (z. B. die Liste der
+Boards eines Forums), ist das genau richtig. Für eine Collection, die
+UNBEGRENZT wächst (die Posts *innerhalb* eines aktiven Boards), ist
+`board.get('posts').map(cb)` ein Problem, das mit der Zeit nur schlimmer
+wird — Board-weise splitten reicht allein nicht,
 weil das nur die Anzahl der Boards begrenzt, nicht die Anzahl der Posts in
 einem einzelnen (populären) Board.
 
-**Die Regel: nie `map()`/`**` auf eine strukturell unbegrenzte Ebene
+**Die Regel: nie `map()` auf eine strukturell unbegrenzte Ebene
 anwenden — die ID-Struktur so wählen, dass jede Ebene, die tatsächlich
 abonniert wird, von Natur aus begrenzt ist.** Der Standard-Trick dafür ist
 Zeit-Sharding: Posts nicht flach unter `posts/<postId>` ablegen, sondern
@@ -388,7 +391,7 @@ zusätzlich nach einem Zeit-Bucket gruppiert. Ein Client abonniert dann nie
 ```js
 const board = qu.get(`forum/${boardId}`);
 const currentBucket = new Date().toISOString().slice(0, 7); // "2026-07"
-board.get('posts').get(currentBucket).map(renderPost, { deep: true }); // nur dieser Monat
+board.get('posts').get(currentBucket).map(renderPost); // nur dieser Monat
 ```
 
 **Zwei gleichwertige Modelle, je nach erwarteter Datenmenge:**
@@ -432,7 +435,7 @@ await board.get('bucket-index').set({ bucket: currentBucket });
 const rows = await board.get('bucket-index').session.query(`${board.id}/bucket-index/**`);
 const buckets = [...new Set(rows.map((q) => q.value.bucket))].sort();
 const older = buckets[buckets.indexOf(currentBucket) - 1];
-if (older) board.get('posts').get(older).map(renderPost, { deep: true, once: true });
+if (older) board.get('posts').get(older).map(renderPost, { once: true });
 ```
 "Eine Seite laden" wird so zu "einen Bucket laden" — Pagination als
 Datenmodell-Muster statt als Core-Feature.

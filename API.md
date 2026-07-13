@@ -102,15 +102,18 @@ eigenständige Qu-Methode (delegiert an `QuSession`).
 *gleiche* `id` von zwei verschiedenen Schreibern überschreibt sich
 gegenseitig (kein Sicherheitsproblem, beide Signaturen sind echt, aber ein
 echter Datenverlust, falls das nicht gewollt war). `node.set(value)` ist
-der andere Modus: es hängt `/${fingerprint}/${ts}` an die ID an, *bevor* es
-denselben `put()`-Pfad durchläuft — zwei verschiedene Schreiber können
-dadurch strukturell nie kollidieren, ohne dass die ACL davon etwas
-mitbekommen müsste (sie prüft weiterhin nur `spaceIdOf(id)`, das erste
-Pfadsegment, unverändert). Für "viele unabhängige Beiträge zu einer
-gemeinsamen Sammlung" (Chat-Nachrichten, Kommentare, Aktivitäts-Events)
-immer `set()`, nie `put()` mit einer selbstgewählten, potenziell
-wiederverwendeten ID. Jede Schreib-Methode wirft sofort, wenn
-`qu.isGuest === true`.
+der andere Modus: es hängt `${fingerprint}-${ts}` als EIN Pfadsegment an
+die ID an (nicht zwei Segmente `${fingerprint}/${ts}`), *bevor* es denselben
+`put()`-Pfad durchläuft — zwei verschiedene Schreiber können dadurch
+strukturell nie kollidieren, ohne dass die ACL davon etwas mitbekommen
+müsste (sie prüft weiterhin nur `spaceIdOf(id)`, das erste Pfadsegment,
+unverändert), UND ohne dass eine lesende Seite wissen müsste, ob eine
+Collection mit `put()` oder `set()` geschrieben wurde — beide sind genau
+eine Ebene tief, `node.map(cb)` (ohne `{ deep: true }`) findet beide gleich.
+Für "viele unabhängige Beiträge zu einer gemeinsamen Sammlung"
+(Chat-Nachrichten, Kommentare, Aktivitäts-Events) immer `set()`, nie
+`put()` mit einer selbstgewählten, potenziell wiederverwendeten ID. Jede
+Schreib-Methode wirft sofort, wenn `qu.isGuest === true`.
 
 `node.put(bytes, opts)` erkennt `Uint8Array`/`Blob`/`File` automatisch als
 Datei (Chunking+Manifest statt einem rohen Byte-Wert) — **wenn** ein
@@ -374,9 +377,9 @@ Aufrufe darüber (`put`/`set`/`on`/`map`/`await`).
 |---|---|---|
 | `get` | `node.get(subpath)` → `QuSpace` | Navigiert — Node gebunden an `${node.id}/${subpath}`. Synchron, keine I/O. Weggelassenes/leeres `subpath` liefert `node` selbst zurück. |
 | `put` | `node.put(value, opts?)` → `Promise` | Schreibt AN diesem Node (LWW-Register). Datei-Bytes werden automatisch erkannt, wenn ein `FileHandler` konfiguriert ist (siehe `putDispatch` unten). |
-| `set` | `node.set(value, opts?)` → `Promise` | Kollisionssicher: hängt `/${fingerprint}/${ts}` an, bevor es denselben `put()`-Pfad durchläuft — für Sammlungen mit mehreren unabhängigen Schreibern. |
+| `set` | `node.set(value, opts?)` → `Promise` | Kollisionssicher: hängt `${fingerprint}-${ts}` als EIN Pfadsegment an, bevor es denselben `put()`-Pfad durchläuft — für Sammlungen mit mehreren unabhängigen Schreibern. Genauso eine Ebene tief wie eine `put()`-Sammlung. |
 | `on` | `node.on(cb, opts?)` → `() => void` | Live-Subscription auf DIESEN Node — `{ initial?, once? }`, gleiche Semantik wie `QuSession.on()`. |
-| `map` | `node.map(cb, opts?)` → `() => void` | Live-Subscription auf die KINDER dieses Nodes — `${id}/*` (`opts.deep: true` → `${id}/**`, für `set()`-Sammlungen, die zwei Segmente tief namensraumisieren). Default `{ initial: true }` (anders als `on()`). |
+| `map` | `node.map(cb, opts?)` → `() => void` | Live-Subscription auf die KINDER dieses Nodes — `${id}/*` (findet `set()`-Sammlungen bereits ohne `deep`, s. o.); `opts.deep: true` → `${id}/**`, nur für eine Hierarchie, die eine App selbst tiefer gebaut hat. Default `{ initial: true }` (anders als `on()`). |
 
 **Thenable:** `await node` (bzw. `node.then()`) liest den aktuellen Wert AN
 diesem Node (delegiert an `session.get(node.id)`). Navigieren (`get()`) und
@@ -647,12 +650,16 @@ await qu.get(privateRoomId).get('meta').put({ createdAt: Date.now() }, { encrypt
 ```
 
 ### `session.append(collectionId, value, opts?)`
-Wie `publish()`, aber hängt zuerst `/${identity.fingerprint}/${ts}` an
-`collectionId` an. **Erfordert eine Identität** (wirft sonst — ein
-anonymer Schreiber kann nicht sinnvoll namensraumisiert werden). Für
-Sammlungen mit mehreren unabhängigen Schreibern (Chat-Nachrichten,
-Kommentare) statt `publish()` mit einer selbstgewählten ID — siehe die
-`publish` vs. `append`-Erklärung im [`Qu`-Abschnitt](#qu-facade-empfohlener-einstieg).
+Wie `publish()`, aber hängt zuerst `${identity.fingerprint}-${ts}` als EIN
+Pfadsegment an `collectionId` an (nicht zwei Segmente
+`${fingerprint}/${ts}` — damit bleibt die entstehende Collection genauso
+eine Ebene tief wie eine `put()`-basierte, `node.map(cb)` braucht kein
+`{ deep: true }`, um sie zu finden). **Erfordert eine Identität** (wirft
+sonst — ein anonymer Schreiber kann nicht sinnvoll namensraumisiert
+werden). Für Sammlungen mit mehreren unabhängigen Schreibern
+(Chat-Nachrichten, Kommentare) statt `publish()` mit einer selbstgewählten
+ID — siehe die `publish` vs. `append`-Erklärung im
+[`Qu`-Abschnitt](#qu-facade-empfohlener-einstieg).
 
 ### `session.get(id)` → `Promise<QuBit | null>`
 Wie `runtime.get()`, aber: entschlüsselt automatisch, falls adressiert
@@ -991,7 +998,7 @@ muss dieses Feld für die Autorenanzeige nutzen, nie den ID-Text
 interpretieren** (siehe Warnung unten).
 
 ### `onMessage(space, callback, opts?)` → `() => void`
-Live-Subscription auf neue Nachrichten (`space.get('msgs').map(callback, { deep: true, ...opts })`
+Live-Subscription auf neue Nachrichten (`space.get('msgs').map(callback, opts)`
 unter der Haube). `onReadReceipt(space, callback, opts?)` und
 `onPresenceChange(space, callback, opts?)` verhalten sich identisch.
 
@@ -1057,12 +1064,14 @@ Idee wie `QuStore.put()`s Same-ts-Noop-Check.
 
 ### `viewObject(node, { createItem, render, key?, deep? })` → `() => void`
 One-way, eine Sammlung. Jeder QuBit direkt unter `node` (`node.map()`
-unter der Haube — `deep: true` für `${node.id}/**`, z. B. `set()`-Sammlungen,
-die zwei Segmente tief namensraumisieren) bekommt einmalig `createItem(qubit)`
-(liefert ein beliebiges opakes "Item", typischerweise ein bereits
-eingefügtes DOM-Element) und danach bei jedem Update `render(item, value, qubit)`.
-`key(qubit)` bestimmt die Item-Identität (Default: `qubit.id`). Gleiches
-`(id, ts)`-Dedup pro Item wie `viewKey()`.
+unter der Haube — findet `set()`-Sammlungen bereits ohne `deep`, die sind
+genauso eine Ebene tief wie `put()`-Sammlungen; `deep: true` für
+`${node.id}/**` nur bei einer Hierarchie, die eine App selbst tiefer gebaut
+hat, z. B. `<qu-list>`s Leaf-per-Field-Items) bekommt einmalig
+`createItem(qubit)` (liefert ein beliebiges opakes "Item", typischerweise
+ein bereits eingefügtes DOM-Element) und danach bei jedem Update
+`render(item, value, qubit)`. `key(qubit)` bestimmt die Item-Identität
+(Default: `qubit.id`). Gleiches `(id, ts)`-Dedup pro Item wie `viewKey()`.
 
 ### `bindKey(node, element, { get?, set?, event?, onError? })` → `() => void`
 Two-way — derselbe Live-Render wie `viewKey()`, plus ein lokaler

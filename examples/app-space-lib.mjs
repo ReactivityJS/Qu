@@ -74,5 +74,5 @@ export async function listEntries(appSpace) {
 
 /** Live-Abonnement auf neue Einträge — liefert erst, was bereits existiert, danach laufend Neues (map()s Default). */
 export function onEntry(appSpace, callback) {
-  return appSpace.get('entries').map(callback, { deep: true });
+  return appSpace.get('entries').map(callback);
 }

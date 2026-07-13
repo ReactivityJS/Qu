@@ -158,7 +158,7 @@ await channelBob.connect();
 await bob.connect(channelBob, { pushTopics: ['my-app/'] });
 
 // Bob abonniert, BEVOR Alice schreibt:
-bob.get('my-app').get('entries').map((q) => console.log('bob sieht:', q.value.text), { deep: true });
+bob.get('my-app').get('entries').map((q) => console.log('bob sieht:', q.value.text));
 
 // Ein "Eintrag" — set(), weil mehrere App-Instanzen unabhängig
 // voneinander schreiben können (kollisionssicher, README §7.2):
@@ -170,10 +170,11 @@ await appSpace.get('entries').set({ text: 'hallo App-Space' });
 const rows = await appSpace.session.query(`${appSpace.id}/entries/**`);
 ```
 
-`map(cb, { deep: true })` liefert per Default erst, was lokal bereits
-bekannt ist, danach laufend Neues — ohne vorherigen `sync()` (Schritt 5)
-kennt eine frisch verbundene Instanz aber noch nichts, sieht also nur
-das, was ab jetzt live eintrifft.
+`map(cb)` liefert per Default erst, was lokal bereits bekannt ist, danach
+laufend Neues — auch für `set()`-Sammlungen wie `entries` ohne
+`{ deep: true }`, die sind genauso eine Ebene tief wie eine `put()`-basierte
+Sammlung. Ohne vorherigen `sync()` (Schritt 5) kennt eine frisch verbundene
+Instanz aber noch nichts, sieht also nur das, was ab jetzt live eintrifft.
 
 ## Schritt 5: Später beitreten — `sync()`
 
@@ -198,7 +199,7 @@ const seenByCarol = await carol.get('my-app').session.query('my-app/entries/**')
 
 ## Schritt 6: Traffic im Blick behalten
 
-Ein `map(cb, { deep: true })` auf eine strukturell unbegrenzt wachsende
+Ein `map(cb)` auf eine strukturell unbegrenzt wachsende
 Sammlung (z. B. "alle Einträge, für immer") lädt irgendwann den gesamten
 App-Space — sowohl lokal als auch über die Leitung. Für alles, was über
 eine überschaubare Größe hinauswachsen kann, empfiehlt sich Zeit-Sharding:
@@ -242,7 +243,7 @@ async function makeInstance() {
 const a = await makeInstance();
 const b = await makeInstance();
 
-b.qu.get('my-app').get('entries').map((q) => console.log('b sieht:', q.value.text), { deep: true });
+b.qu.get('my-app').get('entries').map((q) => console.log('b sieht:', q.value.text));
 
 await a.qu.get('my-app').get('entries').set({ text: 'hallo von a' });
 // kurz warten, dann ist bei b in der Konsole "b sieht: hallo von a" zu sehen

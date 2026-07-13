@@ -141,19 +141,32 @@ export class QuSession {
    * hole (both signatures are genuinely valid), but a real data-loss bug.
    *
    * append() is the other mode: it namespaces the id by the writer's own
-   * fingerprint before publishing, `${collectionId}/${fingerprint}/${ts}`.
+   * fingerprint before publishing, `${collectionId}/${fingerprint}-${ts}`.
    * Two different writers can now never collide (different fingerprint =
-   * different path, structurally, not by convention someone has to
+   * different path segment, structurally, not by convention someone has to
    * remember), and no ACL special-casing is needed — `spaceIdOf(id)` is
    * still the same collection's Space either way, so write-ACL/read-ACL
    * are checked exactly like any other publish(). This is the standard
    * LWW-Register vs. (writer-partitioned) grow-only-Set split from CRDT
    * theory, not a one-off convention invented for chat.
+   *
+   * `fingerprint` and `ts` are joined with `-` into ONE path segment, not
+   * two (`${collectionId}/${fingerprint}-${ts}`, not
+   * `${collectionId}/${fingerprint}/${ts}`) — deliberately: a QuSpace
+   * built directly under `collectionId` is exactly one level deep, exactly
+   * like a put()-addressed collection (`list.get(itemId).put(v)`). A
+   * caller enumerating a collection's items never needs to know whether it
+   * was built with put() or set() to pick the right `map()`/query() depth
+   * — `${id}/*` (map()'s default) already finds set()-created entries.
+   * Getting this wrong used to fail silently: `${id}/*` structurally
+   * cannot match a path two segments deep, so `node.map(cb)` without
+   * `{ deep: true }` on a set()-based collection returned nothing at all —
+   * no error, the data just never appeared.
    */
   async append(collectionId, plainValue, opts = {}) {
     if (!this.#identity) throw new Error('[Session] append() requires an identity — anonymous writes cannot be namespaced');
     const ts = opts.ts ?? this.#runtime.nextTs();
-    const id = `${collectionId}/${this.#identity.fingerprint}/${ts}`;
+    const id = `${collectionId}/${this.#identity.fingerprint}-${ts}`;
     return this.publish(id, plainValue, { ...opts, ts });
   }
 

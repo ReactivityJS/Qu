@@ -312,16 +312,27 @@ gemeinsamen Sammlung" meinte (Chat-Nachrichten, Kommentare,
 Aktivitäts-Events) statt "eine benannte, veränderliche Stelle" (ein
 Space-Manifest, ein Profilfeld).
 
-`append(collectionId, value)` ist der zweite Modus dafür: er hängt
-`/${identity.fingerprint}/${ts}` an `collectionId` an, **bevor** derselbe
-`publish()`-Pfad läuft. Zwei verschiedene Schreiber können dadurch
-strukturell nie auf derselben ID landen — nicht per Konvention, die jemand
-befolgen oder vergessen könnte, sondern weil unterschiedliche Fingerprints
-zwangsläufig unterschiedliche Pfade erzeugen. **Keine ACL-Sonderbehandlung
-nötig:** `spaceIdOf(id)` (das erste Pfadsegment, §6.7) ist unverändert
-dasselbe, ob die restliche ID von der Anwendung frei gewählt oder von
-`append()` generiert wurde — Write-/Read-ACL prüfen exakt wie bei jedem
-anderen QuBit.
+`append(collectionId, value)` ist der zweite Modus dafür: er hängt an
+`collectionId` EIN Pfadsegment `${fingerprint}-${ts}` an
+(`${collectionId}/${fingerprint}-${ts}`, nicht zwei Segmente
+`${collectionId}/${fingerprint}/${ts}`), **bevor** derselbe `publish()`-Pfad
+läuft. Zwei verschiedene Schreiber können dadurch strukturell nie auf
+derselben ID landen — nicht per Konvention, die jemand befolgen oder
+vergessen könnte, sondern weil unterschiedliche Fingerprints zwangsläufig
+unterschiedliche Pfade erzeugen. **Keine ACL-Sonderbehandlung nötig:**
+`spaceIdOf(id)` (das erste Pfadsegment, §6.7) ist unverändert dasselbe, ob
+die restliche ID von der Anwendung frei gewählt oder von `append()`
+generiert wurde — Write-/Read-ACL prüfen exakt wie bei jedem anderen QuBit.
+
+Die Ein-Segment-Wahl ist bewusst, nicht beliebig: eine `append()`-Sammlung
+ist dadurch strukturell genauso tief wie eine `publish(id).get(itemId)`-
+Sammlung — eine lesende Seite muss nie wissen, mit welchem der beiden Modi
+eine Collection geschrieben wurde, um die richtige Abfragetiefe zu wählen.
+Eine frühere Zwei-Segment-Variante hatte genau hier eine stille Falle:
+`${id}/*` (die Default-Tiefe von `map()`/`on()`) matcht strukturell nie
+einen Pfad, der zwei Segmente tiefer liegt — eine Sammlung, die mit
+`append()`/`set()` geschrieben, aber ohne explizite tiefere Abfrage gelesen
+wurde, lieferte kommentarlos nichts, nicht etwa einen Fehler.
 
 Das ist die aus der CRDT-Theorie bekannte Unterscheidung zwischen einem
 LWW-Register und einem (nach Schreiber partitionierten) Grow-Only-Set —

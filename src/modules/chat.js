@@ -37,7 +37,7 @@ export async function listMessages(space) {
 
 /** Live subscription to new messages in a room. */
 export function onMessage(space, callback, opts) {
-  return space.get('msgs').map(callback, { deep: true, ...opts });
+  return space.get('msgs').map(callback, opts);
 }
 
 /**
@@ -82,7 +82,7 @@ export async function getReadReceipts(space) {
 }
 
 export function onReadReceipt(space, callback, opts) {
-  return space.get('reads').map(callback, { deep: true, ...opts });
+  return space.get('reads').map(callback, opts);
 }
 
 // --- Presence ---
@@ -115,7 +115,7 @@ export async function getPresence(space, { staleAfterMs = DEFAULT_STALE_MS } = {
 }
 
 export function onPresenceChange(space, callback, opts) {
-  return space.get('presence').map(callback, { deep: true, ...opts });
+  return space.get('presence').map(callback, opts);
 }
 
 /**
