@@ -12,15 +12,22 @@
     <h1>QU — Playground</h1>
     <p class="lede">
       Beim Laden dieser Seite wurde bereits <code>window.qu</code> angelegt — eine echte,
-      voll funktionsfähige <code>Qu</code>-Instanz (Spaces, Netzwerk, Dateien). Öffne die
-      Browser-Konsole und tippe direkt <code>await qu.own.get('note').put('hallo')</code>.
-      Jeder Codeblock unten ist copy-paste-lauffähig gegen genau dieses <code>qu</code>.
+      voll funktionsfähige <code>Qu</code>-Instanz (Spaces, Netzwerk, Dateien). Zusätzlich stehen
+      ALLE Basis-Bausteine aus <code>src/index.js</code> als globale Namen zur Verfügung
+      (<code>Qu</code>, <code>QU_PRESETS</code>, <code>createNetworkPlugin</code>,
+      <code>createWebSocketChannel</code>, <code>QuRuntime</code>, <code>QuStore</code>, …) — die
+      Konsole ist kein Sandkasten mit nur einer vorgefertigten Instanz, sondern derselbe Import,
+      den auch diese Seite selbst nutzt. Öffne die Browser-Konsole und tippe direkt
+      <code>await qu.own.get('note').put('hallo')</code> oder baue mit <code>await Qu.create()</code>
+      eine ganz eigene, zweite Instanz. Jeder Codeblock unten ist copy-paste-lauffähig.
     </p>
 
     <div class="step">
       <h2>Setup (bereits ausgeführt)</h2>
       <p class="step-desc">Dieser Code lief schon, bevor die Seite fertig gerendert war.</p>
-      <pre class="step-code"><code>import { Qu, QU_PRESETS, createFileHandlerPlugin, MemoryFileStorageAdapter } from '/src/index.js';
+      <pre class="step-code"><code>import * as QuLib from '/src/index.js';
+Object.assign(window, QuLib); // ALLE Exporte (Qu, QU_PRESETS, createNetworkPlugin, QuRuntime, ...) global
+const { Qu, QU_PRESETS, createFileHandlerPlugin, MemoryFileStorageAdapter } = QuLib;
 
 const qu = await Qu.create({
   plugins: [...QU_PRESETS.network, createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })],
@@ -29,6 +36,7 @@ window.qu = qu; // Konsole: qu.get(...), qu.own, qu.createSpace(...), qu.connect
       <dl class="kv">
         <dt>qu.fingerprint</dt><dd id="fingerprint">…</dd>
         <dt>qu.userSpaceId</dt><dd id="userspace">…</dd>
+        <dt>window.QuLib</dt><dd>alle <span id="lib-count">…</span> Exporte einzeln, s.o.</dd>
       </dl>
     </div>
 
@@ -83,8 +91,7 @@ console.log(space.id); // fest — merken, um später erneut mit qu.get(space.id
         <code>set</code>/<code>on</code>/<code>map</code> transparent aufgelöst — einmalig, beim
         jeweiligen Aufruf, nicht mitten im Pfad. <code>{'{'} raw: true {'}'}</code> schaltet es ab.
       </p>
-      <pre class="step-code"><code>import { keyRef } from '/src/index.js';
-
+      <pre class="step-code"><code>// keyRef ist bereits global (window.keyRef, s.o.)
 await qu.own.get('team-alias').put(keyRef(qu.userSpaceId)); // Referenz statt Kopie
 const resolved = await qu.get(qu.userSpaceId).get('team-alias'); // folgt automatisch bis zum Ziel-QuBit
 console.log(resolved.id); // === qu.userSpaceId, nicht 'team-alias'</code></pre>
@@ -111,8 +118,7 @@ console.log(manifest.value); // { name, size, mime, chunks, hash, ... }</code></
         normale <code>DefaultReplication</code>. <code>pushTopics</code> ist, was DIESE Verbindung
         selbst nach außen pusht.
       </p>
-      <pre class="step-code"><code>import { createNetworkPlugin, createWebSocketChannel } from '/src/index.js'; // createNetworkPlugin ist schon installiert
-
+      <pre class="step-code"><code>// createWebSocketChannel ist bereits global; createNetworkPlugin ist auf qu schon installiert
 const channel = createWebSocketChannel(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/relay`);
 await channel.connect();
 const repl = await qu.connect(channel, { pushTopics: ['playground/'] });</code></pre>
@@ -150,15 +156,20 @@ await qu.get('playground').get('messages').set({ text: 'hallo bob' });</code></p
   </main>
 
   <script type="module">
-    import {
-      Qu, QU_PRESETS, createWebSocketChannel, createFileHandlerPlugin, MemoryFileStorageAdapter, keyRef,
-    } from '/src/index.js';
+    // Every named export of the barrel (Qu, QU_PRESETS, createNetworkPlugin,
+    // createWebSocketChannel, QuRuntime, QuStore, ...) becomes a global —
+    // the whole point of a "dev console" playground is that it isn't a
+    // sandbox limited to one pre-built instance; it's the same import this
+    // page itself uses, just also reachable by name from the console.
+    import * as QuLib from '/src/index.js';
+    Object.assign(window, QuLib);
+    window.QuLib = QuLib;
+    const { Qu, QU_PRESETS, createFileHandlerPlugin, MemoryFileStorageAdapter, createWebSocketChannel } = QuLib;
 
     function relayUrl() {
       return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/relay`;
     }
     window.relayUrl = relayUrl;
-    window.keyRef = keyRef;
 
     const qu = await Qu.create({
       plugins: [...QU_PRESETS.network, createFileHandlerPlugin({ fileStorage: new MemoryFileStorageAdapter() })],
@@ -167,6 +178,7 @@ await qu.get('playground').get('messages').set({ text: 'hallo bob' });</code></p
 
     document.getElementById('fingerprint').textContent = qu.fingerprint;
     document.getElementById('userspace').textContent = qu.userSpaceId;
+    document.getElementById('lib-count').textContent = Object.keys(QuLib).length;
 
     qu.own.get('note').on((q) => {
       document.getElementById('note-live').textContent = q?.value ?? '(leer)';
