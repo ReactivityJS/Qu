@@ -164,6 +164,18 @@ thenable ist und jedes Promise, das mit einem Thenable auflöst, dieses
 automatisch "durchreicht" (Promise-Spezifikation) — dieselbe "kein await
 navigiert, await liest"-Regel wie überall sonst in dieser API.
 
+`qu.createSpaceAt(id, { writers?, readers?, admins? })` → `QuSpace` —
+identisch zu `createSpace()`, nur mit einer selbst gewählten, festen `id`
+statt einer zufällig erzeugten. Für "genau EIN wohlbekannter Space pro
+App" (ein App-Space, siehe [`APP-GUIDE.md`](./APP-GUIDE.md)) statt "viele
+unabhängig erzeugte Räume" (wofür `createSpace()`s zufällige Id gedacht
+ist, z. B. [`examples/todo-lib.mjs`](./examples/todo-lib.mjs)) — die feste
+Id ist dann gleichzeitig Adressierung (`qu.get(id)`) UND
+`pushTopics`/`sync({ topic })`-Präfix, ohne dass ein separates
+"Topic"-Konzept nötig wäre. Derselbe First-Write-Wins-Bootstrap wie
+`createSpace()` gilt unverändert (siehe `createSpaceACLResolver` oben) —
+nur racet jetzt die selbst gewählte Id, nicht eine frische zufällige.
+
 ### Presets: `QU_PRESETS`
 `src/presets.js` bündelt gängige `plugins`-Listen für `Qu.create({ plugins })`:
 `QU_PRESETS.local` (`[]`, Core-Default), `QU_PRESETS.spaces`
@@ -376,8 +388,8 @@ Aufrufe darüber (`put`/`set`/`on`/`map`/`await`).
 | Verb | Signatur | Beschreibung |
 |---|---|---|
 | `get` | `node.get(subpath)` → `QuSpace` | Navigiert — Node gebunden an `${node.id}/${subpath}`. Synchron, keine I/O. Weggelassenes/leeres `subpath` liefert `node` selbst zurück. |
-| `put` | `node.put(value, opts?)` → `Promise` | Schreibt AN diesem Node (LWW-Register). Datei-Bytes werden automatisch erkannt, wenn ein `FileHandler` konfiguriert ist (siehe `putDispatch` unten). |
-| `set` | `node.set(value, opts?)` → `Promise` | Kollisionssicher: hängt `${fingerprint}-${ts}` als EIN Pfadsegment an, bevor es denselben `put()`-Pfad durchläuft — für Sammlungen mit mehreren unabhängigen Schreibern. Genauso eine Ebene tief wie eine `put()`-Sammlung. |
+| `put` | `node.put(value, opts?)` → `Promise` | Schreibt AN diesem Node (LWW-Register) — EIN benannter, veränderlicher Wert; `await node` liest ihn, ein zweiter `put()` überschreibt ihn. Datei-Bytes werden automatisch erkannt, wenn ein `FileHandler` konfiguriert ist (siehe `putDispatch` unten). |
+| `set` | `node.set(value, opts?)` → `Promise` | Kollisionssicher, ARRAY-artig: der Node selbst wird nie beschrieben (`await node` bleibt `null`), jeder Aufruf legt stattdessen ein neues Kind an (`${fingerprint}-${ts}` als EIN Pfadsegment) — für Sammlungen mit mehreren unabhängigen Schreibern. Genauso eine Ebene tief wie eine `put()`-Sammlung; die Liste selbst liest man über `node.map()`/`query()`, nie über den Node direkt. |
 | `on` | `node.on(cb, opts?)` → `() => void` | Live-Subscription auf DIESEN Node — `{ initial?, once? }`, gleiche Semantik wie `QuSession.on()`. |
 | `map` | `node.map(cb, opts?)` → `() => void` | Live-Subscription auf die KINDER dieses Nodes — `${id}/*` (findet `set()`-Sammlungen bereits ohne `deep`, s. o.); `opts.deep: true` → `${id}/**`, nur für eine Hierarchie, die eine App selbst tiefer gebaut hat. Default `{ initial: true }` (anders als `on()`). |
 
@@ -391,10 +403,11 @@ die Promise-Spezifikation "chased" jeden Thenable, den ein Promise als
 Auflösungswert bekommt, automatisch bis zum Ende durch (siehe `createSpace()`
 unten, das deshalb bewusst synchron ist, nicht `async`).
 
-Drei Wege, einen Node zu bekommen (siehe [Qu — Facade](#qu-facade-empfohlener-einstieg)):
+Vier Wege, einen Node zu bekommen (siehe [Qu — Facade](#qu-facade-empfohlener-einstieg)):
 - `qu.own` — gebunden an den eigenen User-Space, immer verfügbar.
 - `qu.get(spaceId)` — gebunden an jeden bekannten Space (eigener, `~<fremder-fp>`, generisch).
-- `qu.createSpace(opts)` — legt einen neuen generischen Space an (Spaces-Plugin nötig), **synchron**, gibt sofort einen Node dafür zurück.
+- `qu.createSpace(opts)` — legt einen neuen generischen Space mit zufälliger Id an (Spaces-Plugin nötig), **synchron**, gibt sofort einen Node dafür zurück.
+- `qu.createSpaceAt(id, opts)` — dasselbe, aber mit einer selbst gewählten festen Id statt einer zufälligen — der App-Space-Fall.
 
 ### `new QuSpace(session, spaceId, { guest?, putDispatch? })`
 Niedrigerer Konstruktor — `qu.own`/`qu.get()` nutzen ihn intern, direkt
@@ -866,6 +879,14 @@ const session = new QuSession(runtime, { identity: alice, getACL: acl });
 const roomId = await createSpace(session, { writers: [alice.fingerprint, bob.fingerprint], readers: ['*'] });
 await session.publish(`${roomId}/msg1`, { text: 'hi' });
 ```
+
+### `createSpaceAt(session, id, { writers?, readers?, admins? })` → `Promise<SpaceId>`
+Wie `createSpace()`, aber mit einer selbst gewählten `id` statt einer
+generierten UUID — liefert exakt diese `id` zurück, erst nachdem das
+Manifest wirklich geschrieben ist. Für einen App-weiten, fest bekannten
+Space (ein App-Space) statt eines neu erzeugten Raums pro Aufruf; die
+Fassaden-Sugar-Entsprechung ist `qu.createSpaceAt(id, opts)` (siehe
+[`QuSpace`](#quspace) oben).
 
 ---
 

@@ -9,20 +9,28 @@
 // Five verbs, one object type:
 //   node.get(subpath)        navigate — returns ANOTHER node bound to
 //                             `${node.id}/${subpath}`. Synchronous, no I/O.
-//   node.put(value, opts)     write AT this node (LWW-Register). `value`
-//                             instanceof Uint8Array (or Blob/File in a
-//                             browser) is auto-detected as a file IF a
+//   node.put(value, opts)     write AT this node (LWW-Register) — a NAMED,
+//                             SINGLE value. Node itself holds it; `await
+//                             node` reads it back; a second put() on the
+//                             same node overwrites, doesn't accumulate.
+//                             `value` instanceof Uint8Array (or Blob/File
+//                             in a browser) is auto-detected as a file IF a
 //                             FileHandler is configured (see putDispatch
 //                             below) — chunked+manifested instead of
 //                             written raw. No FileHandler configured and
 //                             bytes given -> throws, rather than silently
 //                             writing raw bytes as an opaque "value".
-//   node.set(value, opts)     collision-safe write into a shared
-//                             collection at this node (many independent
-//                             writers, e.g. chat messages) — namespaces the
-//                             id by writer fingerprint, one path segment
-//                             deep, same as put(id).get(itemId) — see
-//                             QuSession.append().
+//   node.set(value, opts)     collision-safe write into a shared, ARRAY-
+//                             LIKE collection AT this node (many
+//                             independent writers, e.g. chat messages) —
+//                             node itself is NEVER written to; each set()
+//                             creates a distinct new CHILD instead (one
+//                             path segment deep, namespaced by writer
+//                             fingerprint — see QuSession.append()). `await
+//                             node` after only set() calls returns null —
+//                             there's nothing AT node itself. Read the
+//                             growing list via node.map()/session.query(),
+//                             not `await node`.
 //   node.on(callback, opts)   live subscription to THIS node's own value
 //                             (`{ initial, once }`, same semantics as
 //                             QuSession.on()).
@@ -105,13 +113,13 @@ export class QuSpace {
     return new QuSpace(this.#session, `${this.#id}/${subpath}`, { guest: this.#guest, putDispatch: this.#putDispatch });
   }
 
-  /** Write AT this node (LWW). Bytes route through putDispatch — plain publish() unless a FileHandler is configured. */
+  /** Write AT this node (LWW) — a single named value, `await node` reads it back. Bytes route through putDispatch — plain publish() unless a FileHandler is configured. */
   async put(value, opts) {
     this.#assertCanWrite('put');
     return this.#putDispatch(this.#session, this.#id, value, opts);
   }
 
-  /** Collision-safe write into a shared collection at this node — see QuSession.append(). */
+  /** Collision-safe write into an array-like collection AT this node — creates a new child, never writes to this node itself (`await node` stays null). See QuSession.append(). */
   async set(value, opts) {
     this.#assertCanWrite('set');
     return this.#session.append(this.#id, value, opts);

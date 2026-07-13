@@ -145,6 +145,17 @@ await room.get('msg1').put('hallo');              // erlaubt, weil room's Manife
 await bob.get(`${room}/msg2`).put('hi zurück');   // room funktioniert auch weiterhin wie ein roher String — ${room} interpoliert zur Id
 ```
 
+`qu.createSpace(opts)` erzeugt jedes Mal eine neue, zufällige Id — richtig
+für "viele unabhängig angelegte Räume" (ToDo-Listen, Chat-Räume). Für
+"genau EIN wohlbekannter Space für diese ganze App" (ein **App-Space**,
+siehe [`APP-GUIDE.md`](./APP-GUIDE.md)) `qu.createSpaceAt(id, opts)` —
+identisch, nur mit einer selbst gewählten statt einer zufälligen Id. Diese
+feste Id ist dann gleichzeitig Adressierung im Code (`qu.get(id)`) UND der
+`pushTopics`/`sync({ topic })`-Präfix für den Netzwerk-Abgleich (Abschnitt
+3) — es gibt kein separates "Topic"-Konzept in QU, ein Topic ist einfach
+ein String-Präfix auf QuBit-Ids, und die robusteste Wahl dafür ist immer
+die Space-Id selbst.
+
 Einen bereits bekannten Space **laden** (statt neu anzulegen) — egal ob
 dein eigener, der einer anderen Person (`~<ihr-fingerprint>`), oder ein
 geteilter Raum, dessen Id z. B. über einen Link ankam:
@@ -159,16 +170,22 @@ const sameRoomAgain = bob.get(room.id);          // dieselbe room-Id, jetzt aus 
 wie derselbe Aufruf mit dem vollen Pfad direkt auf `qu` es auch wäre;
 `qu.own` ist nichts als `qu.get(qu.userSpaceId)`.
 
-`put(value)` überschreibt (LWW, benanntes Register); `set(value)` hängt
-automatisch `${fingerprint}-${ts}` als ein Pfadsegment an — für Sammlungen
-mit mehreren unabhängigen Schreibern (Chat, Kommentare), die strukturell
-nie kollidieren können, aber genauso eine Ebene tief bleiben wie eine
-`put()`-basierte Sammlung — `node.map(cb)` (ohne `deep`) findet beide Arten
-gleich:
+**`put(value)` und `set(value)` sind zwei grundlegend verschiedene Formen:**
+`put(value)` ist EIN benannter, veränderlicher Wert — der Node selbst
+trägt ihn, `await node` liest ihn, ein zweiter `put()` überschreibt ihn
+(nichts akkumuliert). `set(value)` ist ARRAY-artig — der Node selbst wird
+NIE beschrieben (`await node` bleibt `null`), stattdessen legt jeder
+`set()`-Aufruf ein neues, eigenes Kind an (`${fingerprint}-${ts}` als ein
+Pfadsegment, kollisionssicher über mehrere unabhängige Schreiber hinweg,
+genauso eine Ebene tief wie eine `put()`-basierte Sammlung). Die wachsende
+Liste selbst liest man nie über den Node direkt, sondern über
+`node.map(cb)`/`session.query()`:
 
 ```js
 await room.get('msgs').set({ text: 'erste Nachricht' });  // landet unter room/msgs/<alice-fp>-<ts>
 await bob.get(`${room}/msgs`).set({ text: 'zweite Nachricht' }); // eigener Namensraum, keine Kollision möglich
+console.log(await room.get('msgs'));                       // null — an msgs selbst wurde nie put()-geschrieben
+const all = await room.session.query(`${room}/msgs/**`);   // so liest man die Liste: alle Einträge, wie ein Array
 ```
 
 **Verschlüsselung ist der Default, sobald ein Space nicht öffentlich lesbar

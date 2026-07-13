@@ -91,15 +91,27 @@ const repl = await alice.connect(channel, { pushTopics: ['my-app/'] });
 Core-Default (`core/identity-acl.js`) nur Schreibzugriffe auf den eigenen
 `~fingerprint`-Space zu — ein geteilter App-Space (egal ob offen oder
 mitgliederbeschränkt) braucht dessen manifest-bewusste ACL-Auflösung.
-`pushTopics` hier ist, was ALICE selbst nach außen pusht — für Live-Empfang
-muss derselbe Präfix (wie oben erklärt) auch beim Relay selbst konfiguriert
-sein.
+
+`pushTopics` hier ist, was ALICE selbst nach außen pusht. **Es gibt kein
+separates "Topic"-Konzept in QU** — ein Topic ist einfach ein
+String-Präfix, der gegen QuBit-Ids geprüft wird (`id.startsWith(präfix)`).
+Die robusteste Wahl dafür ist deshalb IMMER die App-Space-Id selbst
+(unten): `'my-app'` ist hier kein austauschbares Label, das zufällig zum
+späteren App-Space passt — es IST die App-Space-Id, vorgezogen, weil sie
+für diese eine App bereits jetzt feststeht (siehe Schritt 3). Für
+Live-Empfang muss derselbe Präfix (wie oben erklärt) auch beim Relay
+selbst konfiguriert sein.
 
 ## Schritt 3: Das App-Space-Muster
 
 Ein App-Space ist kein neues Konzept — derselbe Space wie überall sonst in
-QU (Whitepaper §8), nur mit einem der App selbst bekannten Namen statt
-einer zufälligen Nutzer-Id. Zwei Varianten:
+QU (Whitepaper §8), nur mit EINER der App selbst bekannten, festen Id statt
+einer bei jedem Aufruf neu erzeugten. Genau diese Eigenschaft — eine feste,
+vorher bekannte Id statt einer zufälligen — ist es, die die App-Space-Id
+zur natürlichen Wahl für `pushTopics`/`sync({ topic })` macht: Adressierung
+im Code (`qu.get(id)`) und Netzwerk-Topic sind dieselbe Zeichenkette, nicht
+zwei getrennte Dinge, die zufällig übereinstimmen müssen. Zwei Varianten,
+beide mit fester Id:
 
 **Offen** — ein fest verabredeter Name, ohne eigenes Manifest. Die
 Bootstrap-Regel des Spaces-Plugins ("kein Manifest = jeder darf
@@ -115,32 +127,47 @@ const appSpace = alice.get('my-app'); // navigiert nur — keine I/O, kein Manif
 Passend für eine öffentliche Instanz/Demo, nicht für echte
 Zugriffskontrolle — jeder, der den Namen kennt, darf schreiben.
 
-**Mitgliederbeschränkt** — `qu.createSpace({ writers, readers })`, die
-entstehende zufällige Id wird z. B. über einen Link verteilt (dasselbe
-Muster wie [`examples/todo-lib.mjs`](./examples/todo-lib.mjs)):
+**Mitgliederbeschränkt** — `qu.createSpaceAt(id, { writers, readers })`:
+dieselbe manifest-basierte Zugriffskontrolle wie `qu.createSpace(opts)`
+(README Abschnitt 2), nur mit einer selbst gewählten statt einer
+zufälligen Id — für genau diesen einen Zweck gemacht (eine App hat EINEN
+App-Space, nicht viele unabhängig angelegte Räume; für "viele Räume", z. B.
+mehrere ToDo-Listen oder Chat-Räume mit je einer eigenen, unvorhersehbaren
+Id, ist `qu.createSpace(opts)` weiterhin das richtige Werkzeug — siehe
+[`examples/todo-lib.mjs`](./examples/todo-lib.mjs)):
 
 ```js
-const appSpace = alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] });
-await appSpace.ready; // wirklich auf das Manifest warten, bevor die Id weitergegeben wird
-console.log(appSpace.id); // diese Id an weitere Mitglieder verteilen
+const APP_SPACE = 'my-app';
+const appSpace = alice.createSpaceAt(APP_SPACE, { writers: [alice.fingerprint], readers: ['*'] });
+await appSpace.ready; // wirklich auf das Manifest warten, bevor andere Mitglieder mitschreiben
 ```
+
+Derselbe First-Write-Wins-Bootstrap wie bei `qu.createSpace()` gilt
+unverändert: bis zu diesem allerersten Schreiben darf jeder unter dieser
+Id schreiben (auch das Manifest selbst) — für eine feste, im Quellcode
+sichtbare Id ist das Fenster meist kurz (die erste Instanz, die die App
+startet, gewinnt), aber es ist kein Zufalls-Wettlauf mehr wie bei einer
+frisch generierten UUID, sondern ein Deployment-Detail: wer die App zuerst
+mit Netzwerkzugriff startet, sollte diesen ersten Schreibvorgang auslösen.
 
 Ein zweites Mitglied hinzufügen (nur Admins dürfen das, siehe README
 Abschnitt 2/Whitepaper §8.3):
 
 ```js
-const manifest = (await alice.get(appSpace.id)).value;
-await alice.get(appSpace.id).put({ ...manifest, writers: [...manifest.writers, bob.fingerprint] });
+const manifest = (await alice.get(APP_SPACE)).value;
+await alice.get(APP_SPACE).put({ ...manifest, writers: [...manifest.writers, bob.fingerprint] });
 ```
 
-Für eine zufällige Id (statt eines festen Namens) reicht `pushTopics` beim
-`connect()` nicht als Präfix aus, sofern der Relay nicht ebenfalls exakt
-diese Id kennt — siehe den Kasten oben. Ein Relay, der beliebige, zur
-Laufzeit erzeugte App-Spaces unterstützen soll, braucht entweder ein
-breites `pushTopics`-Präfix (z. B. `''`, alles) oder eine
-anwendungsspezifische Konvention (z. B. `apps/<app-name>/`, sodass EIN
-`pushTopics`-Eintrag beliebig viele zur Laufzeit erzeugte Spaces
-darunter abdeckt).
+Weil `APP_SPACE` fest und vorher bekannt ist, deckt derselbe
+`pushTopics: [APP_SPACE]`/`pushTopics: ['my-app/']`-Präfix aus Schritt 2
+sowohl das Manifest (`id === APP_SPACE`, kein Slash) als auch alle
+verschachtelten Inhalte (`${APP_SPACE}/entries/...`) ab — kein separater
+Präfix, keine Sonderbehandlung nötig. (Nur bei `qu.createSpace()`s
+zufälliger Id, die erst zur Laufzeit entsteht, bräuchte ein Relay
+zusätzlich entweder ein breites `pushTopics`-Präfix wie `''` oder eine
+anwendungsspezifische Elternpräfix-Konvention wie `apps/<app-name>/`, um
+beliebig viele davon abzudecken — bei einer festen App-Space-Id entfällt
+das.)
 
 ## Schritt 4: Daten schreiben, lesen, live beobachten
 
