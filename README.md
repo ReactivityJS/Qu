@@ -252,6 +252,87 @@ Ein Relay mit einem durablen `StorageAdapter` (z.B. Filesystem) UND
 dauerhafte Kopie deines Spaces, die auch dann online bleibt, wenn dein
 eigenes Gerät offline ist.
 
+**Ein App-unabhängiger Relay: `allowDynamicSubscribe`.** Das `pushTopics`
+oben ist Deployment-Konfiguration — feste Präfixe, die beim Start des
+Relay-Prozesses feststehen. Das passt nicht, wenn Spaces erst zur Laufzeit
+entstehen (z. B. `qu.createSpace()` mit einer zufälligen Id) und der Relay
+trotzdem nichts von einer konkreten App wissen soll. Für genau diesen Fall
+kann ein LESENDER Client sein Topic-Interesse selbst, zur Laufzeit,
+anmelden:
+
+```js
+// Relay: läuft komplett "ungebunden", kennt keine App-spezifischen Topics
+const relayApi = await createRelay({ allowDynamicSubscribe: true });
+
+// Schreibende Seite: pusht alles, was sie selbst schreibt — eine bereits
+// vorher bestehende, rein client-seitige Option (kein Teil dieser neuen
+// Funktion), hier aber die naheliegende Wahl, weil die Space-Id vorher
+// nicht feststeht:
+const replAlice = await alice.connect(channelAlice, { pushTopics: [''] });
+
+// Lesende Seite: meldet ein Topic erst an, wenn sie es wirklich braucht
+const repl = await bob.connect(channelBob, { pushTopics: [] });
+await repl.ensureSynced(spaceId); // holt lokal fehlenden Stand (sync) UND meldet Live-Interesse an (subscribe) — ein Aufruf für beides
+```
+
+`allowDynamicSubscribe` macht ausschließlich die LESE-Seite dynamisch — ob
+und was ein Relay an eine bestimmte Verbindung weiterleitet. Was ein
+Client selbst zum Relay hin PUSHT, bestimmt weiterhin ausschließlich sein
+eigenes `pushTopics` bei `connect()`, komplett unverändert. `pushTopics:
+['']` ("push alles, was ich selbst schreibe") ist dafür keine neue
+Funktion, sondern dieselbe Option, die es schon vor `allowDynamicSubscribe`
+gab — hier nur die passende Wahl für eine zur Laufzeit erzeugte Id, die
+beim Verbinden noch nicht feststeht. Die ACL entscheidet am Ende trotzdem
+für jeden Leser einzeln, was tatsächlich ankommt — ein breites `pushTopics`
+beim Schreiber bedeutet nur "der Relay bekommt es zu sehen", nicht "jeder
+Client bekommt es zugestellt".
+
+`ensureSynced(topic, opts?)` ist die "hole lokal, frage remote nach, und
+abonniere live" Kurzform — intern nur `await this.sync({ topic, ...opts });
+await this.subscribe(topic);`. Genau das passiert automatisch, sobald ein
+`node.on(cb)`/`node.map(cb)` aktiviert wird und ein Network-Plugin
+installiert ist — **ein einziges Mal beim Aktivieren des Listeners**, nicht
+pro Event (dieselbe Zeitpunkt-Entscheidung wie bei der `key://`-Auflösung
+oben): jeder verbundene Peer wird gebeten, den aufgelösten Pfad ab jetzt zu
+pushen. `qu.get(id)` bzw. `await qu.get(id)` triggert das **nicht** — erst
+ein tatsächlicher Listener (`on`/`map`) braucht wirklich laufende
+Zustellung; `{ raw: true }` schaltet es ab (wie beim `key://`-Following).
+
+`allowDynamicSubscribe` ist eine reine Sicherheitsgrenze auf der
+EMPFANGENDEN Seite eines `qu.subscribe`-Wunsches — sie erlaubt nie mehr, als
+die ACL ohnehin schon zulässt (jeder Push läuft weiterhin durch
+`filterForReader`, siehe API.md), sie entscheidet nur, ob eine Anfrage
+überhaupt eine Chance bekommt, gegen die ACL geprüft zu werden:
+- `false` (Default) — ein `qu.subscribe`-Wunsch wird stillschweigend
+  ignoriert, exakt das bisherige Verhalten ohne diese Funktion.
+- `true` — jedes angefragte Topic wird angenommen (weiterhin ACL-geprüft
+  vor jeder tatsächlichen Zustellung) — der "ungebundene Relay"-Fall oben.
+- `string[]` — eine harte Obergrenze: ein Topic wird nur angenommen, wenn es
+  mit einem der Einträge beginnt (`topic.startsWith(präfix)`) — "privater
+  App-Server, beschränkt auf bestimmte App-Space-Ids" (**Ids, keine
+  lesbaren Namen** — siehe Schritt 3 der App-Guide):
+  ```js
+  await createRelay({ allowDynamicSubscribe: ['3fa85f64-…/', 'a1b2c3d4-…/'] });
+  ```
+
+`maxDynamicTopics` (Default `200`, pro Verbindung) begrenzt zusätzlich, wie
+viele NEUE Topics eine einzelne Verbindung zur Laufzeit anmelden darf —
+bereits über `pushTopics` aktive Topics zählen nicht mit. Schutz gegen eine
+einzelne Verbindung, die den Relay mit beliebig vielen `qu.subscribe`-
+Anfragen flutet, unabhängig von `allowDynamicSubscribe`s eigener Grenze.
+
+`qu.connect()`s `subscribeOwnSpace` (Default `true`) nutzt denselben
+Mechanismus automatisch für den eigenen Space: nach dem Verbinden fragt es
+den Peer, `qu.userSpaceId` zurückzupushen — "zumindest den eigenen Space
+über Geräte hinweg synchron halten", ohne jede Extra-Konfiguration (z. B.
+falls der Relay Änderungen von einem anderen Gerät bereits gespeichert
+hat). `false` schaltet das ab (z. B. eine bewusst anonyme/asymmetrische
+Verbindung ohne eigenen Space). **Wichtig, leicht zu verwechseln:**
+`subscribeOwnSpace` betrifft nur die EMPFANGENDE Richtung — was diese
+Verbindung selbst nach außen pusht, bestimmt weiterhin ausschließlich das
+eigene `pushTopics` bei `connect()`, komplett unverändert und unabhängig
+von `subscribeOwnSpace`.
+
 ### 4. Arten von Events
 
 Diese Matrix ist eine der zentralen Kernideen von QU, nicht nur eine

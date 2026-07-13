@@ -55,9 +55,25 @@ export async function createRelay({
   requireDirectWriter = false,
   rateLimiter = null,
   ingestGate = [],
+  // Runtime topic registration — see network/replication/default.js's
+  // constructor doc and README's "Relay App-unabhängig betreiben" section.
+  // `false` (default): no client may register a new topic at runtime — the
+  // relay only ever pushes what's in `pushTopics` above, exactly as
+  // before this option existed. `true`: any connecting client may register
+  // any topic via qu.subscribe() — the "unbound relay" case, for a
+  // deployment that doesn't want to know app/Space ids in advance. A
+  // string array: a hard ceiling, restricting the relay to one or more
+  // App-Space id prefixes (a genuine security/scoping decision for a
+  // "private App Server", independent of and in addition to the ACL check
+  // every push already goes through regardless).
+  allowDynamicSubscribe = false,
+  maxDynamicTopics = 200,
 } = {}) {
   const relay = (await Qu.create({ store, identity })).use(createSpacesPlugin()); // generic (non-User) rooms — the relay's own Runtime enforces this on every incoming push, exactly like any other write
-  const hub = new ReplicationHub(relay.runtime, { identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter, ingestGate });
+  const hub = new ReplicationHub(relay.runtime, {
+    identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter, ingestGate,
+    allowDynamicSubscribe, maxDynamicTopics,
+  });
   const connected = new Map(); // fingerprint -> { channel, fileTransfer }
 
   // Proactively mirror a file's chunks from its uploader while they're

@@ -63,6 +63,15 @@
 // `obj://`/`file://` stay explicit; `.get()` navigation itself is
 // UNCHANGED — always sync, never resolves anything).
 //
+// on()/map() additionally ask every currently connected network peer to
+// push this node's topic (`subscribeDispatch`, installed by
+// createNetworkPlugin() via qu.setSubscribeHandler(), defaults to a no-op)
+// — fire-and-forget, never gates local listener activation. Without this,
+// a listener set up while connected to a relay would only ever see local
+// activity, never what the relay/other peers actually have. See README's
+// network section for the full mechanism (DefaultReplication.subscribe()/
+// ensureSynced()).
+//
 // Three ways to get a node (see qu.js):
 //   qu.own                 — bound to your own User-Space (~<fingerprint>).
 //   qu.get(spaceId)         — bound to any known Space: yours, someone
@@ -88,6 +97,7 @@ export class QuSpace {
   #guest;
   #putDispatch;
   #resolveDispatch;
+  #subscribeDispatch;
 
   /**
    * `putDispatch(session, id, value, opts)`, if given, replaces the default
@@ -104,13 +114,21 @@ export class QuSpace {
    * without QuSpace (Core) needing to know References/plugins exist at
    * all. See the module doc comment above and data/references.js's
    * resolveKeyChain() for the full mechanism.
+   *
+   * `subscribeDispatch(session, topic)`, if given, replaces the default
+   * no-op `async () => {}` — this is the hook createNetworkPlugin()/
+   * qu.setSubscribeHandler() installs so on()/map() ask every currently
+   * connected peer to actually push matching writes, instead of setting up
+   * a listener that only ever sees local activity. Fire-and-forget from
+   * on()/map()'s perspective — see their doc comments below.
    */
-  constructor(session, spaceId, { guest = false, putDispatch, resolveDispatch } = {}) {
+  constructor(session, spaceId, { guest = false, putDispatch, resolveDispatch, subscribeDispatch } = {}) {
     this.#session = session;
     this.#id = String(spaceId);
     this.#guest = guest;
     this.#putDispatch = putDispatch ?? ((s, id, value, opts) => s.publish(id, value, opts));
     this.#resolveDispatch = resolveDispatch ?? (async (s, id) => id);
+    this.#subscribeDispatch = subscribeDispatch ?? (async () => {});
   }
 
   get id() { return this.#id; }
@@ -154,7 +172,7 @@ export class QuSpace {
   /** Navigate to a child node — synchronous, no I/O, just builds `${id}/${subpath}`. */
   get(subpath) {
     if (!subpath) return this;
-    return new QuSpace(this.#session, `${this.#id}/${subpath}`, { guest: this.#guest, putDispatch: this.#putDispatch, resolveDispatch: this.#resolveDispatch });
+    return new QuSpace(this.#session, `${this.#id}/${subpath}`, { guest: this.#guest, putDispatch: this.#putDispatch, resolveDispatch: this.#resolveDispatch, subscribeDispatch: this.#subscribeDispatch });
   }
 
   /**
@@ -194,9 +212,17 @@ export class QuSpace {
    * SYNCHRONOUSLY (resolution + the real subscription happen in the
    * background; calling the returned function before that finishes is
    * safe and results in no delivery, same pattern as
-   * subscribe-with-options.js's `initial`/`once` catch-up). Pass
-   * `{ raw: true }` for the old, purely synchronous, zero-setup-gap
-   * behavior against the literal id (no resolution at all).
+   * subscribe-with-options.js's `initial`/`once` catch-up).
+   *
+   * Also asks every currently connected peer (via subscribeDispatch, see
+   * class doc) to start pushing this topic — fire-and-forget, does NOT
+   * delay or gate the local listener above, which activates purely from
+   * local state regardless of network latency/availability. Without
+   * createNetworkPlugin() installed this is a no-op; without ANY active
+   * connection yet it's a harmless no-op too (nothing to ask).
+   *
+   * Pass `{ raw: true }` for the old, purely synchronous, zero-setup-gap
+   * behavior against the literal id (no resolution, no network request).
    */
   on(callback, opts) {
     if (opts?.raw) return this.#session.on(this.#id, callback, opts);
@@ -206,6 +232,7 @@ export class QuSpace {
       .then((targetId) => {
         if (cancelled) return;
         unsubscribeInner = this.#session.on(targetId, callback, opts);
+        this.#subscribeDispatch(this.#session, targetId).catch((e) => console.error(`[QuSpace] on(): Netzwerk-Subscribe für "${targetId}" fehlgeschlagen:`, e));
       })
       .catch((e) => { if (!cancelled) console.error(`[QuSpace] on(): Auflösen von "${this.#id}" fehlgeschlagen:`, e); });
     return () => { cancelled = true; if (unsubscribeInner) unsubscribeInner(); };
@@ -226,7 +253,10 @@ export class QuSpace {
    * Resolves this node's own id through a chained `key://` redirect once,
    * at activation, exactly like on() — so `appSpace.get('currentBoard').map(cb)`
    * live-subscribes to whichever board is CURRENTLY pointed at, without
-   * re-resolving per event. Pass `{ raw: true }` to skip resolution.
+   * re-resolving per event. Also asks every currently connected peer to
+   * push this topic (subscribeDispatch, fire-and-forget — see on()'s doc
+   * comment, same reasoning applies here). Pass `{ raw: true }` to skip
+   * both resolution and the network request.
    */
   map(callback, { deep = false, initial = true, raw = false, ...opts } = {}) {
     if (raw) {
@@ -240,6 +270,7 @@ export class QuSpace {
         if (cancelled) return;
         const pattern = deep ? `${targetId}/**` : `${targetId}/*`;
         unsubscribeInner = this.#session.on(pattern, callback, { initial, ...opts });
+        this.#subscribeDispatch(this.#session, targetId).catch((e) => console.error(`[QuSpace] map(): Netzwerk-Subscribe für "${targetId}" fehlgeschlagen:`, e));
       })
       .catch((e) => { if (!cancelled) console.error(`[QuSpace] map(): Auflösen von "${this.#id}" fehlgeschlagen:`, e); });
     return () => { cancelled = true; if (unsubscribeInner) unsubscribeInner(); };

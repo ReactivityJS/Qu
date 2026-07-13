@@ -190,10 +190,11 @@ bewusst außerhalb `core/` — importiert aus `modules/`/`network/`, was
 `qu.js` selbst nie darf (Schichttrennung).
 
 ### Replication (optionales Modul, hier bequem verdrahtet)
-`qu.connect(channel, { pushTopics?, role?, group?, metric?, requireDirectWriter?, rateLimiter? })` → `Promise<DefaultReplication>` —
+`qu.connect(channel, { pushTopics?, subscribeOwnSpace?, allowDynamicSubscribe?, maxDynamicTopics?, role?, group?, metric?, requireDirectWriter?, rateLimiter? })` → `Promise<DefaultReplication>` —
 führt zuerst `authenticateChannel()` aus, verdrahtet danach
 `DefaultReplication` mit dem bewiesenen Fingerprint. Das Replication-Objekt
-hat weiterhin `.sync()`/`.repair()`/`.snapshot()`/`.peerFingerprint`/`.close()`.
+hat weiterhin `.sync()`/`.repair()`/`.snapshot()`/`.subscribe()`/
+`.ensureSynced()`/`.peerFingerprint`/`.close()`.
 
 `role`/`group`/`metric` sind optional und rein additiv — ohne sie
 identisches Verhalten wie zuvor. Mit `role: 'mirror'` oder `role: 'sync'`
@@ -209,6 +210,28 @@ betreffen aber nur **eingehende** `qu.push`-Nachrichten (nicht das oben
 beschriebene ausgehende Push-Routing) — siehe
 [Relay-Schutz: die Ingest-Gate-Pipeline](#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate)
 weiter unten.
+
+`subscribeOwnSpace` (Default `true`) ruft nach dem Verbinden automatisch
+`repl.subscribe(qu.userSpaceId)` auf — "zumindest den eigenen Space
+über Geräte hinweg synchron halten" ohne Extra-Konfiguration; `false`
+schaltet das ab. Betrifft ausschließlich die EMPFANGENDE Richtung, ist
+unabhängig vom eigenen `pushTopics` (was diese Verbindung selbst nach außen
+pusht, s.o.). `allowDynamicSubscribe`/`maxDynamicTopics` lassen DIESE Seite
+umgekehrt die `qu.subscribe`-Wünsche der Gegenseite honorieren — relevant
+für direkte/P2P-Verbindungen (z. B. `qu.webrtc()`), wo jede Seite für die
+andere "der Relay" sein kann; ein dedizierter Relay-Prozess setzt das
+normalerweise über `createRelay()`/`ReplicationHub` (siehe
+[Replication-Modul](#replication-modul) weiter unten für die vollständige
+Semantik von `allowDynamicSubscribe`/`maxDynamicTopics`/`subscribe()`/
+`ensureSynced()`).
+
+Jeder über `qu.get(id)` erzeugte Node löst `subscribeDispatch` beim
+Aktivieren eines `on()`/`map()`-Listeners automatisch aus (fan-out über
+alle aktuell verbundenen `DefaultReplication`s dieser `Qu`-Instanz, per
+`repl.ensureSynced(topic)`) — genau einmal beim Aktivieren, nicht pro
+Event; `{ raw: true }` schaltet es ab. `qu.get(id)`/`await qu.get(id)`
+allein triggert es NIE — erst ein echter Listener braucht wirklich
+laufende Zustellung.
 
 ### Router & WebRTC
 `Router` (`src/network/router.js`) entscheidet, welche Channels ein QuBit
@@ -335,9 +358,15 @@ await qu.connect(channel, {
 });
 ```
 
-`createRelay({ requireDirectWriter?, rateLimiter?, ingestGate? })`
-(`relay/relay.mjs`) reicht alle drei identisch an jede über
-`attachChannel()` angehängte Verbindung durch. Das Demo-Deployment
+`createRelay({ requireDirectWriter?, rateLimiter?, ingestGate?, pushTopics?, allowDynamicSubscribe?, maxDynamicTopics? })`
+(`relay/relay.mjs`) reicht alle Optionen identisch an jede über
+`attachChannel()` angehängte Verbindung durch (`pushTopics`/
+`allowDynamicSubscribe`/`maxDynamicTopics` via `ReplicationHub`, s.o.).
+Ein Relay ganz ohne `pushTopics` und mit `allowDynamicSubscribe: true`
+kennt zur Startzeit KEINE App-spezifischen Topics mehr — jeder Client
+meldet sein Interesse selbst per `repl.subscribe()`/`ensureSynced()` an,
+sobald er es braucht (typischerweise ausgelöst durch `node.on()`/`.map()`,
+s.o.) — der "App-unabhängige Relay"-Fall aus README Abschnitt 3. Das Demo-Deployment
 (`index.js`) hat `rateLimiter`
 **standardmäßig aktiv** (200/Sekunde, `QU_RATE_LIMIT_MAX`/
 `QU_RATE_LIMIT_WINDOW_MS` einstellbar, `QU_RATE_LIMIT=0` schaltet komplett
@@ -916,6 +945,8 @@ interface ReplicationProvider {
 | `opts.peerFingerprint` | `string \| null` | `null` | Sollte aus `authenticateChannel()` stammen, nicht geraten werden |
 | `opts.repairWindowMs` | `number` | `300000` (5 Min) | Überlappungsfenster für `repair()` |
 | `opts.pushTopics` | `string[]` | `[]` | Präfixe, für die neu eingehende QuBits sofort live gepusht werden |
+| `opts.allowDynamicSubscribe` | `boolean \| string[]` | `false` | Ob/welche `qu.subscribe`-Wünsche der Gegenseite `pushTopics` zur Laufzeit erweitern dürfen — `false`: ignoriert; `true`: jedes angefragte Topic; `string[]`: nur Topics, die mit einem der Einträge beginnen (harte Obergrenze, z. B. auf App-Space-Ids). Nie ein Ersatz für ACL — jeder Push läuft trotzdem durch `filterForReader()` |
+| `opts.maxDynamicTopics` | `number` | `200` | Obergrenze NEUER (nicht bereits in `pushTopics` enthaltener) Topics, die eine Verbindung per `qu.subscribe` anmelden darf |
 
 - **`sync({ topic, since? })`** — Delta-Anfrage; **reziprok**: die
   Gegenseite fragt automatisch dasselbe Topic zurück, ein Aufruf leert also
@@ -924,15 +955,26 @@ interface ReplicationProvider {
   `since - repairWindowMs` als Startpunkt; erneute Zustellung ist dank
   Store-Idempotenz sicher.
 - **`snapshot({ topic })`** — `sync({ topic, since: 0 })`.
+- **`subscribe(topic)`** → `Promise<void>` — sendet eine `qu.subscribe`-
+  Wire-Nachricht an die Gegenseite; nur wirksam, wenn diese
+  `allowDynamicSubscribe` erlaubt (s.o.) — sonst ein stiller No-op, kein
+  Fehler.
+- **`ensureSynced(topic, opts?)`** → `Promise<void>` — Kurzform für "hole
+  lokal fehlenden Stand UND abonniere live": `await this.sync({ topic,
+  ...opts }); await this.subscribe(topic);`. Das ist, was `QuSpace.on()`/
+  `.map()` (siehe unten) automatisch beim Aktivieren eines Listeners
+  aufruft, wenn ein Network-Plugin installiert ist.
 - Jede ausgehende Antwort wird zuerst gegen `store.isReplicable()`, dann
   gegen `filterForReader()` geprüft — beides Pflicht, nicht Option.
 - **`replication.peerFingerprint`** — der bewiesene Fingerprint der
   Gegenseite (wie beim Konstruktor übergeben), zur Introspektion.
 - **`close()`** — Listener abmelden.
 
-### `new ReplicationHub(runtime, { identity?, getACL?, pushTopics? })`
+### `new ReplicationHub(runtime, { identity?, getACL?, pushTopics?, allowDynamicSubscribe?, maxDynamicTopics? })`
 Verwaltet eine `DefaultReplication`-Instanz pro `Channel` — für einen
 Server-Prozess mit vielen gleichzeitig verbundenen Clients.
+`allowDynamicSubscribe`/`maxDynamicTopics` werden unverändert an jede
+`DefaultReplication`, die `attach()` erzeugt, durchgereicht (s.o.).
 - **`hub.attach(channel)`** → `Promise<{ repl: DefaultReplication, peerFingerprint }>`
   — führt zuerst `authenticateChannel()` aus, erzeugt danach die
   `DefaultReplication` mit dem bewiesenen Fingerprint.

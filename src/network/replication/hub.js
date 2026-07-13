@@ -38,8 +38,16 @@ export class ReplicationHub {
   #requireDirectWriter;
   #rateLimiter;
   #ingestGate;
+  #allowDynamicSubscribe;
+  #maxDynamicTopics;
 
-  constructor(runtime, { identity = null, getACL = async () => null, pushTopics = [], fileStorage = null, requireDirectWriter = false, rateLimiter = null, ingestGate = [] } = {}) {
+  constructor(runtime, {
+    identity = null, getACL = async () => null, pushTopics = [], fileStorage = null,
+    requireDirectWriter = false, rateLimiter = null, ingestGate = [],
+    // See DefaultReplication's constructor doc — applied identically to
+    // every channel this Hub attaches, same as requireDirectWriter/rateLimiter.
+    allowDynamicSubscribe = false, maxDynamicTopics = 200,
+  } = {}) {
     this.#runtime = runtime;
     this.#identity = identity;
     this.#getACL = getACL;
@@ -48,6 +56,8 @@ export class ReplicationHub {
     this.#requireDirectWriter = requireDirectWriter;
     this.#rateLimiter = rateLimiter;
     this.#ingestGate = ingestGate;
+    this.#allowDynamicSubscribe = allowDynamicSubscribe;
+    this.#maxDynamicTopics = maxDynamicTopics;
   }
 
   async attach(channel) {
@@ -59,6 +69,8 @@ export class ReplicationHub {
       requireDirectWriter: this.#requireDirectWriter,
       rateLimiter: this.#rateLimiter,
       ingestGate: this.#ingestGate,
+      allowDynamicSubscribe: this.#allowDynamicSubscribe,
+      maxDynamicTopics: this.#maxDynamicTopics,
     });
     this.#repls.set(channel.id, repl);
 

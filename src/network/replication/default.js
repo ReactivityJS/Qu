@@ -66,6 +66,9 @@ export class DefaultReplication {
   #pushTopics;
   #router;
   #ingestGate;
+  #allowDynamicSubscribe;
+  #maxDynamicTopics;
+  #dynamicTopicsAdded = 0;
 
   constructor(runtime, channel, {
     getACL = async () => null,
@@ -85,6 +88,26 @@ export class DefaultReplication {
     requireDirectWriter = false, // true: only accept a push whose qubit.writer is THIS channel's own proven peerFingerprint — rejects relayed/forwarded qubits, enforcing a star topology where the Relay only ever hears a write from its actual author. A qubit's signature already makes forgery impossible either way; this is about WHO may hand a given write to this particular connection, not about authenticity.
     rateLimiter = null, // a createRateLimiter() instance (network/rate-limiter.js), or any `{ allow(key) => boolean }`. Keyed by the incoming qubit's writer (falls back to peerFingerprint, then the channel id, for the rare anonymous/unsigned case) — one peer flooding writes never starves another peer's budget.
     ingestGate = [], // additional `(ctx, next) => Promise<void>` middleware, ctx = { qubit, peerFingerprint, channelId } — run after requireDirectWriter/rateLimiter, in array order. Throw to reject (same convention as core/acl.js), call next() to allow.
+    // Runtime topic registration — see subscribe()/#handleSubscribeRequest()
+    // below and README's "Relay App-unabhängig betreiben" section.
+    // `false` (default): a `qu.subscribe` message from the peer is ignored —
+    // byte-identical to behavior before this option existed. `true`: any
+    // requested topic is honored (still ACL-gated at actual push time,
+    // exactly like the static `pushTopics` above — see #maybePush; this
+    // option only widens WHICH topics get a chance to be pushed, never who
+    // may read them). `string[]`: a hard ceiling — a requested topic is only
+    // honored if it falls within one of these prefixes (`topic.startsWith(c)`
+    // for some `c`); anything outside is silently ignored. The "restrict a
+    // relay to one or more App-Space ids" case (a genuine security/scoping
+    // decision an operator makes, unlike the ACL check below).
+    allowDynamicSubscribe = false,
+    // Cap on how many topics a single connection may register via
+    // `qu.subscribe` beyond its initial `pushTopics` — protects a relay's
+    // memory/CPU from one connection registering unbounded topics. On by
+    // default (not opt-in) because, unlike requireDirectWriter/rateLimiter,
+    // there's no scenario where an unbounded per-connection topic count is
+    // actually desired.
+    maxDynamicTopics = 200,
   } = {}) {
     this.#runtime = runtime;
     this.#channel = assertChannel(channel);
@@ -92,14 +115,16 @@ export class DefaultReplication {
     this.#getACL = getACL;
     this.#peerFingerprint = peerFingerprint;
     this.#repairWindowMs = repairWindowMs;
-    this.#pushTopics = pushTopics;
+    this.#pushTopics = [...pushTopics]; // own copy — #handleSubscribeRequest() mutates this, must never alias the caller's array
     this.#router = router;
+    this.#allowDynamicSubscribe = allowDynamicSubscribe;
+    this.#maxDynamicTopics = maxDynamicTopics;
     this.#ingestGate = new QuPipeline();
     if (requireDirectWriter) this.#ingestGate.use(requireDirectWriterGate());
     if (rateLimiter) this.#ingestGate.use(rateLimitGate(rateLimiter));
     for (const gate of ingestGate) this.#ingestGate.use(gate);
     this.#off = channel.onMessage((msg) => this.#handleMessage(msg));
-    if (pushTopics.length) this.#offPush = this.#runtime.on('**', (q) => this.#maybePush(q));
+    if (this.#pushTopics.length) this.#ensurePushListening();
   }
 
   #rememberFromPeer(q) {
@@ -114,6 +139,44 @@ export class DefaultReplication {
     if (!this.#runtime.store.isReplicable(q.id)) return false;
     const [visible] = await filterForReader([q], this.#peerFingerprint, this.#getACL);
     return !!visible;
+  }
+
+  /** Lazily wires the runtime.on('**') listener #maybePush() needs — a relay started with NO initial pushTopics (the "unbound" case) has nothing to push until the first qu.subscribe arrives; this activates it then, instead of unconditionally in the constructor. */
+  #ensurePushListening() {
+    if (!this.#offPush) this.#offPush = this.#runtime.on('**', (q) => this.#maybePush(q));
+  }
+
+  /**
+   * Handles an incoming `qu.subscribe` request (see subscribe() below) —
+   * the peer asking THIS side to start pushing a topic to it at runtime,
+   * instead of only whatever was configured at construction time.
+   * `#allowDynamicSubscribe` gates whether this is honored at all (see the
+   * constructor doc comment); `#maxDynamicTopics` bounds how many NEW
+   * topics one connection may add this way. Neither check is a security
+   * boundary by itself — #maybePush()/#isVisible() still runs the same
+   * ACL check on every candidate qubit regardless of how a topic ended up
+   * in #pushTopics; this only decides which topics get a CHANCE to be
+   * pushed at all.
+   */
+  #handleSubscribeRequest(topic) {
+    topic = String(topic);
+    if (this.#pushTopics.includes(topic)) return; // already active — no-op, doesn't count against the cap
+    if (this.#allowDynamicSubscribe === false) {
+      debug('replication', 'subscribe-rejected-disabled', { topic, channelId: this.#channelId });
+      return;
+    }
+    if (Array.isArray(this.#allowDynamicSubscribe) && !this.#allowDynamicSubscribe.some((c) => topic.startsWith(c))) {
+      debug('replication', 'subscribe-rejected-outside-ceiling', { topic, channelId: this.#channelId });
+      return;
+    }
+    if (this.#dynamicTopicsAdded >= this.#maxDynamicTopics) {
+      debug('replication', 'subscribe-rejected-cap', { topic, channelId: this.#channelId, cap: this.#maxDynamicTopics });
+      return;
+    }
+    this.#pushTopics.push(topic);
+    this.#dynamicTopicsAdded++;
+    this.#ensurePushListening();
+    debug('replication', 'subscribe-accepted', { topic, channelId: this.#channelId });
   }
 
   async #maybePush(q) {
@@ -143,6 +206,11 @@ export class DefaultReplication {
   }
 
   async #handleMessage(msg) {
+    if (msg.type === 'qu.subscribe') {
+      this.#handleSubscribeRequest(msg.topic);
+      return;
+    }
+
     if (msg.type === 'qu.push') {
       try {
         const ctx = { qubit: msg.qubit, peerFingerprint: this.#peerFingerprint, channelId: this.#channelId };
@@ -248,6 +316,34 @@ export class DefaultReplication {
 
   async snapshot({ topic }) {
     return this.sync({ topic, since: 0 });
+  }
+
+  /**
+   * Asks the PEER on the other end of this channel to start pushing `topic`
+   * to THIS side at runtime — the mirror image of the peer's own
+   * `pushTopics`/`allowDynamicSubscribe` (see #handleSubscribeRequest()
+   * above). Fire-and-forget from the caller's perspective — there's no
+   * response to await; the peer either starts pushing matching qubits from
+   * now on, or (disallowed by its own policy) silently doesn't. ACL still
+   * gates what's actually delivered either way, so a rejected/ignored
+   * subscribe() is not a security-relevant outcome, just "no live data".
+   */
+  async subscribe(topic) {
+    await this.#channel.send({ type: 'qu.subscribe', topic: String(topic) });
+  }
+
+  /**
+   * The "I'm about to actively care about this topic" convenience: pulls
+   * whatever already exists (sync() — bidirectional, and already
+   * incremental via its own `since` cursor, so this is cheap to call
+   * repeatedly), THEN registers for live delivery going forward
+   * (subscribe()). This is what QuSpace's on()/map() trigger once, at
+   * listener-activation time, when a network plugin is installed — see
+   * core/space-handle.js's subscribeDispatch and README's network section.
+   */
+  async ensureSynced(topic, opts) {
+    await this.sync({ topic, ...opts });
+    await this.subscribe(topic);
   }
 
   listen() { /* already listening from constructor; exposed for interface symmetry */ }

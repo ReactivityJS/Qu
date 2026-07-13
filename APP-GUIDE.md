@@ -46,6 +46,14 @@ Relay-Kern (`createRelay()`, `relay/relay.mjs`), nur mit dem eigenen
 App-Topic statt der Demo-Konfiguration. Alle Code-Blöcke unten gehen von
 dieser laufenden Instanz aus.
 
+> Diese Anleitung nutzt eine feste `pushTopics`-Konfiguration, weil sie
+> mit EINEM festen App-Space arbeitet (Schritt 3). Legt eine App ihre
+> Space-Ids dagegen erst zur Laufzeit an (`qu.createSpace()`, mehrere
+> unabhängige Räume), passt ein fest im Relay hinterlegtes `pushTopics`
+> nicht — dafür gibt es `allowDynamicSubscribe`, mit dem der Relay
+> App-unabhängig laufen kann und Clients ihr Interesse selbst anmelden;
+> siehe den Kasten in Schritt 3 sowie README Abschnitt 3.
+
 > **Wichtiger Unterschied, leicht zu verwechseln:** `pushTopics` taucht an
 > zwei Stellen auf, mit unterschiedlicher Bedeutung. An `createRelay({
 > pushTopics })` (oben) legt es **einmalig, für den ganzen Relay-Prozess**
@@ -179,12 +187,42 @@ Weil `APP_SPACE` fest und vorher bekannt ist, deckt derselbe
 `pushTopics: [APP_SPACE]`/`pushTopics: ['my-app/']`-Präfix aus Schritt 2
 sowohl das Manifest (`id === APP_SPACE`, kein Slash) als auch alle
 verschachtelten Inhalte (`${APP_SPACE}/entries/...`) ab — kein separater
-Präfix, keine Sonderbehandlung nötig. (Nur bei `qu.createSpace()`s
-zufälliger Id, die erst zur Laufzeit entsteht, bräuchte ein Relay
-zusätzlich entweder ein breites `pushTopics`-Präfix wie `''` oder eine
-anwendungsspezifische Elternpräfix-Konvention wie `apps/<app-name>/`, um
-beliebig viele davon abzudecken — bei einer festen App-Space-Id entfällt
-das.)
+Präfix, keine Sonderbehandlung nötig.
+
+**Für `qu.createSpace()`s zufällige, erst zur Laufzeit entstehende Id**
+(mehrere unabhängige Räume statt eines einzigen festen App-Space, siehe
+oben) passt ein statisch im Relay hinterlegtes `pushTopics` naturgemäß
+nicht — die Id steht beim Start des Relay-Prozesses noch gar nicht fest.
+`allowDynamicSubscribe` löst das für die LESENDE Seite: der Relay selbst
+braucht kein vorab konfiguriertes `pushTopics` mehr, jeder lesende Client
+meldet sein Interesse an genau der Id, die er kennt, selbst zur Laufzeit an.
+Die SCHREIBENDE Seite (wer den Space erzeugt) pusht dafür weiterhin über
+ihr eigenes `pushTopics` bei `connect()` — unverändert, keine neue Funktion
+— nur eben mit einem breiten `''`-Präfix statt eines festen Namens, weil
+sie die künftigen Space-Ids beim Verbinden noch nicht kennt:
+
+```js
+const relayApi = await createRelay({ allowDynamicSubscribe: true }); // oder z.B. ['apps/'] als harte Obergrenze
+
+// Alice erzeugt Spaces zur Laufzeit — pusht deshalb alles, was sie selbst
+// schreibt, statt eines festen Präfixes (bereits vorher bestehende Option):
+const replAlice = await alice.connect(channelAlice, { pushTopics: [''] });
+
+// Bob kennt eine konkrete Space-Id (z. B. aus einem Link) und meldet NUR
+// dafür Interesse an — ganz ohne dass der Relay sie vorher kennen musste:
+const repl = await bob.connect(channelBob, { pushTopics: [] });
+bob.get(newlyCreatedSpaceId).get('entries').map((q) => …); // löst automatisch repl.ensureSynced(...) aus — sync + subscribe, einmalig
+```
+
+`pushTopics: ['']` bei Alice bedeutet nur "der Relay bekommt alles zu
+sehen, was sie schreibt" — was DAVON tatsächlich an einen bestimmten Leser
+zugestellt wird, entscheidet weiterhin ausschließlich die ACL (README
+Abschnitt 2), unabhängig vom breiten Präfix. Kein
+`apps/<app-name>/`-Konventions-Präfix mehr nötig, um "beliebig viele"
+künftige Ids abzudecken — jede wird individuell und erst bei tatsächlichem
+Lese-Bedarf angemeldet (Details inkl. der Sicherheits-Grenzen von
+`allowDynamicSubscribe`/`maxDynamicTopics` in README Abschnitt 3 und
+[API.md](./API.md#replication-modul)).
 
 ## Schritt 4: Daten schreiben, lesen, live beobachten
 

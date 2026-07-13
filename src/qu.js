@@ -72,6 +72,15 @@ const defaultPutDispatch = (session, id, value, opts) => {
 const defaultResolveDispatch = async (session, id) => id;
 
 /**
+ * Default subscribe() dispatcher — a no-op, no network request at all.
+ * `createNetworkPlugin()` replaces this (via `setSubscribeHandler()`) with
+ * one that asks every currently connected peer (via each connection's
+ * `DefaultReplication.ensureSynced()`) to actually push matching writes —
+ * see core/space-handle.js's on()/map().
+ */
+const defaultSubscribeDispatch = async () => {};
+
+/**
  * Qu is the class most applications should actually instantiate — it wraps
  * Runtime + Store + Session behind a small set of instance methods, so a
  * caller doesn't need to assemble those pieces by hand for the common case.
@@ -123,6 +132,7 @@ export class Qu {
   #aclResolver;
   #putResolver;
   #resolveResolver;
+  #subscribeResolver;
   #guest;
 
   /**
@@ -192,6 +202,7 @@ export class Qu {
     this.#aclResolver = aclResolver ?? { current: createIdentityACL() };
     this.#putResolver = { current: defaultPutDispatch };
     this.#resolveResolver = { current: defaultResolveDispatch };
+    this.#subscribeResolver = { current: defaultSubscribeDispatch };
     this.#session = new QuSession(runtime, { identity, getACL: (id) => this.#aclResolver.current(id) });
   }
 
@@ -257,6 +268,7 @@ export class Qu {
       guest: this.#guest,
       putDispatch: (...args) => this.#putResolver.current(...args),
       resolveDispatch: (...args) => this.#resolveResolver.current(...args),
+      subscribeDispatch: (...args) => this.#subscribeResolver.current(...args),
     });
   }
 
@@ -322,6 +334,19 @@ export class Qu {
    */
   setResolveHandler(resolveDispatch) {
     this.#resolveResolver.current = resolveDispatch;
+    return this;
+  }
+
+  /**
+   * Replaces the `subscribe(session, topic) => Promise<void>` dispatcher
+   * every node `qu.get(id)`/`qu.own` produces calls (fire-and-forget) from
+   * on()/map() — this is how `createNetworkPlugin()` makes those verbs
+   * actually ask every currently connected peer to push matching writes,
+   * instead of only ever seeing local activity. Per-Qu-instance, not
+   * per-Runtime — same reasoning as `setPutHandler()`/`setResolveHandler()`.
+   */
+  setSubscribeHandler(subscribeDispatch) {
+    this.#subscribeResolver.current = subscribeDispatch;
     return this;
   }
 
