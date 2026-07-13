@@ -488,6 +488,85 @@ Schreiben mehrerer Autoren; [`examples/forum-lib.test.mjs`](./examples/forum-lib
 zeigt jede Garantie (Bucket-Isolation live wie beim Lesen, Dedup/Sortierung
 des Index, keine Kollision) als laufenden Test.
 
+### 8. Referenzen automatisch folgen (`key://`)
+
+Mit [`createReferenceHandlerPlugin()`](./API.md#references-modul) installiert
+folgen `await`/`.put()`/`.set()`/`.on()`/`.map()` einer `key://`-Referenz
+(siehe References-Modul) transparent, statt den rohen String
+zurückzugeben — für den häufigsten Fall "diese Id ist eigentlich nur ein
+Alias auf einen anderen Space/Wert":
+
+```js
+import { Qu, createSpacesPlugin, createReferenceHandlerPlugin, keyRef } from './src/index.js';
+
+const alice = (await Qu.create()).use(createSpacesPlugin()).use(createReferenceHandlerPlugin());
+const board = alice.createSpace({ writers: [alice.fingerprint], readers: ['*'] });
+await board.ready;
+
+await alice.own.get('currentBoard').put(keyRef(board.id)); // ein Alias, kein Duplikat
+
+const resolved = await alice.own.get('currentBoard'); // liest transparent DURCH die Referenz
+console.log(resolved.value);       // der Wert AN board.id, nicht der "key://…"-String
+console.log(resolved.id);          // board.id — die ECHTE Adresse, nicht der Alias-Pfad
+
+// weiter navigieren: die aufgelöste Id einfach übernehmen
+const sameBoard = alice.get(resolved.id);
+```
+
+**Kostenlos für den referenzfreien Normalfall:** geprüft wird nur der Wert
+AN der Id, die ein Verb tatsächlich aufruft — kein zusätzlicher Read
+gegenüber heute, weil dieser Wert ohnehin gelesen werden musste, um ihn
+zurückzugeben. Ohne `createReferenceHandlerPlugin()` bleibt das Verhalten
+exakt wie vorher (Core kennt `key://` nicht, `resolveDispatch` ist die
+Identitätsfunktion).
+
+**Vier Fallstricke, die die Doku statt eine Ausnahme im Code löst:**
+
+1. **Kein Mid-Path-Auflösen.** `node.get(subpath)` bleibt reine, synchrone
+   Pfad-Konkatenation — es prüft nie, ob ein bereits gebautes Zwischenstück
+   des Pfads selbst eine Referenz ist. Aufgelöst wird nur die Id, auf der
+   ein Verb (`await`/`put`/`set`/`on`/`map`) tatsächlich aufgerufen wird:
+   ```js
+   await appSpace.get('currentBoard').get('posts').set({...}); // KEINE Auflösung — 'posts' wird
+                                                                   // wörtlich an den Alias-Pfad gehängt
+   const board = alice.get((await appSpace.get('currentBoard')).id); // EIN expliziter Schritt …
+   await board.get('posts').set({...});                              // … dann normal weiterarbeiten
+   ```
+   Das ist kein Bug, sondern der Normalfall: "durch Referenzen navigieren"
+   ist ein Helfer für den EINEN Auflösungs-Schritt, nicht dafür gedacht,
+   dass man nie mehr merkt, wo man gerade ist. Der empfohlene App-Aufbau
+   bleibt: erst auflösen (`app -> boards -> myBoard`), danach ganz normal
+   im Ziel-Space weiterarbeiten (siehe [Schritt 8 im APP-GUIDE.md](./APP-GUIDE.md#schritt-8-mehrere-boardstodo-listen-sub-spaces-referenzieren)).
+   Dieselbe Eigenschaft ist auch ein Sicherheitsnetz: ein unaufgelöster
+   Mid-Path-Schreibvorgang landet strukturell dort, wo `.get()` ihn baut —
+   nie versehentlich in einem fremden, referenzierten Space.
+2. **Nur `key://` folgt automatisch.** `obj://` (eine Sammlung) und
+   `file://` (Bytes) werden bewusst NICHT automatisch aufgelöst — ihr
+   Ergebnis ist strukturell etwas anderes als "ein Wert an einer Id"
+   (ein Array/Objekt bzw. rohe Bytes), das würde den Rückgabetyp von
+   `await node` unvorhersagbar machen. Dafür weiterhin explizit
+   `resolveReference()`/`resolveFileRef()` (References-Modul).
+3. **`on()`/`.map()` lösen genau EINMAL auf, beim Aktivieren — nie pro
+   Event.** Zeigt eine Referenz später auf ein anderes Ziel um, folgt eine
+   bereits laufende Subscription NICHT automatisch nach (Abmelden +
+   neu Abonnieren, falls gewünscht). `on()` ohne `{ raw: true }` ist
+   dadurch nicht mehr rein synchron/lückenlos wie zuvor (ein einmaliger,
+   kurzer Setup-Schritt läuft vorher) — `{ raw: true }` stellt das alte,
+   exakt synchrone Verhalten wieder her.
+4. **`{ raw: true }`** (bei `put`/`set`/`on`/`map`) schreibt/liest an der
+   wörtlichen Id, ohne Auflösung — Escape-Hatch für den seltenen Fall, den
+   rohen `key://…`-String selbst sehen/schreiben zu wollen. Für `await
+   node` (keine Options-Parameter, das Thenable-Protokoll) ist die
+   Entsprechung `await node.session.get(node.id)`.
+
+**ACL folgt immer dem ZIEL-Space, nicht dem Alias-Besitzer** — verifiziert:
+jeder darf sich einen eigenen Alias auf einen fremden, restriktiven Space
+anlegen (der Alias selbst ist nur eine Referenz unter dem eigenen, immer
+beschreibbaren Space), aber ein Schreibversuch DURCH den Alias wird exakt
+so geprüft, als hätte man die Ziel-Id direkt angesprochen — kein
+Sonderfall im ACL-Code, das folgt automatisch daraus, dass die aufgelöste
+Id am Ende ein ganz normaler, unveränderter Aufruf ist.
+
 ## Projektstruktur
 
 ```
@@ -739,8 +818,8 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
      kaskadiert werden — inklusive Zyklenschutz (ein Ref, der auf sich
      selbst zurückführt, bleibt ab dem zweiten Auftreten im selben Pfad
      unaufgelöst statt zu hängen).
-   - **Referenzen sind IMMER explizit, auch bei Dateien und Listen** —
-     nichts davon passiert automatisch: `put(bytes)` mit konfiguriertem
+   - **Referenzen schreibt man immer explizit** — nichts davon passiert
+     beim Schreiben automatisch: `put(bytes)` mit konfiguriertem
      `FileHandler` chunked+manifestiert automatisch, aber das Einbetten des
      zurückgegebenen `file://`-Strings woanders (z. B. in eine
      Chat-Nachricht) ist ein eigener, expliziter Schritt der App
@@ -751,6 +830,13 @@ ganz ohne `use()` direkt aufrufbar, siehe `modules/chat.js`):
      `node.put(keyRef(otherSpace.id))` — **nicht**
      `node.put(otherSpace)` (die `QuSpace`-Instanz direkt als Wert wirft
      jetzt einen klaren Fehler, siehe [References-Modul](./API.md#references-modul)).
+   - **Beim LESEN/SCHREIBEN/ABONNIEREN folgt `key://` dagegen automatisch**,
+     sobald `createReferenceHandlerPlugin()` installiert ist —
+     `put`/`set`/`on`/`map`/`await` lösen eine `key://`-Referenz AN der Id,
+     auf der sie aufgerufen werden, transparent auf (Default AN,
+     `{ raw: true }` schaltet ab). `obj://`/`file://` bleiben auch hier
+     explizit (`resolveReference()`/`resolveFileRef()`). Volle Erklärung,
+     Beispiele und die vier Fallstricke: [Abschnitt 8](#8-referenzen-automatisch-folgen-key).
 4. **Spaces** (`src/modules/spaces.js`, `createSpacesPlugin()`) — löst den
    Core-Default (nur `~<eigener-fingerprint>`) durch manifest-bewusste ACL-
    Auflösung ab: generische (UUID-)Spaces mit `writers`/`readers`/`admins`,

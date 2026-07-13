@@ -118,13 +118,73 @@ export async function resolveValue(qu, value, { maxDepth = 1, asArray = false, f
   return walk(qu, value, { asArray, fileHandler }, new Set(), maxDepth);
 }
 
-/** `qu.use(createReferenceHandlerPlugin(...))` — attaches `qu.resolveReference()`/`qu.resolveValue()` sugar bound to this Qu instance, with the given defaults (still overridable per call). */
-export function createReferenceHandlerPlugin({ maxDepth = 1, asArray = false, fileHandler } = {}) {
+/**
+ * Follows a chain of `key://` redirects starting AT `id` itself (not at a
+ * value inside it) — the mechanism behind `QuSpace`'s transparent
+ * get()/put()/set()/on()/map() reference-following (see space-handle.js's
+ * `resolveDispatch`, wired up by createReferenceHandlerPlugin() below).
+ *
+ * Deliberately narrower than resolveReference()/resolveValue(): only
+ * `key://` is followed (a single value AT another id — the "keep
+ * navigating" case). `obj://` (a collection) and `file://` (bytes) are
+ * left as-is even if encountered — their resolved SHAPE isn't "a value at
+ * an id" (an object/array, or raw bytes), so folding them into this
+ * id-to-id chain would make `await node`'s return type unpredictable
+ * (sometimes a QuBit, sometimes an array, sometimes bytes) purely based on
+ * what happens to be stored — resolve those explicitly via
+ * resolveReference()/resolveFileRef() instead.
+ *
+ * Returns `{ id, qubit }` — the final, non-redirecting id and whatever is
+ * actually stored there (`null` if nothing is). `id` reflects wherever
+ * resolution actually landed, not the id passed in — the way a caller
+ * keeps navigating into the referenced target without a separate verb:
+ * `qu.get((await node).id)`.
+ *
+ * `maxHops` (default 8) bounds chained redirects (an alias pointing at an
+ * alias pointing at...) — throws a clear, actionable error on a cycle
+ * (revisiting an id already seen this chain) or on exceeding the budget,
+ * rather than hanging.
+ */
+export async function resolveKeyChain(session, id, { maxHops = 8 } = {}) {
+  let current = String(id);
+  const seen = new Set();
+  // `<= maxHops`, not `<`: maxHops counts REDIRECTS followed, and resolving
+  // the final, non-redirecting target always costs one more read than the
+  // redirects themselves (you have to read it to find out it ISN'T one) —
+  // `maxHops = 3` must be able to actually reach a target 3 hops away, not
+  // fail one read short of it.
+  for (let hops = 0; hops <= maxHops; hops++) {
+    if (seen.has(current)) {
+      throw new Error(`[References] key://-Zyklus erkannt beim Auflösen von "${id}" (erneut "${current}" erreicht) — eine Referenz zeigt direkt oder über mehrere Sprünge auf sich selbst.`);
+    }
+    seen.add(current);
+    const qubit = await session.get(current);
+    if (!qubit || !isReference(qubit.value)) return { id: current, qubit };
+    const { scheme, path } = parseReference(qubit.value);
+    if (scheme !== 'key') return { id: current, qubit }; // obj://, file:// — bewusst nicht automatisch weiterverfolgt, siehe Doc-Kommentar oben
+    current = path;
+  }
+  throw new Error(`[References] zu viele verkettete key://-Weiterleitungen beim Auflösen von "${id}" (maxHops=${maxHops}) — möglicher Zyklus oder maxHops zu niedrig für diese Anwendung.`);
+}
+
+/**
+ * `qu.use(createReferenceHandlerPlugin(...))` — attaches `qu.resolveReference()`/
+ * `qu.resolveValue()` sugar bound to this Qu instance, with the given
+ * defaults (still overridable per call), AND installs the `resolveKeyChain()`-
+ * based resolver every `QuSpace` node's get()/put()/set()/on()/map() uses by
+ * default (`qu.setResolveHandler()` — see space-handle.js). Without this
+ * plugin, `resolveDispatch` defaults to the identity function (no `key://`
+ * following at all) — Core itself never imports this file or knows `key://`
+ * means anything. `maxHops` bounds the resolver's chained-redirect budget
+ * (see resolveKeyChain()).
+ */
+export function createReferenceHandlerPlugin({ maxDepth = 1, asArray = false, fileHandler, maxHops = 8 } = {}) {
   const defaults = { maxDepth, asArray, fileHandler };
   return {
     install(qu) {
       qu.resolveReference = (ref, opts) => resolveReference(qu, ref, { ...defaults, ...opts });
       qu.resolveValue = (value, opts) => resolveValue(qu, value, { ...defaults, ...opts });
+      qu.setResolveHandler(async (session, id) => (await resolveKeyChain(session, id, { maxHops })).id);
     },
   };
 }
