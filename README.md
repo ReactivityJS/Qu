@@ -8,7 +8,8 @@ Laufzeit-Abhängigkeiten, läuft in Node ≥ 20 und modernen Browsern
 Die vollständige Architektur-Spezifikation steht in
 [`qu-whitepaper-v0.6.md`](./qu-whitepaper-v0.6.md), die vollständige
 Aufrufreferenz jeder Funktion/Klasse in [`API.md`](./API.md) — dieses README
-ist der Schnelleinstieg.
+ist der Schnelleinstieg. Eine vernetzte App über einen echten Relay bauen
+(mehrere Instanzen, gemeinsamer App-Space): [`APP-GUIDE.md`](./APP-GUIDE.md).
 
 ## Installation
 

@@ -168,8 +168,20 @@ export class DefaultReplication {
     }
 
     if (msg.type === 'qu.sync.request') {
+      // `${topic}/**` structurally excludes the topic's OWN id (the regex
+      // requires a literal '/' after it — see runtime.js's patternToRegExp)
+      // — for a Space, that id is exactly its manifest. Without this, a
+      // late-joining client could sync() a room's content but could never
+      // learn who's allowed to read/write it unless it happened to be
+      // connected at the exact moment the manifest was written (live
+      // push only) — a real gap for the common "join a Space via a link"
+      // flow, not a hypothetical one. Harmless when `topic` isn't itself a
+      // document id (e.g. a bare prefix like `'~fp/msgs/'`): get() then
+      // simply returns null and contributes nothing.
+      const ownDoc = await this.#runtime.get(msg.topic);
       const rows = await this.#runtime.query(`${msg.topic}/**`);
-      const inRange = rows.filter((q) => q.ts >= msg.since);
+      const all = ownDoc ? [ownDoc, ...rows] : rows;
+      const inRange = all.filter((q) => q.ts >= msg.since);
       const replicable = inRange.filter((q) => this.#runtime.store.isReplicable(q.id));
       const visible = await filterForReader(replicable, this.#peerFingerprint, this.#getACL);
       debug('replication', 'sync-response', { topic: msg.topic, count: visible.length });
