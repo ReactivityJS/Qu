@@ -3,10 +3,17 @@
 // "Space-App", der in JEDER von ihnen gleich aussieht, herausgezogen statt
 // dreifach dupliziert:
 //
-//   - Nutzerverwaltung: schreiben darf, wer im Space-Manifest unter
-//     `writers` steht (Whitepaper §8.3) — hinzufügen/entfernen ist reines
-//     Manifest-Patchen, unabhängig davon, ob der Space eine ToDo-Liste,
-//     ein Forum-Board oder eine CMS-Site ist.
+//   - Nutzerverwaltung: wer im Space-Manifest unter `writers`/`readers`/
+//     `admins` steht (Whitepaper §8.3) — hinzufügen/entfernen ist reines
+//     Manifest-Patchen über `qu.addToRole()`/`qu.removeFromRole()`
+//     (src/modules/spaces.js, seit Kurzem Teil des Frameworks selbst, NICHT
+//     mehr hier neu erfunden), unabhängig davon, ob der Space eine
+//     ToDo-Liste, ein Forum-Board oder eine CMS-Site ist. Die Funktionen
+//     hier sind dünne, benannte Wrapper darüber (grantWriteAccess() ==
+//     `addToRole(spaceId, 'writers', fp)`, setPublic(true) ==
+//     `addToRole(spaceId, 'readers', '*')`, …) — derselbe eine generische
+//     Mechanismus für alle drei Rollen, hier nur unter Namen zur Verfügung
+//     gestellt, die eine App nicht bei jedem Aufruf neu benennen muss.
 //   - Navigation: EIN einheitliches Adressformat für JEDE Space-App,
 //     `#<spaceId>/<pfad>` — welcher Space UND welcher Unterpfad darin, in
 //     einem Hash. `parseHashRoute()`/`buildHashRoute()` sind reine
@@ -58,27 +65,41 @@ export async function listWriters(qu, spaceId) {
   return (manifest?.writers ?? []).filter((fp) => fp !== '*');
 }
 
-/** Nur von einem/einer Admin aufrufbar (Manifest-Änderungen brauchen Admin, nicht nur Writer). Fügt einen Fingerprint zu den Writern hinzu, ohne bestehende zu verlieren. */
+/** Nur von einem/einer Admin aufrufbar (Manifest-Änderungen brauchen Admin, nicht nur Writer, Whitepaper §8.3 — von `qu.addToRole()` selbst durchgesetzt, hier nicht doppelt geprüft). Fügt einen Fingerprint zu den Writern hinzu, ohne bestehende zu verlieren. */
 export async function grantWriteAccess(qu, spaceId, fingerprint) {
-  const manifest = await getManifest(qu, spaceId);
-  if (!manifest) throw new Error('Space nicht gefunden — noch nicht gesynct?');
-  const writers = manifest.writers.includes(fingerprint) ? manifest.writers : [...manifest.writers, fingerprint];
-  return qu.get(spaceId).put({ ...manifest, writers });
+  return qu.addToRole(spaceId, 'writers', fingerprint);
 }
 
-/**
- * Das Gegenstück zu grantWriteAccess() — nur von einem/einer Admin
- * aufrufbar, entfernt einen Fingerprint aus den Writern. Ein Admin sich
- * selbst zu entfernen ist technisch erlaubt (kein Schutz davor hier) —
- * ein Space ohne verbliebenen Admin bleibt les-, aber für niemanden mehr
- * administrierbar, dieselbe bewusste "keine Sonderfälle"-Haltung wie
- * beim Bootstrap-Verhalten ohne Manifest (modules/spaces.js).
- */
+/** Das Gegenstück zu grantWriteAccess() — entfernt einen Fingerprint aus den Writern (siehe qu.removeFromRole()s Doku zu "kein Schutz vor Selbst-Aussperrung" in modules/spaces.js). */
 export async function revokeWriteAccess(qu, spaceId, fingerprint) {
+  return qu.removeFromRole(spaceId, 'writers', fingerprint);
+}
+
+/** Ist dieser Space öffentlich lesbar (`readers` enthält `'*'`)? */
+export async function isPublic(qu, spaceId) {
   const manifest = await getManifest(qu, spaceId);
-  if (!manifest) throw new Error('Space nicht gefunden — noch nicht gesynct?');
-  const writers = manifest.writers.filter((fp) => fp !== fingerprint);
-  return qu.get(spaceId).put({ ...manifest, writers });
+  return (manifest?.readers ?? []).includes('*');
+}
+
+/** Sichtbarkeit umschalten — `true`: für alle lesbar machen (`'*'` zu `readers` hinzufügen); `false`: `'*'` entfernen, danach nur noch die explizit unter `readers` gelisteten Fingerprints (siehe addReader()). Bestehende einzelne Reader-Fingerprints bleiben in beiden Richtungen erhalten. */
+export async function setPublic(qu, spaceId, isPublicValue) {
+  return isPublicValue ? qu.addToRole(spaceId, 'readers', '*') : qu.removeFromRole(spaceId, 'readers', '*');
+}
+
+/** Alle einzeln freigeschalteten Reader-Fingerprints (ohne `'*'`) — relevant, sobald ein Space NICHT öffentlich ist (siehe isPublic()/setPublic()). */
+export async function listReaders(qu, spaceId) {
+  const manifest = await getManifest(qu, spaceId);
+  return (manifest?.readers ?? []).filter((fp) => fp !== '*');
+}
+
+/** Einen einzelnen Fingerprint zum Lesen freischalten — nur relevant, solange der Space NICHT öffentlich ist (siehe setPublic()); auf einem öffentlichen Space ist er ohnehin für alle lesbar. */
+export async function addReader(qu, spaceId, fingerprint) {
+  return qu.addToRole(spaceId, 'readers', fingerprint);
+}
+
+/** Das Gegenstück zu addReader(). */
+export async function removeReader(qu, spaceId, fingerprint) {
+  return qu.removeFromRole(spaceId, 'readers', fingerprint);
 }
 
 /**

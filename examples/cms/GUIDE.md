@@ -1,46 +1,73 @@
 # QuCMS als universelle Space-App-Basis
 
-Diese Datei beantwortet vier Fragen, die beim Bauen von `examples/cms-lib.mjs`
+Diese Datei beantwortet die Fragen, die beim Bauen von `examples/cms-lib.mjs`
 aufkamen: wie groß eine universelle Inhaltsverwaltung für QU tatsächlich sein
 muss, wie man eine Site von komplett leer aus befüllt, ob es sinnvoll ist,
-Doku/Beispiele selbst darüber auszuliefern, und wie man reaktives JavaScript
-in ihre Inhalte bekommt. Code-Referenzen sind exakte Pfade in diesem Repo,
-keine Pseudocode-Skizzen.
+Doku/Beispiele selbst darüber auszuliefern, wie man reaktives JavaScript in
+ihre Inhalte bekommt, und ob/wie ein WYSIWYG-Editor dazu passt. Code-
+Referenzen sind exakte Pfade in diesem Repo, keine Pseudocode-Skizzen.
 
 ## 1. Die Bausteine — und wie groß sie wirklich sind
 
-Zwei Schichten, nicht eine:
+Drei Schichten, nicht eine — die unterste davon inzwischen Teil des
+Frameworks SELBST, nicht mehr nur eines Beispiels:
 
 ```
-examples/space-app-lib.mjs      100 Zeilen  Nutzerverwaltung (ACL) + Navigations-Parsing — pure, node-testbar
+src/modules/spaces.js            ~60 Zeilen  addToRole()/removeFromRole() — EIN generischer Wrapper für
+                                              writers/readers/admins, Teil von createSpacesPlugin() (Core!)
+examples/space-app-lib.mjs      121 Zeilen  benannte Wrapper darüber (grantWriteAccess, setPublic, …) +
+                                              Navigations-Parsing — pure, node-testbar
 examples/space-app-browser.js    62 Zeilen  Identity-Bootstrap, Relay-URL, Hash-Watching — browser-only
 examples/cms-lib.mjs            173 Zeilen  Config/Templates/Seiten/Menü/Präsentationsmodus — pure, node-testbar
 examples/cms-router.js          103 Zeilen  lokal- vs. präsentations-Routing — browser-only
 ```
 
-Das sind zusammen **438 Zeilen**, davon ein erheblicher Teil Kommentare (Repo-
-Konvention: das WARUM dokumentieren, nicht nur das WAS) — der tatsächliche
-Code ist eher die Hälfte. Zum Vergleich: `examples/todo-lib.mjs` hat 72
-Zeilen, `examples/forum-lib.mjs` 62. Ein "CMS-Plugin" für QU ist also keine
-neue Kategorie von Komplexität, sondern derselbe Maßstab wie jede andere
-Space-App — nur mit fünf statt einer Sorte Inhalt unter einem Space.
+Das sind zusammen **~520 Zeilen**, davon ein erheblicher Teil Kommentare
+(Repo-Konvention: das WARUM dokumentieren, nicht nur das WAS) — der
+tatsächliche Code ist eher die Hälfte. Zum Vergleich: `examples/todo-lib.mjs`
+hat 72 Zeilen, `examples/forum-lib.mjs` 62. Ein "CMS-Plugin" für QU ist also
+keine neue Kategorie von Komplexität, sondern derselbe Maßstab wie jede
+andere Space-App — nur mit fünf statt einer Sorte Inhalt unter einem Space.
 
-**Warum zwei Schichten, kein Monolith:** `space-app-lib.mjs`/`-browser.js`
-sind bewusst UNIVERSELL — Nutzer hinzufügen/entfernen und "welcher Space,
-welcher Pfad" (`#spaceId/pfad`) sehen für ToDo-Liste, Forum-Board und
-CMS-Site identisch aus. `cms-lib.mjs`/`cms-router.js` sind dagegen bewusst
-CMS-SPEZIFISCH (Config/Templates/Seiten/Präsentationsmodus) — sie bauen auf
-der Shell auf, ersetzen aber NICHT `todo-lib.mjs`/`forum-lib.mjs`. Ein
-gemeinsames "Content"-Schema für alle drei würde ihre bewusst
-unterschiedlichen Schreibmuster verwässern (ToDo: `set()` + Tombstone-Delete;
-Forum: `set()` + Zeit-Sharding gegen unbegrenztes Wachstum; CMS-Seiten:
-`put()` pro Slug, ganze Seite auf einmal von einer Person editiert) — siehe
-den Moduldoku-Kommentar in `space-app-lib.mjs` für die ausführliche
-Begründung. Die Shell ist der Beweis, dass sich der gemeinsame Teil sauber
-herauslösen lässt, ohne diesen Unterschied zu verlieren:
-`examples/forum/app.mjs` und `examples/cms/app.mjs` nutzen beide dieselbe
-`loadOrCreateIdentity()`/`relayUrl()`/`#spaceId/pfad`-Navigation, aber jede
-Content-Lib bleibt ihrem eigenen Schreibmuster treu.
+**Warum drei Schichten, kein Monolith:**
+
+- `src/modules/spaces.js`s `addToRole()`/`removeFromRole()` sind der Teil,
+  der wirklich in JEDER App auf `createSpacesPlugin()` gleich aussieht —
+  "füge diesen Fingerprint zu dieser Rolle hinzu/entferne ihn" — deshalb
+  jetzt im FRAMEWORK selbst (`qu.addToRole(spaceId, role, fingerprint)`),
+  nicht in einem Beispiel: jeder Entwickler, der `createSpacesPlugin()`
+  nutzt, bekommt das automatisch, ganz ohne `examples/` zu importieren.
+- `space-app-lib.mjs`/`-browser.js` bleiben die BENANNTEN, bequemen Wrapper
+  darüber (`grantWriteAccess()` == `addToRole(id, 'writers', fp)`,
+  `setPublic(true)` == `addToRole(id, 'readers', '*')`, …) plus das
+  einheitliche `#spaceId/pfad`-Adressformat — für ToDo-Liste, Forum-Board
+  und CMS-Site identisch, aber (bewusst) noch Beispiel-Code, kein Core.
+- `cms-lib.mjs`/`cms-router.js` sind CMS-SPEZIFISCH (Config/Templates/
+  Seiten/Präsentationsmodus) — bauen auf der Shell auf, ersetzen aber NICHT
+  `todo-lib.mjs`/`forum-lib.mjs`. Ein gemeinsames "Content"-Schema für alle
+  drei würde ihre bewusst unterschiedlichen Schreibmuster verwässern (ToDo:
+  `set()` + Tombstone-Delete; Forum: `set()` + Zeit-Sharding gegen
+  unbegrenztes Wachstum; CMS-Seiten: `put()` pro Slug, ganze Seite auf
+  einmal von einer Person editiert) — siehe den Moduldoku-Kommentar in
+  `space-app-lib.mjs` für die ausführliche Begründung.
+
+Die Shell ist der Beweis, dass sich der gemeinsame Teil sauber herauslösen
+lässt, ohne diesen Unterschied zu verlieren: `examples/forum/app.mjs` und
+`examples/cms/app.mjs` nutzen beide dieselbe
+`loadOrCreateIdentity()`/`relayUrl()`/`#spaceId/pfad`-Navigation UND
+dasselbe `qu.addToRole()`/`qu.removeFromRole()`, aber jede Content-Lib
+bleibt ihrem eigenen Schreibmuster treu.
+
+**Nebenbefund beim Bauen von `addToRole()`/`removeFromRole()`:** ein Admin,
+der einen generischen Space vollständig privat macht (`readers: []`, kein
+`'*'` mehr), konnte sich damit vorher selbst aussperren — nicht nur vom
+Schreiben (dokumentiert, akzeptiert), sondern auch vom LESEN des eigenen
+Manifests, weil ein generischer Space (anders als ein User-Space) keine
+"Admin darf immer lesen"-Garantie hatte. Behoben in
+`createSpaceACLResolver()` (`src/modules/spaces.js`): ein Admin darf sein
+eigenes Manifest jetzt immer lesen, unabhängig von `readers` — normale
+Inhalte unter dem Space bleiben davon unberührt, `readers` gilt dort exakt
+wie konfiguriert. Siehe `test/spaces.test.mjs` für die Regressionstests.
 
 ## 2. Von Null: eine Site ohne Content und ohne Templates befüllen
 
@@ -106,9 +133,15 @@ Ein Admin befüllt danach live — per Editor (siehe `examples/cms/app.mjs`s
 
 ```js
 // In der Konsole, mit einer bereits verbundenen `qu`-Instanz:
-await setTemplate(qu, siteId, 'default', '<h1>{{title}}</h1><div>{{body}}</div>');
+await setTemplate(qu, siteId, 'default', '<h1>{{title}}</h1><div>{{{body}}}</div>'); // {{{body}}} = roh, siehe Abschnitt 7
 await setPage(qu, siteId, 'home', { title: 'Willkommen', blocks: { body: 'Erster Inhalt.' } });
 await addNavItem(qu, siteId, { label: 'Start', slug: 'home', order: 1 });
+
+// Nutzerverwaltung — EIN Wrapper für alle drei Rollen (Abschnitt 1):
+await qu.addToRole(siteId, 'writers', 'ANDERER-FINGERPRINT');   // Schreibrecht geben
+await qu.removeFromRole(siteId, 'writers', 'ANDERER-FINGERPRINT'); // wieder entziehen
+await qu.addToRole(siteId, 'readers', '*');    // öffentlich lesbar machen
+await qu.removeFromRole(siteId, 'readers', '*'); // wieder privat (dann gezielt einzelne readers hinzufügen)
 ```
 
 Jeder bereits offene Client (der obige Bootloader eingeschlossen) aktualisiert
@@ -220,3 +253,61 @@ Das setzt voraus, dass die umgebende App (z. B. `examples/cms/app.mjs`)
 `import '../../src/ui/components.js'` einmal global lädt und `.qu` auf dem
 `[data-qu-root]`-Container jeder frisch gerenderten Seite setzt — ein
 kleiner, generischer Erweiterungspunkt, kein Sonderfall pro Block-Typ.
+
+## 7. Ein schlanker WYSIWYG-Editor — und wie Templates verwaltet werden, wenn nicht als Dateien
+
+**Templates als Dateien auf dem Server gibt es hier bewusst nicht.** Sie
+sind QuBits wie alles andere (`cms/templates/<name>`, `setTemplate()`/
+`getTemplate()`/`onTemplate()` in `cms-lib.mjs`) — reine HTML-Strings im
+selben Space, live editierbar, ohne Deployment/Dateisystem-Zugriff. Das
+beantwortet die Frage direkt: "wie verwaltet man HTML, wenn nicht als
+statische Datei" ist bereits die Grundarchitektur dieses CMS, kein
+Sonderfall, der noch gelöst werden müsste.
+
+**Ja, ein Editor dafür macht Sinn — zwei GETRENNTE, weil zwei GRUNDVERSCHIEDENE
+Zielgruppen/Inhalte:**
+
+- **Seiten-Body → WYSIWYG** (`examples/cms/index.html`s `.editor-toolbar` +
+  `#edit-body`, ein `contenteditable`-`<div>`). Zielgruppe: Redakteur:innen,
+  die Text formatieren, nicht HTML lesen wollen. Umsetzung bewusst
+  minimal — `document.execCommand()` für Fett/Kursiv/Überschrift/Liste/Link,
+  **keine** neue Abhängigkeit (README/`package.json`: "keine
+  Laufzeit-Abhängigkeiten" ist ein Kernprinzip dieses Frameworks, ein
+  Rich-Text-Framework wie Quill/TipTap würde dem widersprechen).
+  `execCommand()` ist MDN-seitig als veraltet markiert, aber in jedem
+  aktuellen Browser weiterhin implementiert; für die Handvoll Grundformate
+  hier reicht das. Reicht es NICHT mehr (z. B. Tabellen, eingebettete
+  Bilder mit Größenkontrolle), ist der nächste Schritt eine minimale,
+  selbst geschriebene Range-basierte Ersetzung statt einer externen
+  Bibliothek — passt eher zum Rest dieses Repos als eine neue Dependency.
+- **Templates → rohes HTML** (`examples/cms/index.html`s `#template-box`,
+  ein normales `<textarea>`). Zielgruppe: technische Admins, die absichtlich
+  HTML/Platzhalter (`{{title}}`, `{{{body}}}`) sehen und schreiben wollen —
+  ein WYSIWYG-Editor würde hier nur im Weg stehen.
+
+**Zwei Platzhalter-Formen, eine kleine, aber wichtige Unterscheidung**
+(`renderTemplate()` in `examples/cms/app.mjs`, Mustache-Konvention):
+`{{title}}` (zwei Klammern) wird ESCAPED eingesetzt — für einfache
+Textfelder. `{{{body}}}` (drei Klammern) wird ROH eingesetzt — nötig, weil
+der WYSIWYG-Editor bereits HTML liefert (`<b>…</b>` etc.), das escaped
+sichtbar als Text `&lt;b&gt;` erscheinen würde statt fett dargestellt zu
+werden.
+
+**Sicherheitsmodell, explizit durchdacht statt stillschweigend
+vorausgesetzt:** rohes Einsetzen von `{{{body}}}` eröffnet KEINE neue
+Fähigkeit gegenüber dem, was ein Site-Writer schon hat — wer Schreibrecht
+auf der Site besitzt, kann über `setTemplate()` (Konsole oder
+Template-Box) ohnehin schon beliebiges HTML in die Site schreiben, keine
+Prüfung dagegen, absichtlich (dieselbe "Writer = Content-Autor" Vertrauensstufe
+wie jedes CMS/Wiki mit internem Redaktionsteam). Der WYSIWYG-Editor macht
+diese bereits vorhandene Fähigkeit nur bequemer zugänglich, nicht
+mächtiger. Wichtig bleibt die Grenze NACH AUSSEN: `<script>`-Tags in per
+`innerHTML` injiziertem HTML werden vom Browser nicht ausgeführt (siehe
+Abschnitt 6) — aber Event-Attribute wie `onerror="…"` in eingefügtem HTML
+FEUERN. Das ist kein Bug hier, sondern der bewusste Rahmen: Autoren-Content
+von VERTRAUTEN Writern (ACL-geprüft), nicht ungeprüfte Eingabe von
+Fremden — dieselbe Grenze, die auch ein normales CMS mit Redakteursrollen
+zieht, nicht strenger und nicht loser. Für einen echt offenen Space
+(`writers: ['*']`, wie `examples/forum/app.mjs`s Demo-Board) NIEMALS
+`{{{body}}}`/rohes HTML aus Nutzereingaben verwenden — dort bleibt reiner
+Text (`{{body}}`, escaped) die richtige Wahl, weil dort JEDE:R schreiben darf.

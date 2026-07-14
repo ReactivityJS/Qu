@@ -177,6 +177,39 @@ Id ist dann gleichzeitig Adressierung (`qu.get(id)`) UND
 `createSpace()` gilt unverändert (siehe `createSpaceACLResolver` oben) —
 nur racet jetzt die selbst gewählte Id, nicht eine frische zufällige.
 
+#### Manifest nachträglich ändern: `addToRole()`/`removeFromRole()`
+`qu.addToRole(spaceId, role, fingerprint)` / `qu.removeFromRole(spaceId, role, fingerprint)`
+→ `Promise` — fügt einen Fingerprint (oder `'*'`, "jede:r") zu einer der
+drei Manifest-Rollen `'writers'`/`'readers'`/`'admins'` hinzu bzw. entfernt
+ihn daraus, alle anderen Manifest-Felder unverändert. EIN generischer
+Wrapper für alle drei Rollen statt sechs eigener Funktionen — die
+zugrundeliegende Operation ("dieser Fingerprint gehört jetzt zu dieser
+Liste, oder nicht mehr") ist für `writers`/`readers`/`admins` identisch.
+Idempotent: ein bereits vorhandener Fingerprint erneut hinzuzufügen, oder
+ein nicht vorhandener zu entfernen, ist ein No-op, kein Fehler. Wie jede
+Manifest-Änderung nur von einem/einer Admin ausführbar — ein Aufruf durch
+einen bloßen Writer wird von genau demselben `[ACL] Write denied` abgelehnt
+wie jeder andere unautorisierte Manifest-Schreibversuch.
+
+```js
+await qu.addToRole(room.id, 'writers', bob.fingerprint);   // Schreibrecht geben
+await qu.removeFromRole(room.id, 'writers', bob.fingerprint); // wieder entziehen
+await qu.addToRole(room.id, 'readers', '*');    // öffentlich lesbar machen
+await qu.removeFromRole(room.id, 'readers', '*'); // wieder privat
+```
+
+Auch als eigenständige, `Session`-basierte Funktionen exportiert (wie
+`createSpace(session, opts)`/`createSpaceAt(session, id, opts)`):
+`addToRole(session, spaceId, role, fingerprint)`/`removeFromRole(session,
+spaceId, role, fingerprint)` aus `modules/spaces.js`.
+
+Ein Admin kann das eigene Manifest immer LESEN, selbst wenn `readers` sie
+nicht (mehr) auflistet (z. B. nach `removeFromRole(id, 'readers', '*')` auf
+einen zuvor öffentlichen Space) — sonst könnte ein Admin sich selbst vom
+Reparieren des eigenen Fehlers aussperren. Gilt nur für das Manifest-
+Dokument selbst, nicht für gewöhnliche Inhalte darunter — die bleiben exakt
+so von `readers` gesteuert wie konfiguriert.
+
 ### Presets: `QU_PRESETS`
 `src/presets.js` bündelt gängige `plugins`-Listen für `Qu.create({ plugins })`:
 `QU_PRESETS.local` (`[]`, Core-Default), `QU_PRESETS.spaces`

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Qu, createSpacesPlugin } from '../src/index.js';
 import {
   getManifest, canWrite, isAdmin, listWriters, grantWriteAccess, revokeWriteAccess,
+  isPublic, setPublic, listReaders, addReader, removeReader,
   parseHashRoute, buildHashRoute,
 } from './space-app-lib.mjs';
 
@@ -60,6 +61,30 @@ test('listWriters() hides the "*" open-write marker — it is not a real fingerp
   const space = owner.createSpace({ writers: ['*'], readers: ['*'] });
   await space.ready;
   assert.deepEqual(await listWriters(owner, space.id), []);
+});
+
+test('isPublic()/setPublic()/listReaders()/addReader()/removeReader(): visibility built on the same generic role primitive as writers', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin());
+  const alice = await Qu.create({ runtime: owner.runtime });
+  const space = owner.createSpace({ writers: [owner.fingerprint], readers: ['*'] });
+  await space.ready;
+
+  assert.equal(await isPublic(owner, space.id), true);
+  assert.equal(await canWrite(alice, space.id), false); // reading works either way; this only checks readability, not write access
+  const readAsPublic = await alice.get(space.id);
+  assert.ok(readAsPublic, 'a public space is readable by anyone');
+
+  await setPublic(owner, space.id, false);
+  assert.equal(await isPublic(owner, space.id), false);
+
+  await addReader(owner, space.id, alice.fingerprint);
+  assert.deepEqual(await listReaders(owner, space.id), [alice.fingerprint]);
+
+  await removeReader(owner, space.id, alice.fingerprint);
+  assert.deepEqual(await listReaders(owner, space.id), []);
+
+  await setPublic(owner, space.id, true);
+  assert.equal(await isPublic(owner, space.id), true);
 });
 
 test('parseHashRoute()/buildHashRoute(): a pure round trip, spaceId-only and spaceId+path', () => {
