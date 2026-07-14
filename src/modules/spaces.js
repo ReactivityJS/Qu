@@ -29,6 +29,18 @@ import { spaceIdOf, isUserSpaceId, fingerprintOfUserSpace, randomSpaceId, isRese
  * Writing the manifest itself (id === spaceId) requires being listed in
  * `admins`, not merely `writers` — so a Space's regular writers can't
  * silently reassign its own permissions.
+ *
+ * READING the manifest itself is likewise special-cased for admins on a
+ * generic Space: an admin can always read it, even if `readers` doesn't
+ * (yet, or anymore) list them — otherwise setting `readers` to something
+ * that excludes yourself (e.g. going fully private, `readers: []`) would
+ * lock even an admin out of the one document they need to be able to read
+ * in order to fix it (addToRole()/removeFromRole() below read-then-patch
+ * the manifest through this same ACL-checked path). Ordinary CONTENT under
+ * the Space is unaffected — `readers` still governs it exactly as written,
+ * no admin exception there. Same "cannot be locked out of your own
+ * administration" precedent as the User-Space owner guarantee just above,
+ * scoped narrowly to the manifest document only.
  */
 export function createSpaceACLResolver(runtime) {
   return async function getACL(id) {
@@ -55,9 +67,10 @@ export function createSpaceACLResolver(runtime) {
     }
 
     if (!m) return { writers: ['*'], readers: ['*'] }; // bootstrap: no manifest yet
+    const contentReaders = m.readers ?? ['*'];
     return {
       writers: isManifestWrite ? (m.admins ?? []) : (m.writers ?? []),
-      readers: m.readers ?? ['*'],
+      readers: isManifestWrite ? [...new Set([...contentReaders, ...(m.admins ?? [])])] : contentReaders,
     };
   };
 }
@@ -71,6 +84,60 @@ export async function createSpace(session, opts) {
   const spaceId = randomSpaceId();
   await session.publish(spaceId, buildManifest(session.fingerprint, opts));
   return spaceId;
+}
+
+const MANIFEST_ROLES = ['writers', 'readers', 'admins'];
+
+/**
+ * Shared by addToRole()/removeFromRole() below — reads the current
+ * manifest, hands its `role` array to `mutate()`, and writes the patched
+ * manifest back. Any manifest field NOT touched here (the other two roles,
+ * `createdAt`) survives unchanged, same discipline as every other
+ * `{ ...manifest, x }`-style patch in this codebase (e.g. examples/
+ * todo-lib.mjs's grantWriteAccess()). Enforcement that only an Admin may
+ * actually land this write is NOT duplicated here — writing to `spaceId`
+ * itself already requires being listed in `admins` per
+ * createSpaceACLResolver() above, so an unauthorized call fails exactly
+ * the same way any other unauthorized manifest write would.
+ */
+async function patchManifestRole(session, spaceId, role, mutate) {
+  if (!MANIFEST_ROLES.includes(role)) {
+    throw new Error(`[Spaces] Ungültige Rolle "${role}" (erwartet "writers", "readers" oder "admins").`);
+  }
+  const manifestQ = await session.get(spaceId);
+  const manifest = manifestQ?.value;
+  if (!manifest) throw new Error(`[Spaces] Kein Manifest unter "${spaceId}" — Space existiert (für diesen Client) noch nicht/noch nicht gesynct.`);
+  return session.publish(spaceId, { ...manifest, [role]: mutate(manifest[role] ?? []) });
+}
+
+/**
+ * Add a fingerprint (or `'*'`, "everyone") to one of a Space's three roles.
+ * ONE generic function instead of six (add/removeWriter, add/removeReader,
+ * add/removeAdmin) — the manifest shape is identical across all three, and
+ * every CMS/ToDo/Forum-style app built on `createSpacesPlugin()` needs the
+ * exact same "add this fingerprint to that role" operation, whichever role
+ * it happens to be (see examples/space-app-lib.mjs, which used to
+ * reimplement this for `writers` alone before this existed). Idempotent —
+ * adding an already-present fingerprint is a no-op write, not an error.
+ */
+export async function addToRole(session, spaceId, role, fingerprint) {
+  return patchManifestRole(session, spaceId, role, (list) => (list.includes(fingerprint) ? list : [...list, fingerprint]));
+}
+
+/**
+ * The inverse of addToRole() — removes a fingerprint from one role, other
+ * roles/fields untouched. Removing a fingerprint that isn't present is a
+ * no-op write, not an error (same "no special-cased absence" stance as
+ * `Array.prototype.filter()` itself). No protection here against removing
+ * the space's only remaining admin, or an admin removing themselves —
+ * same deliberately-unguarded stance as the rest of this module (see
+ * createSpaceACLResolver's bootstrap-race note above): a Space an admin
+ * has locked everyone (including themselves) out of stays readable per
+ * its `readers`, just no longer administrable by anyone — a real but
+ * self-inflicted outcome, not one this function silently prevents.
+ */
+export async function removeFromRole(session, spaceId, role, fingerprint) {
+  return patchManifestRole(session, spaceId, role, (list) => list.filter((fp) => fp !== fingerprint));
 }
 
 /**
@@ -91,8 +158,12 @@ export async function createSpaceAt(session, id, opts) {
  * `qu.use(createSpacesPlugin())` — swaps the Core's identity-only default
  * ACL for this manifest-aware one (via `qu.setACLResolver()`, affecting
  * every Qu instance sharing this Runtime, not just the caller) and attaches
- * `qu.createSpace(opts)`. Without this, `createChatRoom()`/any multi-writer
- * Space is unwritable — the Core default only ever grants `~<own fingerprint>`.
+ * `qu.createSpace(opts)`/`qu.createSpaceAt(id, opts)` plus
+ * `qu.addToRole(spaceId, role, fingerprint)`/`qu.removeFromRole(spaceId,
+ * role, fingerprint)` for editing an EXISTING manifest's `writers`/
+ * `readers`/`admins` afterwards (see addToRole()/removeFromRole() below).
+ * Without this, `createChatRoom()`/any multi-writer Space is unwritable —
+ * the Core default only ever grants `~<own fingerprint>`.
  *
  * `qu.createSpace(opts)` is SYNCHRONOUS — like `qu.get(id)`, it returns the
  * new Space's `QuSpace` immediately, no `await` needed to keep navigating
@@ -139,6 +210,12 @@ export function createSpacesPlugin() {
         space.ready.catch((e) => console.error(`[Spaces] createSpaceAt(): manifest write for ${id} failed:`, e));
         return space;
       };
+      // qu-gebundene Bequemlichkeit über addToRole()/removeFromRole() (siehe
+      // deren Doku oben) — `session` muss so nicht an jeder Aufrufstelle
+      // durchgereicht werden, derselbe Komfort wie qu.createSpace(opts)
+      // gegenüber dem eigenständigen createSpace(session, opts).
+      qu.addToRole = (spaceId, role, fingerprint) => addToRole(qu.session, spaceId, role, fingerprint);
+      qu.removeFromRole = (spaceId, role, fingerprint) => removeFromRole(qu.session, spaceId, role, fingerprint);
     },
   };
 }
