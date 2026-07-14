@@ -22,6 +22,9 @@
     #present-controls button { margin: 0.2rem 0.3rem 0.2rem 0; }
     textarea#edit-body { width: 100%; min-height: 6rem; background: #00000066; border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem; color: var(--text); font-size: 0.85rem; font-family: inherit; }
     #readonly-notice { color: var(--fail); font-size: 0.85rem; }
+    #writers { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.3rem; }
+    .writer-item { display: inline-flex; align-items: center; gap: 0.3rem; background: #00000066; border: 1px solid var(--border); border-radius: 999px; padding: 0.2rem 0.3rem 0.2rem 0.6rem; font-size: 0.78rem; }
+    .writer-item .remove-writer { background: none; border: none; color: var(--fail); cursor: pointer; font-size: 0.8rem; line-height: 1; padding: 0.1rem 0.3rem; }
   </style>
 </head>
 <body>
@@ -33,7 +36,11 @@
       <a href="/docs/code.html?file=/examples/cms-lib.mjs">cms-lib.mjs</a>) und einen Navigationsmodus, den
       der Space selbst festlegt (<a href="/docs/code.html?file=/examples/cms-router.js">cms-router.js</a>):
       "lokal" (jeder Client navigiert per Hash, <code>#siteId/pfad</code>) oder "präsentiert" (alle Besucher
-      folgen der vom Owner gesetzten Route — z. B. für einen Vortrag).
+      folgen der vom Owner gesetzten Route — z. B. für einen Vortrag). Nutzerverwaltung und Navigation selbst
+      kommen aus der gemeinsamen <a href="/docs/code.html?file=/examples/space-app-lib.mjs">space-app-lib.mjs</a> —
+      derselben Basis, die auch <a href="/examples/forum/index.html">das Forum-Beispiel</a> nutzt. Siehe
+      <a href="/docs/view.html?file=/examples/cms/GUIDE.md">GUIDE.md</a> für Größe, "von Null starten" und
+      reaktives JavaScript in Inhalten.
     </p>
     <div id="status" class="chat-status">Verbinde …</div>
 
@@ -55,7 +62,8 @@
         <input type="text" id="grant-fp" placeholder="Fingerprint einfügen …" />
         <button type="submit">Freischalten</button>
       </form>
-      <p>Aktuelle Schreibrechte: <span id="writers">…</span></p>
+      <p>Aktuelle Schreibrechte:</p>
+      <div id="writers">…</div>
     </div>
 
     <p id="readonly-notice" hidden>Du hast nur Lesezugriff — schicke dein Fingerprint (oben) an den Besitzer.</p>

@@ -10,9 +10,9 @@
 // IST der Teilen-Link (siehe Box "Site teilen"). Mit `#...` im Link wird
 // stattdessen die referenzierte Site geöffnet.
 
-import { Qu, createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../../src/index.js';
+import { createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../../src/index.js';
 import {
-  createSite, getSiteManifest, canWrite, grantWriteAccess,
+  createSite, getSiteManifest, canWrite, grantWriteAccess, revokeWriteAccess,
   getConfig, onConfig, setNavigationMode,
   setTemplate, getTemplate,
   setPage, onPage,
@@ -20,6 +20,8 @@ import {
   presentRoute,
 } from '../cms-lib.mjs';
 import { watchRoute, navigate } from '../cms-router.js';
+import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
+import { parseHashRoute, buildHashRoute } from '../space-app-lib.mjs';
 
 const IDENTITY_KEY = 'qu-cms-identity-keys'; // eigener Key, unabhängig von anderen Beispielen
 
@@ -49,19 +51,6 @@ const addNavForm = el('add-nav-form');
 const navLabelInput = el('nav-label');
 const navSlugInput = el('nav-slug');
 
-async function loadOrCreateIdentity() {
-  const saved = localStorage.getItem(IDENTITY_KEY);
-  if (saved) return Qu.create({ identity: JSON.parse(saved) });
-  const qu = await Qu.create();
-  localStorage.setItem(IDENTITY_KEY, JSON.stringify(await qu.exportKeys()));
-  return qu;
-}
-
-function relayUrl() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/relay`;
-}
-
 /** Sehr kleine Platzhalter-Ersetzung — `{{title}}`/`{{body}}` im Template-HTML werden textinhalt-sicher (kein `innerHTML` mit rohen Nutzereingaben) durch den jeweiligen Seiteninhalt ersetzt. */
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -85,19 +74,17 @@ async function seedDemoSite(qu) {
 }
 
 async function main() {
-  const qu = (await loadOrCreateIdentity()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const qu = (await loadOrCreateIdentity(IDENTITY_KEY)).use(createNetworkPlugin()).use(createSpacesPlugin());
   myFpEl.textContent = qu.fingerprint;
 
   const channel = createWebSocketChannel(relayUrl());
   await channel.connect();
 
-  const hashHasSite = Boolean(location.hash.slice(1));
-  let siteId;
-  if (hashHasSite) {
-    siteId = location.hash.slice(1).split('/')[0];
-  } else {
+  const { spaceId: hashSiteId } = parseHashRoute(location.hash);
+  let siteId = hashSiteId;
+  if (!siteId) {
     siteId = await seedDemoSite(qu);
-    location.hash = `${siteId}/home`;
+    location.hash = buildHashRoute(siteId, 'home');
   }
 
   const repl = await qu.connect(channel, { pushTopics: [`${siteId}/`] });
@@ -112,7 +99,7 @@ async function main() {
   await repl.sync({ topic: siteId, since: 0 });
   statusEl.textContent = 'Verbunden';
 
-  shareLinkEl.value = `${location.origin}${location.pathname}#${siteId}/home`;
+  shareLinkEl.value = `${location.origin}${location.pathname}${buildHashRoute(siteId, 'home')}`;
   shareBox.hidden = false;
 
   let currentRoute = 'home';
@@ -128,9 +115,29 @@ async function main() {
     modeToggleBtn.hidden = !writable;
 
     const manifest = await getSiteManifest(qu, siteId);
-    writersEl.textContent = (manifest?.writers ?? []).map((fp) => (fp === qu.fingerprint ? `${fp.slice(0, 10)}… (du)` : `${fp.slice(0, 10)}…`)).join(', ');
     const isAdmin = manifest?.admins?.includes(qu.fingerprint);
     grantForm.hidden = !isAdmin;
+
+    writersEl.textContent = '';
+    for (const fp of manifest?.writers ?? []) {
+      const item = document.createElement('span');
+      item.className = 'writer-item';
+      item.textContent = fp === qu.fingerprint ? `${fp.slice(0, 10)}… (du)` : `${fp.slice(0, 10)}…`;
+      // '*' (offen für alle) und die eigene Identität sind hier nicht entfernbar — letzteres, damit sich kein Admin über die UI versehentlich selbst aussperrt (revokeWriteAccess() selbst erlaubt es technisch, siehe space-app-lib.mjs).
+      if (isAdmin && fp !== '*' && fp !== qu.fingerprint) {
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'remove-writer';
+        removeBtn.textContent = '✕';
+        removeBtn.title = 'Schreibrecht entziehen';
+        removeBtn.addEventListener('click', async () => {
+          await revokeWriteAccess(qu, siteId, fp);
+          await refreshPermissions();
+        });
+        item.appendChild(removeBtn);
+      }
+      writersEl.appendChild(item);
+    }
   }
 
   async function renderNav() {
@@ -141,7 +148,7 @@ async function main() {
     for (const item of items) {
       const li = document.createElement('li');
       const a = document.createElement('a');
-      a.href = `#${siteId}/${item.value.slug}`;
+      a.href = buildHashRoute(siteId, item.value.slug);
       a.textContent = item.value.label;
       if (item.value.slug === currentRoute) a.className = 'active';
       a.addEventListener('click', (ev) => {
