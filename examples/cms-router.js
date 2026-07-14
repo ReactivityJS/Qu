@@ -2,6 +2,10 @@
 // src/ui/bindings.js (DOM-frei, testbar) vs. src/ui/components.js
 // (browser-only, `window`/DOM) bereits vormachen: cms-lib.mjs kennt kein
 // `window`, dieses Modul schon (Hash-Routing) — deliberately getrennt.
+// Das reine `#spaceId/pfad`-Parsen/Bauen selbst kommt aus dem
+// gemeinsamen space-app-lib.mjs (jede Space-App teilt dasselbe Format);
+// die CMS-spezifische Entscheidung "lokal vs. Präsentationsmodus" kommt
+// oben drauf, hier in diesem Modul.
 //
 // watchRoute() entscheidet bei JEDER Route-Auflösung neu, WELCHE Quelle
 // gilt — nicht einmalig beim Start, sondern reaktiv über onConfig()
@@ -28,11 +32,12 @@
 // Pflicht wie überall sonst in QU — siehe ui/components.js).
 
 import { onConfig, onPresentedRoute } from './cms-lib.mjs';
+import { parseHashRoute, buildHashRoute } from './space-app-lib.mjs';
 
+/** `{ siteId, path }` (space-app-lib.mjs's einheitliches `#spaceId/pfad`-Format) mit dem CMS-eigenen Default-Slug, sobald kein Unterpfad vorhanden ist. */
 function parseHash() {
-  const raw = window.location.hash.slice(1);
-  const [siteId, ...rest] = raw.split('/');
-  return { siteId: siteId || null, route: rest.join('/') || 'home' };
+  const { spaceId, path } = parseHashRoute(window.location.hash);
+  return { siteId: spaceId, route: path || 'home' };
 }
 
 /**
@@ -92,7 +97,7 @@ export function watchRoute(qu, { defaultSiteId = null, onRoute }) {
   };
 }
 
-/** Setzt den lokalen Hash auf `#<siteId>/<route>` — der normale Weg, wie ein Navigationslink im "local"-Modus eine neue Route auslöst (im "presentation"-Modus ohne Wirkung auf die angezeigte Seite, siehe Moduldoku oben, aber weiterhin nützlich, damit die Adresszeile/Zurück-Taste konsistent bleibt). */
+/** Setzt den lokalen Hash auf `#<siteId>/<route>` (space-app-lib.mjs's buildHashRoute()) — der normale Weg, wie ein Navigationslink im "local"-Modus eine neue Route auslöst (im "presentation"-Modus ohne Wirkung auf die angezeigte Seite, siehe Moduldoku oben, aber weiterhin nützlich, damit die Adresszeile/Zurück-Taste konsistent bleibt). */
 export function navigate(siteId, route) {
-  window.location.hash = `${siteId}/${route}`;
+  window.location.hash = buildHashRoute(siteId, route);
 }

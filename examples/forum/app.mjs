@@ -2,8 +2,10 @@
 // Logik (Zeit-Sharding) — diese Datei ist nur die dünne UI-Schicht
 // darüber, im selben Stil wie examples/cms/app.mjs.
 
-import { Qu, createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../../src/index.js';
-import { createBoard, addPost, listPosts, onPosts, listBuckets, olderBucket, currentBucket } from '../forum-lib.mjs';
+import { createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../../src/index.js';
+import { createBoard, addPost, listPosts, onPosts, olderBucket, currentBucket } from '../forum-lib.mjs';
+import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
+import { parseHashRoute, buildHashRoute } from '../space-app-lib.mjs';
 
 const IDENTITY_KEY = 'qu-forum-identity-keys'; // eigener Key, unabhängig von anderen Beispielen
 
@@ -20,34 +22,21 @@ const postsEl = el('posts');
 const postForm = el('post-form');
 const postTextInput = el('post-text');
 
-async function loadOrCreateIdentity() {
-  const saved = localStorage.getItem(IDENTITY_KEY);
-  if (saved) return Qu.create({ identity: JSON.parse(saved) });
-  const qu = await Qu.create();
-  localStorage.setItem(IDENTITY_KEY, JSON.stringify(await qu.exportKeys()));
-  return qu;
-}
-
-function relayUrl() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/relay`;
-}
-
 async function main() {
-  const qu = (await loadOrCreateIdentity()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const qu = (await loadOrCreateIdentity(IDENTITY_KEY)).use(createNetworkPlugin()).use(createSpacesPlugin());
   myFpEl.textContent = qu.fingerprint;
 
   const channel = createWebSocketChannel(relayUrl());
   await channel.connect();
 
-  const params = new URLSearchParams(location.search);
-  let boardId = params.get('board');
-  const isOwner = !boardId;
+  // Einheitliches Adressformat wie jede Space-App (siehe space-app-lib.mjs):
+  // `#<boardId>` — ein Board hat keinen weiteren Unterpfad, `path` bleibt hier ungenutzt.
+  let { spaceId: boardId } = parseHashRoute(location.hash);
 
-  if (isOwner) {
+  if (!boardId) {
     // Offenes Board (writers: ['*']) — für die Demo soll jede:r mit dem Link mitposten können, ohne erst Schreibrecht per Fingerprint zu erbitten (vgl. todo-lib.mjs, wo genau das gezeigt wird).
     boardId = await createBoard(qu, { writers: ['*'] });
-    history.replaceState(null, '', `?board=${boardId}`);
+    location.hash = buildHashRoute(boardId);
   }
 
   const repl = await qu.connect(channel, { pushTopics: [`${boardId}/`] });
@@ -60,7 +49,7 @@ async function main() {
   await repl.sync({ topic: boardId, since: 0 });
   statusEl.textContent = 'Verbunden';
 
-  shareLinkEl.value = `${location.origin}${location.pathname}?board=${boardId}`;
+  shareLinkEl.value = `${location.origin}${location.pathname}${buildHashRoute(boardId)}`;
   shareBox.hidden = false;
 
   const todayBucket = currentBucket();

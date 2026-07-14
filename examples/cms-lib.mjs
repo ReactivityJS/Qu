@@ -33,6 +33,19 @@
 // cms-lib.test.mjs) — sondern Sache des Browser-seitigen Routers/der App
 // (examples/cms-router.js, examples/cms/app.mjs), analog zum Schnitt
 // ui/bindings.js (Logik) vs. ui/components.js (DOM).
+//
+// Nutzerverwaltung (Writer hinzufügen/entfernen) und die grundlegenden
+// Berechtigungs-Fragen ("darf X schreiben?") sind NICHT hier neu
+// implementiert, sondern aus space-app-lib.mjs importiert — dieselbe
+// Logik, die jede Space-App braucht (siehe deren Moduldoku), hier nur
+// unter den in diesem Modul etablierten Namen re-exportiert, damit
+// bestehender Code (examples/cms/app.mjs, cms-lib.test.mjs) unverändert
+// funktioniert.
+import { getManifest, canWrite, grantWriteAccess, revokeWriteAccess } from './space-app-lib.mjs';
+
+export { canWrite, grantWriteAccess, revokeWriteAccess };
+/** Alias für space-app-lib.mjs's getManifest() — hier unter dem in diesem Modul etablierten Namen. */
+export const getSiteManifest = getManifest;
 
 /**
  * Legt eine neue Site an — Space + initiale Konfiguration in einem
@@ -54,27 +67,6 @@ export async function createSite(qu, { title = 'Neue Site', theme = 'light', lan
   await site.get('cms/config').put({ title, theme, language, navigationMode });
   await site.get('cms/state/route').put(defaultRoute);
   return site.id;
-}
-
-/** Das Space-Manifest der Site (writers/readers/admins/createdAt) — u. a. um zu prüfen, wer schreiben darf, wie todo-lib.mjs getListManifest(). */
-export async function getSiteManifest(qu, siteId) {
-  const q = await qu.get(siteId);
-  return q?.value ?? null;
-}
-
-/** Darf `qu` auf dieser Site schreiben (Konfiguration, Seiten, Menü, …)? */
-export async function canWrite(qu, siteId) {
-  const manifest = await getSiteManifest(qu, siteId);
-  if (!manifest) return false; // kein Manifest = Site (für diesen Client) noch nicht sichtbar
-  return manifest.writers.includes('*') || manifest.writers.includes(qu.fingerprint);
-}
-
-/** Nur von einem/einer Admin aufrufbar (Manifest-Änderungen brauchen Admin, nicht nur Writer — Whitepaper §8.3). Fügt einen Fingerprint zu den Writern hinzu, ohne bestehende zu verlieren. */
-export async function grantWriteAccess(qu, siteId, fingerprint) {
-  const manifest = await getSiteManifest(qu, siteId);
-  if (!manifest) throw new Error('Site nicht gefunden — noch nicht gesynct?');
-  const writers = manifest.writers.includes(fingerprint) ? manifest.writers : [...manifest.writers, fingerprint];
-  return qu.get(siteId).put({ ...manifest, writers });
 }
 
 /** Aktuelle Konfiguration lesen — `null`, falls die Site (für diesen Client) noch nicht sichtbar ist. */
