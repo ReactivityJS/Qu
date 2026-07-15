@@ -54,6 +54,7 @@ export { assertValidPattern } from './core/pattern.js';
 export { MemoryAdapter } from './adapters/memory.js';
 export { NullAdapter } from './adapters/null.js';
 export { MemoryFileStorageAdapter } from './adapters/file-storage-memory.js';
+export { IndexedDBFileStorageAdapter } from './adapters/indexeddb-file-storage.js';
 export { LocalStorageAdapter } from './adapters/local-storage.js';
 export { SessionStorageAdapter } from './adapters/session-storage.js';
 export { IndexedDBAdapter } from './adapters/indexeddb.js';

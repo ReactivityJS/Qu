@@ -8,7 +8,7 @@
 
 import {
   createNetworkPlugin, createSpacesPlugin, createFileHandlerPlugin,
-  createChatPlugin, createWebSocketChannel, MemoryFileStorageAdapter, reassembleFile,
+  createChatPlugin, createWebSocketChannel, IndexedDBFileStorageAdapter, reassembleFile,
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
@@ -165,7 +165,13 @@ function contactByFp(fp) {
 async function main() {
   const qu = await loadOrCreateIdentity(IDENTITY_KEY);
   qu.use(createNetworkPlugin()).use(createSpacesPlugin()).use(createChatPlugin());
-  const localFileStorage = new MemoryFileStorageAdapter();
+  // IndexedDB, nicht MemoryFileStorageAdapter — Anhänge (Bilder, Videos, …)
+  // sollen nach dem ersten Herunterladen auch einen Reload überleben, statt
+  // bei jedem Laden erneut vom Relay angefragt zu werden (renderAttachment()
+  // unten prüft ohnehin schon hasComplete()/fragt nur fehlende Chunks nach —
+  // mit einem rein-flüchtigen Adapter war "fehlend" nach jedem Reload aber
+  // wieder alles).
+  const localFileStorage = new IndexedDBFileStorageAdapter({ dbName: 'qu-chat-files' });
   qu.use(createFileHandlerPlugin({ fileStorage: localFileStorage }));
 
   meFpShortEl.textContent = shortFp(qu.fingerprint, 10) + '…';

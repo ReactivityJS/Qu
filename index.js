@@ -11,6 +11,7 @@
 //
 // Run: node index.js   (or: npm start)
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startServer } from './server/static-server.mjs';
@@ -19,7 +20,7 @@ import { createPushRoutes } from './server/push-routes.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
-import { sendWebPush } from './relay/webpush.mjs';
+import { sendWebPush, generateVapidKeys } from './relay/webpush.mjs';
 import { QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter } from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
@@ -49,27 +50,6 @@ if (process.env.QU_DEBUG !== '0') {
   enableConsoleDebug({ filter });
 }
 
-// Web Push (relay/webpush.mjs) — entirely opt-in via env vars, off by
-// default (no VAPID keys = no push machinery spun up at all, not even the
-// relay-side subscription bookkeeping). Generate a stable keypair ONCE per
-// deployment with `node scripts/generate-vapid-keys.mjs` — rotating it
-// invalidates every subscription a browser already holds.
-const vapidPublicKey = process.env.QU_VAPID_PUBLIC_KEY || null;
-const vapidPrivateKey = process.env.QU_VAPID_PRIVATE_KEY || null;
-const vapidSubject = process.env.QU_VAPID_SUBJECT || 'mailto:admin@example.com';
-const pushEnabled = !!(vapidPublicKey && vapidPrivateKey);
-if (process.env.QU_VAPID_PUBLIC_KEY && !process.env.QU_VAPID_PRIVATE_KEY) {
-  console.warn('[Relay] QU_VAPID_PUBLIC_KEY is set but QU_VAPID_PRIVATE_KEY is missing — Web Push stays disabled.');
-}
-const sendPush = pushEnabled
-  ? ({ subscription, payload }) => sendWebPush({ subscription, payload, vapidKeys: { publicKey: vapidPublicKey, privateKey: vapidPrivateKey }, subject: vapidSubject })
-  : null;
-
-// /test/manifest.json is always on (read-only, no code runs); the
-// server-side test-EXECUTION endpoint (/test/run-node-tests) is opt-in via
-// QU_ENABLE_TEST_ENDPOINT=1 — see server/test-runner.mjs for why.
-const server = startServer({ root, port, routes: [...createTestRoutes({ root }), ...createPushRoutes({ publicKey: vapidPublicKey })] });
-
 // Two supported startup modes, chosen once at process start — flüchtig
 // (in-memory, gone on restart, no disk I/O at all: quick local testing,
 // ephemeral relay instances) or persistent (the default: a durable,
@@ -77,6 +57,55 @@ const server = startServer({ root, port, routes: [...createTestRoutes({ root }),
 // into the former; anything else (including unset) keeps the previous,
 // always-persistent default so existing deployments see no behavior change.
 const persistent = process.env.QU_STORE !== 'memory';
+
+/** Loads an existing `{ publicKey, privateKey }` from `filePath`, or generates + saves a fresh one on first run. Used only in persistent mode — see the VAPID block below for why memory mode skips this entirely. */
+function loadOrGenerateVapidKeys(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    const keys = generateVapidKeys();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(keys));
+    return keys;
+  }
+}
+
+// Web Push (relay/webpush.mjs) — ON by default, no setup required: unless
+// QU_VAPID_PUBLIC_KEY/QU_VAPID_PRIVATE_KEY are explicitly set, a keypair is
+// generated on first run and saved to `.relay-data/vapid-keys.json` (same
+// idea as the relay's own identity/the qubit store — this deployment
+// persists what it needs to keep working across a restart, without a
+// manual setup step). `QU_PUSH=0` opts out entirely (no keys generated,
+// `/push/vapid-public-key` reports `null`, examples/chat/app.mjs's
+// "Aktivieren" button disables itself). In `QU_STORE=memory` mode, an
+// AUTO-generated pair is kept in-memory-only and regenerated every
+// restart, matching that mode's own "no disk I/O at all" contract —
+// pass explicit env vars instead if you want stable push across restarts
+// of an otherwise-ephemeral relay. Rotating the keypair (any way it
+// happens) invalidates every subscription a browser already holds.
+const pushDisabled = process.env.QU_PUSH === '0';
+let vapidPublicKey = process.env.QU_VAPID_PUBLIC_KEY || null;
+let vapidPrivateKey = process.env.QU_VAPID_PRIVATE_KEY || null;
+if (process.env.QU_VAPID_PUBLIC_KEY && !process.env.QU_VAPID_PRIVATE_KEY) {
+  console.warn('[Relay] QU_VAPID_PUBLIC_KEY is set but QU_VAPID_PRIVATE_KEY is missing — ignoring both and auto-generating a fresh pair instead.');
+  vapidPublicKey = null;
+}
+if (!pushDisabled && !(vapidPublicKey && vapidPrivateKey)) {
+  const keys = persistent ? loadOrGenerateVapidKeys(path.join(dataDir, 'vapid-keys.json')) : generateVapidKeys();
+  vapidPublicKey = keys.publicKey;
+  vapidPrivateKey = keys.privateKey;
+}
+const vapidSubject = process.env.QU_VAPID_SUBJECT || 'mailto:admin@example.com';
+const pushEnabled = !pushDisabled && !!(vapidPublicKey && vapidPrivateKey);
+const sendPush = pushEnabled
+  ? ({ subscription, payload }) => sendWebPush({ subscription, payload, vapidKeys: { publicKey: vapidPublicKey, privateKey: vapidPrivateKey }, subject: vapidSubject })
+  : null;
+
+// /test/manifest.json is always on (read-only, no code runs); the
+// server-side test-EXECUTION endpoint (/test/run-node-tests) is opt-in via
+// QU_ENABLE_TEST_ENDPOINT=1 — see server/test-runner.mjs for why.
+const server = startServer({ root, port, routes: [...createTestRoutes({ root }), ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null })] });
+
 const store = new QuStore([
   { prefix: '', adapter: persistent ? new FileSystemStorageAdapter(path.join(dataDir, 'qubits.ndjson')) : new MemoryAdapter() },
   { prefix: 'signal/', adapter: new NullAdapter() },
@@ -126,4 +155,6 @@ const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 // static case (README "Sync, Mirror, Relay").
 const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions });
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
-if (pushEnabled) console.log(`[Relay] Web Push enabled (${pushSubscriptions.size} stored subscription(s))`);
+console.log(pushEnabled
+  ? `[Relay] Web Push enabled (${pushSubscriptions.size} stored subscription(s))`
+  : '[Relay] Web Push disabled (QU_PUSH=0)');
