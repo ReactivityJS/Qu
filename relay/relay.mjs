@@ -68,6 +68,20 @@ export async function createRelay({
   // every push already goes through regardless).
   allowDynamicSubscribe = false,
   maxDynamicTopics = 200,
+  // Web Push (relay/webpush.mjs) — entirely optional, off unless a caller
+  // supplies BOTH of these:
+  //   sendPush({ subscription, payload }) — how to actually deliver one
+  //     push message. Injected rather than hard-imported so this file
+  //     stays deployment-agnostic (same reasoning as `store`/`fileStorage`
+  //     above) — a caller not wired for Web Push pays nothing for it, and
+  //     a test can pass a fake to assert on without any real network I/O.
+  //   pushSubscriptions — a `Map`-like store (get/set/delete/has) of
+  //     fingerprint -> Push API subscription object, caller-owned so
+  //     PERSISTENCE (surviving a relay restart, which a subscription must
+  //     — see index.js) stays this module's caller's decision, exactly
+  //     like `store` above.
+  sendPush = null,
+  pushSubscriptions = new Map(),
 } = {}) {
   const relay = (await Qu.create({ store, identity })).use(createSpacesPlugin()); // generic (non-User) rooms — the relay's own Runtime enforces this on every incoming push, exactly like any other write
   const hub = new ReplicationHub(relay.runtime, {
@@ -75,6 +89,49 @@ export async function createRelay({
     allowDynamicSubscribe, maxDynamicTopics,
   });
   const connected = new Map(); // fingerprint -> { channel, fileTransfer }
+
+  // Notify an OFFLINE room member by Web Push instead of the live delivery
+  // they'd otherwise get through their own connection — this is what lets
+  // a chat reach someone whose tab/app isn't even open. Matches
+  // modules/chat.js's message-id shape exactly (`<roomId>/msgs/<writerFp>-
+  // <ts>`, from Session.append()) rather than a generic pattern, so this
+  // hook — unlike the file-mirror one above — genuinely is chat-specific;
+  // only active at all if a caller opted in via `sendPush` above. No
+  // message CONTENT is ever put in a push payload (only ever a generic
+  // "you have a new message" + the sender's fingerprint, so the client can
+  // deep-link there) — a push service is not a party any of this app's
+  // encryption trusts, exactly like the relay itself.
+  if (sendPush) {
+    relay.runtime.on('*/msgs/*', async (q) => {
+      if (q.ephemeral || !q.writer) return;
+      const roomId = q.id.slice(0, q.id.indexOf('/msgs/'));
+      if (!roomId) return;
+      const manifestQ = await relay.runtime.get(roomId);
+      const members = manifestQ?.value?.writers ?? [];
+      for (const member of members) {
+        if (member === q.writer || member === '*' || connected.has(member)) continue;
+        const subscription = pushSubscriptions.get(member);
+        if (!subscription) continue;
+        try {
+          const aliasQ = await relay.runtime.get(`~${q.writer}/alias`);
+          const senderName = aliasQ?.value ?? null;
+          await sendPush({
+            subscription,
+            payload: { title: 'QU Chat', body: senderName ? `${senderName} hat dir geschrieben` : 'Du hast eine neue Nachricht erhalten', fp: q.writer },
+          });
+          debug('relay', 'push-sent', { to: member, roomId });
+        } catch (e) {
+          // A 404/410 means the push service considers this subscription
+          // gone (expired/revoked) — drop it so future messages don't keep
+          // retrying a dead endpoint; any other failure (network blip,
+          // 5xx) is left in place for the next message to retry.
+          if (e.status === 404 || e.status === 410) pushSubscriptions.delete(member);
+          debug('relay', 'push-failed', { to: member, roomId, error: e.message, status: e.status });
+          console.error(`[Relay] push to ${member} failed:`, e.message);
+        }
+      }
+    });
+  }
 
   // Proactively mirror a file's chunks from its uploader while they're
   // still connected — this is what lets a *different* client download it
@@ -127,9 +184,32 @@ export async function createRelay({
       });
     });
 
+    // Push-Subscription-Registrierung — bewusst KEIN QuBit (kein `qu.get()`/
+    // `put()`), sondern derselbe schlanke, relay-interne
+    // "authentifizierte Verbindung sagt mir etwas über sich selbst"-Weg wie
+    // `qu.route` oben: eine Subscription (Push-Endpoint + Schlüssel) ist
+    // reines Zustellungs-Bookkeeping, kein Chat-Inhalt, und müsste als
+    // QuBit unter `~<fp>/...` sonst denselben (Standard-offenen) Read-ACLs
+    // wie `avatar`/`alias` folgen — jede andere verbundene Identität könnte
+    // sie lesen und darüber beliebige Push-Nachrichten an dieses Gerät
+    // auslösen. Hier bleibt sie ausschließlich dem Relay bekannt, adressiert
+    // durch die per Handshake bewiesene `peerFingerprint` dieser Verbindung,
+    // kein `to`/`from` aus der Nachricht selbst wird je vertraut.
+    const offPush = channel.onMessage((msg) => {
+      if (!peerFingerprint) return;
+      if (msg?.type === 'qu.push.subscribe' && msg.subscription?.endpoint) {
+        pushSubscriptions.set(peerFingerprint, msg.subscription);
+        debug('relay', 'push-subscribed', { fingerprint: peerFingerprint });
+      } else if (msg?.type === 'qu.push.unsubscribe') {
+        pushSubscriptions.delete(peerFingerprint);
+        debug('relay', 'push-unsubscribed', { fingerprint: peerFingerprint });
+      }
+    });
+
     channel.onClose(() => {
       debug('relay', 'channel-detached', { channelId: channel.id, peerFingerprint });
       offSignaling();
+      offPush();
       fileTransfer.close();
       if (peerFingerprint) connected.delete(peerFingerprint);
     });
@@ -140,6 +220,7 @@ export async function createRelay({
     relay,
     hub,
     fileStorage,
+    pushSubscriptions,
     attachChannel,
     get connectedCount() { return connected.size; },
   };

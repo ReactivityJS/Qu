@@ -15,8 +15,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startServer } from './server/static-server.mjs';
 import { createTestRoutes } from './server/test-runner.mjs';
+import { createPushRoutes } from './server/push-routes.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
+import { createPersistedMap } from './relay/persisted-map.mjs';
+import { sendWebPush } from './relay/webpush.mjs';
 import { QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter } from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
@@ -46,10 +49,26 @@ if (process.env.QU_DEBUG !== '0') {
   enableConsoleDebug({ filter });
 }
 
+// Web Push (relay/webpush.mjs) — entirely opt-in via env vars, off by
+// default (no VAPID keys = no push machinery spun up at all, not even the
+// relay-side subscription bookkeeping). Generate a stable keypair ONCE per
+// deployment with `node scripts/generate-vapid-keys.mjs` — rotating it
+// invalidates every subscription a browser already holds.
+const vapidPublicKey = process.env.QU_VAPID_PUBLIC_KEY || null;
+const vapidPrivateKey = process.env.QU_VAPID_PRIVATE_KEY || null;
+const vapidSubject = process.env.QU_VAPID_SUBJECT || 'mailto:admin@example.com';
+const pushEnabled = !!(vapidPublicKey && vapidPrivateKey);
+if (process.env.QU_VAPID_PUBLIC_KEY && !process.env.QU_VAPID_PRIVATE_KEY) {
+  console.warn('[Relay] QU_VAPID_PUBLIC_KEY is set but QU_VAPID_PRIVATE_KEY is missing — Web Push stays disabled.');
+}
+const sendPush = pushEnabled
+  ? ({ subscription, payload }) => sendWebPush({ subscription, payload, vapidKeys: { publicKey: vapidPublicKey, privateKey: vapidPrivateKey }, subject: vapidSubject })
+  : null;
+
 // /test/manifest.json is always on (read-only, no code runs); the
 // server-side test-EXECUTION endpoint (/test/run-node-tests) is opt-in via
 // QU_ENABLE_TEST_ENDPOINT=1 — see server/test-runner.mjs for why.
-const server = startServer({ root, port, routes: createTestRoutes({ root }) });
+const server = startServer({ root, port, routes: [...createTestRoutes({ root }), ...createPushRoutes({ publicKey: vapidPublicKey })] });
 
 // Two supported startup modes, chosen once at process start — flüchtig
 // (in-memory, gone on restart, no disk I/O at all: quick local testing,
@@ -63,6 +82,14 @@ const store = new QuStore([
   { prefix: 'signal/', adapter: new NullAdapter() },
 ]);
 const fileStorage = persistent ? new FileSystemFileStorageAdapter(path.join(dataDir, 'files')) : new MemoryFileStorageAdapter();
+
+// A push subscription must outlive a relay restart (that's the entire
+// point of push, unlike a live WS connection) — persisted alongside
+// qubits/files above under the same `QU_STORE=memory` switch, or kept
+// in-memory-only for a quick ephemeral relay (relay/persisted-map.mjs).
+const pushSubscriptions = persistent
+  ? createPersistedMap(path.join(dataDir, 'push-subscriptions.json'))
+  : new Map();
 
 // Incoming-push protection (network/replication/default.js). Rate limiting
 // is ON by default with a generous per-fingerprint budget — unlike
@@ -90,6 +117,6 @@ const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 // "Bob" step and examples/app-space-lib.mjs's runtime-created App-Spaces
 // rely on. Still fully ACL-gated per push, never a wider grant than the
 // static case (README "Sync, Mirror, Relay").
-const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter });
+const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions });
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
-
+if (pushEnabled) console.log(`[Relay] Web Push enabled (${pushSubscriptions.size} stored subscription(s))`);

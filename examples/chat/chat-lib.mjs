@@ -143,3 +143,24 @@ export function parseInviteHash(hash) {
   const match = /^add=(.+)$/.exec(raw);
   return match ? normalizeFingerprint(decodeURIComponent(match[1])) : null;
 }
+
+/**
+ * Der Direktlink zu EINEM Chat: `#<fingerprint>` — bewusst ein anderes
+ * Format als buildInviteLink()s `#add=<fingerprint>` (eindeutig am
+ * `add=`-Präfix unterscheidbar, siehe parseChatHash()/parseInviteHash()):
+ * eine Einladung fragt erst nach ("Kontakt hinzufügen?"), ein Chat-Link
+ * öffnet direkt — dieselbe Unterscheidung wie überall sonst im Repo
+ * zwischen "ansehen" und "einer Aktion zustimmen".
+ */
+export function buildChatHashRoute(fingerprint) {
+  const fp = normalizeFingerprint(fingerprint);
+  if (!fp) throw new Error('[chat-lib] buildChatHashRoute() braucht einen gültigen Fingerprint');
+  return `#${fp}`;
+}
+
+/** Gegenstück zu buildChatHashRoute() — liest einen blanken Fingerprint-Hash (NICHT `#add=...`, das bleibt parseInviteHash()s Sache), `null` falls leer/kein gültiger Fingerprint. */
+export function parseChatHash(hash) {
+  const raw = String(hash ?? '').replace(/^#/, '');
+  if (!raw || raw.startsWith('add=')) return null;
+  return normalizeFingerprint(raw);
+}
