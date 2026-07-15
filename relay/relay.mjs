@@ -1,4 +1,4 @@
-import { Qu, QuStore, MemoryAdapter, NullAdapter, ReplicationHub, createSpacesPlugin, DefaultFileTransfer, MemoryFileStorageAdapter } from '../src/index.js';
+import { Qu, QuStore, MemoryAdapter, NullAdapter, ReplicationHub, createSpacesPlugin, createSpaceACLResolver, DefaultFileTransfer, MemoryFileStorageAdapter } from '../src/index.js';
 import { debug } from '../src/core/debug.js';
 
 /**
@@ -68,13 +68,131 @@ export async function createRelay({
   // every push already goes through regardless).
   allowDynamicSubscribe = false,
   maxDynamicTopics = 200,
+  // Web Push (relay/webpush.mjs) — entirely optional, off unless a caller
+  // supplies BOTH of these:
+  //   sendPush({ subscription, payload }) — how to actually deliver one
+  //     push message. Injected rather than hard-imported so this file
+  //     stays deployment-agnostic (same reasoning as `store`/`fileStorage`
+  //     above) — a caller not wired for Web Push pays nothing for it, and
+  //     a test can pass a fake to assert on without any real network I/O.
+  //   pushSubscriptions — a `Map`-like store (get/set/delete/has) of
+  //     fingerprint -> Push API subscription object, caller-owned so
+  //     PERSISTENCE (surviving a relay restart, which a subscription must
+  //     — see index.js) stays this module's caller's decision, exactly
+  //     like `store` above.
+  // A caller who enables this should also mount `push-subscription/` on a
+  // NullAdapter with `{ replicate: false }` in whatever `store` it passes
+  // above (see index.js) — a client registers a subscription by publishing
+  // an ordinary signed QuBit to `push-subscription/<fp>` (examples/chat/
+  // app.mjs), and that mount is what keeps it ephemeral (processed live,
+  // never persisted as a queryable QuBit, never forwarded to another
+  // peer) instead of accumulating forever like a normal Space. Without
+  // that mount the write still works, it just falls through to whatever
+  // the DEFAULT mount does with it (typically: persisted like anything
+  // else) — a degraded but harmless fallback, not a crash.
+  sendPush = null,
+  pushSubscriptions = new Map(),
 } = {}) {
   const relay = (await Qu.create({ store, identity })).use(createSpacesPlugin()); // generic (non-User) rooms — the relay's own Runtime enforces this on every incoming push, exactly like any other write
+
+  // `push-subscription/<fp>` (see the sendPush hook below): the same
+  // structural argument core/identity-acl.js already makes for
+  // `~<fp>/**` ("only you can ever produce a valid signature for
+  // `writer = <your fingerprint>`"), just applied to a flat id shape
+  // instead of a User-Space one — a flat shape is what lets `store`
+  // mount exactly this one prefix on a NullAdapter (see doc comment
+  // above) without touching any other id. Falls through to a FRESH
+  // Spaces resolver for everything else, completely unchanged — this
+  // must be a new createSpaceACLResolver() call, not `relay.acl`: that
+  // getter always re-reads whatever resolver is CURRENTLY installed
+  // (its whole point, see qu.js), so capturing it as a "base" BEFORE
+  // calling setACLResolver() below would only alias back to this very
+  // wrapper once installed, recursing into itself forever.
+  const spacesACL = createSpaceACLResolver(relay.runtime);
+  relay.setACLResolver(async (id) => {
+    const m = /^push-subscription\/([0-9a-f]{24})$/i.exec(id);
+    return m ? { writers: [m[1]], readers: ['*'] } : spacesACL(id);
+  });
+
   const hub = new ReplicationHub(relay.runtime, {
     identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter, ingestGate,
     allowDynamicSubscribe, maxDynamicTopics,
   });
   const connected = new Map(); // fingerprint -> { channel, fileTransfer }
+
+  // Notify an OFFLINE room member by Web Push instead of the live delivery
+  // they'd otherwise get through their own connection — this is what lets
+  // a chat reach someone whose tab/app isn't even open. Matches
+  // modules/chat.js's message-id shape exactly (`<roomId>/msgs/<writerFp>-
+  // <ts>`, from Session.append()) rather than a generic pattern, so this
+  // hook — unlike the file-mirror one above — genuinely is chat-specific;
+  // only active at all if a caller opted in via `sendPush` above. No
+  // message CONTENT is ever put in a push payload (only ever a generic
+  // "you have a new message" + the sender's fingerprint, so the client can
+  // deep-link there) — a push service is not a party any of this app's
+  // encryption trusts, exactly like the relay itself.
+  if (sendPush) {
+    relay.runtime.on('*/msgs/*', async (q) => {
+      if (q.ephemeral || !q.writer) return;
+      const roomId = q.id.slice(0, q.id.indexOf('/msgs/'));
+      if (!roomId) return;
+      const manifestQ = await relay.runtime.get(roomId);
+      const members = manifestQ?.value?.writers ?? [];
+      for (const member of members) {
+        if (member === q.writer || member === '*' || connected.has(member)) continue;
+        const subscription = pushSubscriptions.get(member);
+        if (!subscription) continue;
+        try {
+          const aliasQ = await relay.runtime.get(`~${q.writer}/alias`);
+          const senderName = aliasQ?.value ?? null;
+          await sendPush({
+            subscription,
+            payload: { title: 'QU Chat', body: senderName ? `${senderName} hat dir geschrieben` : 'Du hast eine neue Nachricht erhalten', fp: q.writer },
+          });
+          debug('relay', 'push-sent', { to: member, roomId });
+        } catch (e) {
+          // A 404/410 means the push service considers this subscription
+          // gone (expired/revoked) — drop it so future messages don't keep
+          // retrying a dead endpoint; any other failure (network blip,
+          // 5xx) is left in place for the next message to retry.
+          if (e.status === 404 || e.status === 410) pushSubscriptions.delete(member);
+          debug('relay', 'push-failed', { to: member, roomId, error: e.message, status: e.status });
+          console.error(`[Relay] push to ${member} failed:`, e.message);
+        }
+      }
+    });
+
+    // A push subscription is registered through the SAME publish/dispatch
+    // path as any other write (`qu.session.publish('push-subscription/'
+    // + fp, subscription)`, see examples/chat/app.mjs) — no bespoke
+    // channel-message type. Two things make this the right shape rather
+    // than reinventing a signaling mechanism the framework already has
+    // (core/routed-events.js's `qu.route`, NullAdapter's own doc comment
+    // on "Presence-Pings, Tippindikatoren etc." going through this exact
+    // pipeline):
+    //   - Write ACL below restricts `push-subscription/<fp>` to `<fp>`
+    //     alone, the same structural "only you can ever sign as you"
+    //     argument core/identity-acl.js already makes for `~<fp>/**` —
+    //     nobody else can register or overwrite your subscription.
+    //   - The id is expected to be mounted on a NullAdapter (see this
+    //     function's own doc comment on `store`) with `replicate: false`
+    //     — the write still runs the full verify+ACL+dispatch pipeline
+    //     (this listener fires normally), but nothing is ever persisted
+    //     as a queryable QuBit and nothing is ever forwarded to another
+    //     peer (network/replication/default.js's isReplicable() check).
+    //     Durability across a relay restart is `pushSubscriptions`s own
+    //     job (a caller-provided, e.g. disk-backed, Map — see index.js),
+    //     deliberately separate from "is this a QuBit anyone can read
+    //     back later", which for an endpoint+keys blob it structurally
+    //     should never be.
+    relay.runtime.on('push-subscription/*', (q) => {
+      if (q.ephemeral || !q.writer) return;
+      const fp = q.id.slice('push-subscription/'.length);
+      if (fp !== q.writer) return; // ACL below already rejects this at ingest; a redundant local check costs nothing
+      if (q.value == null) { pushSubscriptions.delete(fp); debug('relay', 'push-unsubscribed', { fingerprint: fp }); }
+      else { pushSubscriptions.set(fp, q.value); debug('relay', 'push-subscribed', { fingerprint: fp }); }
+    });
+  }
 
   // Proactively mirror a file's chunks from its uploader while they're
   // still connected — this is what lets a *different* client download it
@@ -127,6 +245,12 @@ export async function createRelay({
       });
     });
 
+    // Push-Subscription-Registrierung braucht hier KEINEN eigenen Handler
+    // mehr — sie läuft als ganz normaler, signierter `qu.session.publish()`
+    // über genau dieselbe Replication wie jeder andere Write (siehe
+    // `push-subscription/<fp>`-ACL und den `relay.runtime.on(...)`-Listener
+    // oben in createRelay()).
+
     channel.onClose(() => {
       debug('relay', 'channel-detached', { channelId: channel.id, peerFingerprint });
       offSignaling();
@@ -140,6 +264,7 @@ export async function createRelay({
     relay,
     hub,
     fileStorage,
+    pushSubscriptions,
     attachChannel,
     get connectedCount() { return connected.size; },
   };

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   isValidFingerprint, normalizeFingerprint, dmRoomId, inboxId, shortFp, fmtBytes,
   fmtTime, fmtDayLabel, linkify, mediaKind, sortContactsByActivity,
-  buildInviteLink, parseInviteHash,
+  buildInviteLink, parseInviteHash, buildChatHashRoute, parseChatHash,
 } from './chat-lib.mjs';
 
 const FP_A = 'a1b2c3d4e5f60718293a4b5c';
@@ -104,4 +104,17 @@ test('parseInviteHash() returns null for garbage/missing hash', () => {
   assert.equal(parseInviteHash('#foo=bar'), null);
   assert.equal(parseInviteHash(''), null);
   assert.equal(parseInviteHash('#add=not-a-fingerprint'), null);
+});
+
+test('buildChatHashRoute()/parseChatHash() round-trip', () => {
+  const hash = buildChatHashRoute(FP_A);
+  assert.equal(hash, `#${FP_A}`);
+  assert.equal(parseChatHash(hash), FP_A);
+  assert.equal(parseChatHash(FP_A), FP_A); // auch ohne führendes '#' (z. B. schon von location.hash getrennt)
+});
+
+test('parseChatHash() never matches an invite hash or garbage', () => {
+  assert.equal(parseChatHash(`#add=${FP_A}`), null);
+  assert.equal(parseChatHash(''), null);
+  assert.equal(parseChatHash('#not-a-fingerprint'), null);
 });

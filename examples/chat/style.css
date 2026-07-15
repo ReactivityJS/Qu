@@ -369,6 +369,8 @@ button { font-family: inherit; }
 .btn-secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .modal-error { color: var(--danger); font-size: 0.8rem; margin-top: 0.5rem; min-height: 1em; }
+.push-row { justify-content: flex-start; align-items: center; }
+.push-status { margin: 0; }
 .modal-hint { color: var(--muted); font-size: 0.78rem; margin: 0.4rem 0 0; }
 
 /* --- Lightbox (Vollbild + Zoom) --- */

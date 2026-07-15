@@ -14,6 +14,7 @@ import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
   dmRoomId, inboxId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
   linkify, mediaKind, sortContactsByActivity, buildInviteLink, parseInviteHash,
+  buildChatHashRoute, parseChatHash,
 } from './chat-lib.mjs';
 
 const IDENTITY_KEY = 'qu-chat-identity';
@@ -130,6 +131,7 @@ const lightboxImg = $('lightbox-img');
 $('lightbox-close').addEventListener('click', closeLightbox);
 lightboxEl.addEventListener('click', (ev) => { if (ev.target === lightboxEl) closeLightbox(); });
 lightboxImg.addEventListener('click', () => { lightboxImg.classList.toggle('zoomed'); lightboxImg.style.transform = lightboxImg.classList.contains('zoomed') ? 'scale(2.2)' : 'scale(1)'; });
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !lightboxEl.hidden) closeLightbox(); });
 
 function openLightbox(url) {
   lightboxImg.src = url;
@@ -420,6 +422,18 @@ async function main() {
       renderMessageList(fp);
       if (document.hasFocus()) markActiveRead();
     }
+
+    // Lokale Benachrichtigung für "Tab läuft noch, ist aber nicht im
+    // Fokus" (Handy gesperrt, anderer Tab aktiv, …) — der komplementäre
+    // Fall zu echtem Web Push (sw.js/relay.mjs's push-Hook), das der
+    // Relay bewusst NUR für getrennte Verbindungen auslöst (siehe dort);
+    // beide Wege feuern also nie für dasselbe Ereignis gleichzeitig.
+    if (!mine && !document.hasFocus() && Notification.permission === 'granted') {
+      try {
+        const notif = new Notification('QU Chat', { body: `${contactByFp(fp)?.alias ?? shortFp(fp)} hat dir geschrieben`, tag: fp });
+        notif.addEventListener('click', () => { window.focus(); openContact(fp); notif.close(); });
+      } catch { /* z. B. Safari verweigert new Notification() aus einem Service-Worker-losen Kontext manchmal leise — kein harter Fehler */ }
+    }
   }
 
   async function markActiveRead() {
@@ -690,6 +704,11 @@ async function main() {
     appEl.classList.add('chat-open');
     emptyStateEl.classList.remove('show');
     chatPanelEl.classList.remove('hidden-empty');
+    // Direktlink für diesen Chat in die URL — Navigation dorthin (Teilen,
+    // Lesezeichen, Vor-/Zurück-Button) siehe buildChatHashRoute()/
+    // parseChatHash() (chat-lib.mjs) und den hashchange-Listener unten.
+    const targetHash = buildChatHashRoute(fp);
+    if (location.hash !== targetHash) location.hash = targetHash;
 
     // Erst NACH ensureRoom() (das den Kontakt-Userspace synct, siehe dort)
     // nach dem Avatar fragen — vorher lokal nachzusehen würde bei einem
@@ -713,8 +732,29 @@ async function main() {
     appEl.classList.remove('chat-open');
     emptyStateEl.classList.add('show');
     chatPanelEl.classList.add('hidden-empty');
+    if (location.hash) location.hash = '';
   }
   backBtn.addEventListener('click', closeContact);
+
+  /** Ein Chat wird über seinen Direktlink (`#<fingerprint>`, siehe buildChatHashRoute()) geöffnet — im Gegensatz zum Einladungslink (`#add=...`) ohne Zwischenschritt: die Kontaktliste wird bei Bedarf (Alias per qu.getProfile()) automatisch ergänzt, genau wie handleInboxRequest() es für einen remote gestarteten Chat schon tut. */
+  async function openContactByHash(fp) {
+    if (fp === qu.fingerprint) return;
+    if (!contactByFp(fp)) {
+      let alias = shortFp(fp);
+      try { alias = (await qu.getProfile(fp)).alias ?? alias; } catch { /* Profil (noch) nicht synct — Fallback bleibt der Fingerprint, aliasFor()/ensureRoom() holen es später live nach */ }
+      upsertContact(fp, { alias, lastTs: 0, unread: 0 });
+      renderContactList();
+    }
+    openContact(fp);
+  }
+
+  // Direktlinks/Vor-Zurück: `#<fingerprint>` öffnet den Chat, ein leerer
+  // Hash (z. B. über den Zurück-Button oder Browser-"Zurück") schließt ihn.
+  window.addEventListener('hashchange', () => {
+    const chatFp = parseChatHash(location.hash);
+    if (chatFp) { if (activeFp !== chatFp) openContactByHash(chatFp); return; }
+    if (!location.hash && activeFp) closeContact();
+  });
 
   // --- Senden ---
   let pendingFiles = [];
@@ -785,6 +825,7 @@ async function main() {
     pendingAvatar = undefined;
     setAvatar(avatarPreviewBtn, myAlias, myAvatar);
     profileModal.hidden = false;
+    refreshPushUI();
   });
   $('profile-cancel-btn').addEventListener('click', () => { profileModal.hidden = true; });
   profileModal.addEventListener('click', (ev) => { if (ev.target === profileModal) profileModal.hidden = true; });
@@ -826,6 +867,112 @@ async function main() {
     else { await navigator.clipboard.writeText(link).catch(() => {}); }
   });
 
+  // --- Push-Benachrichtigungen (Web Push — relay/webpush.mjs + sw.js) ---
+  // Ganz bewusst NICHT ungefragt beim Laden angeboten (Notification.
+  // requestPermission() aus dem Nichts ist die Art Prompt, die die
+  // meisten Nutzer:innen sofort wegklicken) — nur über den expliziten
+  // Button im Profil, ein echter Nutzer-Klick. `pushToggleBtn`s Label und
+  // `pushStatusEl`s Text spiegeln IMMER den echten Zustand (nicht
+  // unterstützt/blockiert/aus/aktiv), nie nur "an, weil wir's mal
+  // versucht haben".
+  const pushToggleBtn = $('push-toggle-btn');
+  const pushStatusEl = $('push-status');
+  const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined';
+  let vapidPublicKey; // undefined = noch nicht abgefragt, null = Server hat kein Push konfiguriert
+  let swRegistration = null;
+
+  function urlBase64ToUint8Array(base64url) {
+    const base64 = (base64url + '='.repeat((4 - (base64url.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(base64);
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  }
+
+  /** `overrideStatus`, wenn gesetzt, ersetzt nur den Statustext (z. B. eine Fehlermeldung aus dem Klick-Handler unten) — sonst würde dieser Aufruf im `finally` des Klick-Handlers eine gerade erst gezeigte Fehlermeldung sofort wieder mit dem generischen "Aus."/"Aktiv" überschreiben. */
+  async function refreshPushUI(overrideStatus) {
+    if (!pushSupported) {
+      pushToggleBtn.disabled = true;
+      pushToggleBtn.textContent = 'Nicht unterstützt';
+      pushStatusEl.textContent = overrideStatus ?? 'Dieser Browser unterstützt keine Web-Push-Benachrichtigungen.';
+      return;
+    }
+    if (Notification.permission === 'denied') {
+      pushToggleBtn.disabled = true;
+      pushToggleBtn.textContent = 'Blockiert';
+      pushStatusEl.textContent = overrideStatus ?? 'Benachrichtigungen sind für diese Seite in den Browser-Einstellungen blockiert.';
+      return;
+    }
+    const sub = swRegistration ? await swRegistration.pushManager.getSubscription() : null;
+    pushToggleBtn.disabled = false;
+    pushToggleBtn.textContent = sub ? 'Deaktivieren' : 'Aktivieren';
+    pushStatusEl.textContent = overrideStatus ?? (sub ? 'Aktiv — du bekommst Nachrichten auch, wenn diese Seite geschlossen ist.' : 'Aus.');
+  }
+
+  /**
+   * Registriert (oder löscht, `subscription: null`) das Push-Abo beim
+   * Relay — ein ganz normaler signierter Write, keine eigene
+   * Protokoll-Nachricht: `push-subscription/<eigener Fingerprint>` ist ein
+   * Space wie jeder andere auch (relay.mjs mountet dieses eine Präfix
+   * dort auf einen NullAdapter, damit es beim Relay flüchtig bleibt statt
+   * für immer gespeichert zu werden — dieselbe Idee wie Presence, siehe
+   * dessen `reads`/`presence`-Pfade). `repl.sync()` danach (statt uns auf
+   * das fire-and-forget `pushTopics`-Push zu verlassen) garantiert, dass
+   * der Write das Relay auch WIRKLICH erreicht — derselbe Grund, aus dem
+   * ensureAlias() das für das eigene Profil schon macht.
+   */
+  async function publishPushSubscription(subscription) {
+    await qu.session.publish(`push-subscription/${qu.fingerprint}`, subscription);
+    await repl.sync({ topic: `push-subscription/${qu.fingerprint}` }).catch((e) => console.error('[chat] push subscription sync failed:', e));
+  }
+
+  /** Beim Laden (nicht nur beim Klick auf den Button): ein bereits erteiltes Abo erneut ans Relay melden — dessen Zuordnung ist rein flüchtig (siehe publishPushSubscription()s Doku), ein Browser rotiert eine Subscription außerdem gelegentlich selbst. */
+  async function initPush() {
+    if (!pushSupported) { refreshPushUI(); return; }
+    try {
+      swRegistration = await navigator.serviceWorker.register('./sw.js');
+    } catch (e) {
+      console.error('[chat] service worker registration failed:', e);
+      refreshPushUI();
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      const sub = await swRegistration.pushManager.getSubscription();
+      if (sub) publishPushSubscription(sub.toJSON()).catch((e) => console.error('[chat] push re-register failed:', e));
+    }
+    refreshPushUI();
+  }
+
+  pushToggleBtn.addEventListener('click', async () => {
+    pushToggleBtn.disabled = true;
+    let errorStatus;
+    try {
+      const existing = swRegistration ? await swRegistration.pushManager.getSubscription() : null;
+      if (existing) {
+        await existing.unsubscribe();
+        await publishPushSubscription(null).catch(() => {});
+        return;
+      }
+      if (vapidPublicKey === undefined) {
+        vapidPublicKey = await fetch('/push/vapid-public-key').then((r) => r.json()).then((r) => r.publicKey).catch(() => null);
+      }
+      if (!vapidPublicKey) {
+        errorStatus = 'Push ist auf diesem Server nicht konfiguriert (QU_VAPID_PUBLIC_KEY fehlt).';
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') return;
+      const sub = await swRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) });
+      await publishPushSubscription(sub.toJSON());
+    } catch (e) {
+      console.error('[chat] push toggle failed:', e);
+      errorStatus = `Fehler: ${e.message}`;
+    } finally {
+      await refreshPushUI(errorStatus);
+      pushToggleBtn.disabled = false;
+    }
+  });
+
+  initPush();
+
   // --- Kontakt-hinzufügen-Modal ---
   const addContactModal = $('add-contact-modal');
   const contactFpInput = $('contact-fp-input');
@@ -856,12 +1003,20 @@ async function main() {
     openContact(fp);
   });
 
-  // Einladungslink (#add=<fingerprint>) direkt beim Laden verarbeiten.
+  // Einladungslink (#add=<fingerprint>) direkt beim Laden verarbeiten —
+  // history.replaceState() räumt den `#add=...`-Hash IMMER zuerst weg
+  // (auch im Modal-Fall, in dem noch gar kein Chat-Hash gesetzt wird),
+  // damit ein anschließendes openContact() unten nicht seinen eigenen,
+  // gerade erst gesetzten Chat-Hash (`#<fingerprint>`) wieder verliert.
   const invitedFp = parseInviteHash(location.hash);
   if (invitedFp && invitedFp !== qu.fingerprint) {
+    history.replaceState(null, '', location.pathname);
     if (!contactByFp(invitedFp)) openAddContactModal(invitedFp);
     else openContact(invitedFp);
-    history.replaceState(null, '', location.pathname);
+  } else {
+    // Direktlink zu einem Chat (#<fingerprint>, siehe buildChatHashRoute()).
+    const chatFp = parseChatHash(location.hash);
+    if (chatFp && chatFp !== qu.fingerprint) openContactByHash(chatFp);
   }
 
   // --- Start ---
