@@ -580,6 +580,13 @@ async function main() {
           img.src = url;
           img.alt = manifest.name;
           img.addEventListener('click', () => openLightbox(url));
+          // `mime` mit "image/" reicht nicht, um Anzeigbarkeit zu
+          // garantieren — vor allem Foto-Uploads von Smartphones sind oft
+          // HEIC/HEIF, was so gut wie kein Browser in <img> dekodieren
+          // kann. Ein fehlgeschlagenes <img> zeigt sonst nur seinen
+          // alt-Text (hier: der Dateiname) an, ganz ohne sichtbaren
+          // Fehler — genau das sah wie "nur der Name, kein Bild" aus.
+          img.addEventListener('error', () => downloadFallback('Dieses Bildformat kann im Browser nicht angezeigt werden (z. B. HEIC/HEIF von einem Smartphone).'));
           wrap.appendChild(img);
         } else if (kind === 'video') {
           const video = document.createElement('video');
