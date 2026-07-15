@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d12" />
+  <title>QU — 1:1 Chat</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <aside id="sidebar" class="sidebar">
+      <header class="sidebar-header">
+        <button id="me-avatar" class="avatar" type="button" title="Eigenes Profil"></button>
+        <div class="me-info">
+          <div class="me-name" id="me-name">…</div>
+          <div class="me-fp" id="me-fp-short">…</div>
+        </div>
+        <button id="add-contact-btn" class="icon-btn" type="button" title="Kontakt hinzufügen">+</button>
+      </header>
+      <div id="status-bar" class="status-bar">Verbinde …</div>
+      <ul id="contact-list" class="contact-list"></ul>
+    </aside>
+
+    <section id="chat-panel" class="chat-panel hidden-empty">
+      <header class="chat-header">
+        <button id="back-btn" class="back-btn" type="button">&larr;</button>
+        <button id="peer-avatar" class="avatar" type="button"></button>
+        <div class="chat-peer-info">
+          <div class="chat-peer-name" id="peer-name">…</div>
+          <div class="chat-peer-status" id="peer-status">…</div>
+        </div>
+      </header>
+
+      <ul id="message-list" class="message-list"></ul>
+
+      <div id="pending-files" class="pending-files"></div>
+      <form id="composer" class="composer">
+        <button id="emoji-btn" class="icon-btn" type="button" title="Emoji">😊</button>
+        <div id="emoji-picker" class="emoji-picker" hidden></div>
+        <button id="attach-btn" class="icon-btn" type="button" title="Anhang">📎</button>
+        <input id="file-input" type="file" multiple hidden accept="image/*,video/*,audio/*" />
+        <textarea id="text-input" rows="1" placeholder="Nachricht schreiben …"></textarea>
+        <button id="send-btn" class="send-btn" type="submit" title="Senden">&#10148;</button>
+      </form>
+    </section>
+
+    <div id="empty-state" class="empty-state show">
+      <div class="glyph">💬</div>
+      <p>Wähle einen Kontakt aus, oder füge einen über dessen Fingerprint hinzu.</p>
+    </div>
+  </div>
+
+  <!-- Eigenes Profil / Fingerprint teilen -->
+  <div id="profile-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <h2>Mein Profil</h2>
+      <label for="alias-input">Anzeigename</label>
+      <input type="text" id="alias-input" maxlength="40" />
+      <label>Mein Fingerprint (den geben Kontakte ein, um dich hinzuzufügen)</label>
+      <div class="fp-display" id="my-fp-full">…</div>
+      <p class="modal-hint">Diese Adresse ist deine gesamte Identität — sie wird lokal auf diesem Gerät erzeugt, niemals irgendwohin hochgeladen.</p>
+      <div class="modal-actions">
+        <button id="copy-fp-btn" class="btn btn-secondary" type="button">Fingerprint kopieren</button>
+        <button id="share-link-btn" class="btn btn-secondary" type="button">Einladungslink teilen</button>
+      </div>
+      <div class="modal-actions">
+        <button id="profile-cancel-btn" class="btn btn-secondary" type="button">Schließen</button>
+        <button id="profile-save-btn" class="btn btn-primary" type="button">Speichern</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Kontakt hinzufügen -->
+  <div id="add-contact-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <h2>Kontakt hinzufügen</h2>
+      <label for="contact-fp-input">Fingerprint des Kontakts</label>
+      <input type="text" id="contact-fp-input" placeholder="24 Hex-Zeichen" autocomplete="off" autocapitalize="off" spellcheck="false" />
+      <label for="contact-alias-input">Anzeigename (optional — sonst der Alias des Kontakts)</label>
+      <input type="text" id="contact-alias-input" maxlength="40" />
+      <div class="modal-error" id="add-contact-error"></div>
+      <div class="modal-actions">
+        <button id="add-contact-cancel-btn" class="btn btn-secondary" type="button">Abbrechen</button>
+        <button id="add-contact-save-btn" class="btn btn-primary" type="button">Hinzufügen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lightbox: Vollbild + Zoom für Bilder -->
+  <div id="lightbox" class="lightbox" hidden>
+    <button id="lightbox-close" class="lightbox-close" type="button">&times;</button>
+    <img id="lightbox-img" src="" alt="" />
+    <div class="lightbox-hint">Tippen zum Zoomen</div>
+  </div>
+
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
