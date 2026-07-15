@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isValidFingerprint, normalizeFingerprint, dmRoomId, shortFp, fmtBytes,
+  isValidFingerprint, normalizeFingerprint, dmRoomId, inboxId, shortFp, fmtBytes,
   fmtTime, fmtDayLabel, linkify, mediaKind, sortContactsByActivity,
   buildInviteLink, parseInviteHash,
 } from './chat-lib.mjs';
@@ -28,6 +28,12 @@ test('dmRoomId() is order-independent and deterministic', () => {
 
 test('dmRoomId() rejects invalid fingerprints', () => {
   assert.throws(() => dmRoomId(FP_A, 'not-a-fingerprint'));
+});
+
+test('inboxId()', () => {
+  assert.equal(inboxId(FP_A), `inbox-${FP_A}`);
+  assert.equal(inboxId(FP_A.toUpperCase()), `inbox-${FP_A}`);
+  assert.throws(() => inboxId('not-a-fingerprint'));
 });
 
 test('shortFp()', () => {

@@ -12,7 +12,7 @@ import {
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
-  dmRoomId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
+  dmRoomId, inboxId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
   linkify, mediaKind, sortContactsByActivity, buildInviteLink, parseInviteHash,
 } from './chat-lib.mjs';
 
@@ -48,9 +48,33 @@ const addContactBtn = $('add-contact-btn');
 function initialsOf(name) {
   return (name || '?').trim().slice(0, 2).toUpperCase();
 }
-function setAvatar(el, name) {
-  el.textContent = '';
-  el.append(initialsOf(name));
+function setAvatar(target, name, avatarDataUrl) {
+  const dot = target.querySelector('.dot'); // Online-Punkt überlebt einen Avatar-Wechsel
+  target.textContent = '';
+  if (avatarDataUrl) {
+    const img = document.createElement('img');
+    img.src = avatarDataUrl;
+    img.alt = '';
+    img.style.cssText = 'width:100%;height:100%;border-radius:50%;object-fit:cover;';
+    target.appendChild(img);
+  } else {
+    target.append(initialsOf(name));
+  }
+  if (dot) target.appendChild(dot);
+}
+
+/** Ein hochgeladenes Bild client-seitig auf ein kleines, quadratisches JPEG verkleinern — Profilbilder bleiben so ein paar KB groß, ganz ohne die File-Chunking-Pipeline (data/files/) für etwas, das immer sofort verfügbar sein soll wie `alias`. */
+async function resizeAvatar(file, size = 96) {
+  const bitmap = await createImageBitmap(file);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const scale = Math.max(size / bitmap.width, size / bitmap.height);
+  const w = bitmap.width * scale;
+  const h = bitmap.height * scale;
+  ctx.drawImage(bitmap, (size - w) / 2, (size - h) / 2, w, h);
+  return canvas.toDataURL('image/jpeg', 0.82);
 }
 function el(tag, className, text) {
   const n = document.createElement(tag);
@@ -145,6 +169,7 @@ async function main() {
   meFpShortEl.textContent = shortFp(qu.fingerprint, 10) + '…';
   setAvatar(meAvatarBtn, localStorage.getItem(ALIAS_KEY) || qu.fingerprint);
   let myAlias = localStorage.getItem(ALIAS_KEY) || `Ich-${qu.fingerprint.slice(0, 4)}`;
+  let myAvatar = null;
   meNameEl.textContent = myAlias;
   setAvatar(meAvatarBtn, myAlias);
 
@@ -194,8 +219,10 @@ async function main() {
     statusBar.textContent = 'Verbunden';
     statusBar.classList.remove('err');
     reconnectAttempt = 0;
-    // Nach jedem (Wieder-)Verbinden alle bereits bekannten Räume erneut
-    // abonnieren — eine neue repl-Instanz kennt keine vorherigen Topics.
+    // Nach jedem (Wieder-)Verbinden alle bereits bekannten Räume UND den
+    // eigenen Briefkasten (chat-lib.mjs's inboxId()) erneut abonnieren —
+    // eine neue repl-Instanz kennt keine vorherigen Topics.
+    repl.ensureSynced(`${inboxId(qu.fingerprint)}/requests`).catch((e) => console.error('[chat] inbox re-watch failed:', e));
     for (const [fp, roomId] of ensuredRoomIds) {
       repl.ensureSynced(roomId).catch((e) => console.error('[chat] re-watch failed:', fp, e));
     }
@@ -220,6 +247,17 @@ async function main() {
   myAlias = await ensureAlias();
   meNameEl.textContent = myAlias;
   setAvatar(meAvatarBtn, myAlias);
+  myAvatar = (await qu.get(`~${qu.fingerprint}/avatar`))?.value ?? null;
+  if (myAvatar) setAvatar(meAvatarBtn, myAlias, myAvatar);
+
+  // Eigenen Briefkasten abonnieren (siehe ensureRoom()s Ping unten) — ein
+  // von einem Kontakt remote gestarteter Chat taucht dadurch von selbst
+  // auf, ganz ohne dass wir ihn zuerst hinzugefügt haben müssten. Erst
+  // NACH connectToRelay() registrieren: `.map()`s Netzwerk-Subscribe
+  // (README, "ensureSynced() ... automatisch, sobald ein node.on/map
+  // aktiviert wird") braucht eine bereits aktive Verbindung, sonst läuft
+  // es beim allerersten Aufruf ins Leere.
+  qu.get(inboxId(qu.fingerprint)).get('requests').map((q) => handleInboxRequest(q));
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && !reconnecting && !channel.isOpen()) scheduleReconnect();
@@ -232,6 +270,7 @@ async function main() {
   const receiptsByRoom = new Map(); // fp -> { [fingerprint]: upToTs }
   const stopHeartbeatByRoom = new Map(); // fp -> stop()
   const aliasCache = new Map([[qu.fingerprint, myAlias]]);
+  const avatarCache = new Map(); // fp -> dataUrl | null (null = bekannt abwesend, nicht "noch nicht geprüft")
   let activeFp = null;
 
   async function aliasFor(fp) {
@@ -245,6 +284,34 @@ async function main() {
       aliasCache.set(fp, name);
       return name;
     } catch { return shortFp(fp); }
+  }
+
+  /**
+   * `~<fp>/avatar` — kein reservierter Profil-Pfad wie pub/epub/alias, aber
+   * genauso ein einzelner LWW-Wert (data-URL), kein Datei-Upload über die
+   * Chunking-Pipeline: ein Profilbild soll sofort da sein, sobald der Rest
+   * des Profils synct ist (siehe ensureRoom()'s `~${fp}`-Sync). Ein
+   * negatives Ergebnis wird bewusst NICHT im Cache gehalten — anders als
+   * `aliasFor()`s Fallback (der Fingerprint bleibt ohnehin immer als
+   * Anzeigename da) wäre "noch nicht synct" sonst nicht von "hat wirklich
+   * keins" zu unterscheiden, und ein zu früher Aufruf (bevor ensureRoom()
+   * den Kontakt-Userspace überhaupt gesynct hat) würde den fehlenden Wert
+   * dauerhaft einfrieren.
+   */
+  async function avatarFor(fp) {
+    if (fp === qu.fingerprint) return myAvatar;
+    const contact = contactByFp(fp);
+    if (contact?.avatar) return contact.avatar;
+    if (avatarCache.has(fp)) return avatarCache.get(fp);
+    try {
+      const q = await qu.get(`~${fp}/avatar`);
+      const url = q?.value ?? null;
+      if (url) {
+        avatarCache.set(fp, url);
+        if (contact) upsertContact(fp, { avatar: url });
+      }
+      return url;
+    } catch { return null; }
   }
 
   async function ensureRoom(fp) {
@@ -292,7 +359,30 @@ async function main() {
     receiptsByRoom.set(fp, await qu.getReadReceipts(roomId));
     renderPresence(fp, roomId);
     stopHeartbeatByRoom.set(fp, qu.startHeartbeat(roomId, { intervalMs: 8000 }));
+
+    // In den Briefkasten (chat-lib.mjs's inboxId()) des Kontakts schreiben,
+    // damit ein von UNS gestarteter Chat spätestens jetzt (nicht erst mit
+    // der ersten Nachricht) beim Kontakt auftaucht, ohne dass der uns
+    // zuerst selbst hätte hinzufügen müssen — der Briefkasten-Space bleibt
+    // bewusst manifestlos (siehe inboxId()s Doku: "kein Manifest = jeder
+    // darf schreiben"). `.get(qu.fingerprint)` als fester Schlüssel: ein
+    // erneuter Ping (z. B. beim nächsten App-Start) überschreibt den alten
+    // statt eine wachsende Liste zu bilden.
+    qu.get(inboxId(fp)).get('requests').get(qu.fingerprint).put({ fromFp: qu.fingerprint, alias: myAlias, roomId })
+      .catch((e) => console.error('[chat] inbox ping failed:', fp, e));
+
     return roomId;
+  }
+
+  /** Reagiert auf einen eingehenden Briefkasten-Eintrag (siehe oben) — legt den Absender bei Bedarf als Kontakt an und stellt sicher, dass der Raum lokal existiert, ganz ohne dass die Nutzerin ihn vorher selbst hinzugefügt haben muss. */
+  function handleInboxRequest(q) {
+    const fromFp = q?.value?.fromFp;
+    if (!fromFp || fromFp === qu.fingerprint) return;
+    if (!contactByFp(fromFp)) {
+      upsertContact(fromFp, { alias: q.value.alias || shortFp(fromFp), lastTs: 0, unread: 0 });
+      renderContactList();
+    }
+    ensureRoom(fromFp).catch((e) => console.error('[chat] ensureRoom (inbox) failed:', fromFp, e));
   }
 
   function handleIncomingMessage(fp, roomId, q) {
@@ -371,9 +461,10 @@ async function main() {
       const li = el('li', `contact${activeFp === c.fp ? ' active' : ''}`);
       li.dataset.fp = c.fp;
       const avatar = el('div', 'avatar sm');
-      setAvatar(avatar, c.alias);
+      setAvatar(avatar, c.alias, c.avatar);
       avatar.appendChild(el('span', 'dot'));
       li.appendChild(avatar);
+      if (!c.avatar) avatarFor(c.fp).then((url) => { if (url) setAvatar(avatar, c.alias, url); });
 
       const body = el('div', 'contact-body');
       const top = el('div', 'contact-top');
@@ -415,6 +506,27 @@ async function main() {
         const blob = new Blob([bytes], { type: manifest.mime });
         const url = URL.createObjectURL(blob);
         status.remove();
+
+        // Name+MIME-Typ stehen immer im Manifest (data/files/manifest.js's
+        // publishFile() speichert beides beim Senden, siehe app.mjs's
+        // composer-Handler) — ein Downloadlink ist also IMMER möglich,
+        // auch wenn der Browser den konkreten Codec (z. B. HEVC/H.265 in
+        // vielen .mov-Dateien von Smartphone-Kameras) nicht abspielen kann.
+        function downloadFallback(note) {
+          wrap.textContent = '';
+          if (note) wrap.appendChild(el('div', 'attachment-progress', note));
+          const a = document.createElement('a');
+          a.className = 'attachment-file';
+          a.href = url;
+          a.download = manifest.name;
+          a.appendChild(el('span', 'file-ic', kind === 'video' ? '🎬' : kind === 'audio' ? '🎵' : '📄'));
+          const meta = el('div');
+          meta.appendChild(el('div', '', manifest.name));
+          meta.appendChild(el('div', 'file-meta', `${manifest.mime} · ${fmtBytes(manifest.size ?? bytes.length)}`));
+          a.appendChild(meta);
+          wrap.appendChild(a);
+        }
+
         if (kind === 'image') {
           const img = el('img', 'attachment-media');
           img.src = url;
@@ -427,23 +539,21 @@ async function main() {
           video.src = url;
           video.controls = true;
           video.playsInline = true;
+          // Manche Kamera-Videos (z. B. .mov mit HEVC) haben einen für den
+          // Browser unbekannten Codec, obwohl mime mit "video/" beginnt —
+          // dann liefert <video> nur einen error-Event, kein Bild. Statt
+          // eines stillen/leeren Players: sofort auf den Download
+          // umschalten, die Datei bleibt so nutzbar.
+          video.addEventListener('error', () => downloadFallback('Dieses Videoformat kann im Browser nicht abgespielt werden.'));
           wrap.appendChild(video);
         } else if (kind === 'audio') {
           const audio = document.createElement('audio');
           audio.src = url;
           audio.controls = true;
+          audio.addEventListener('error', () => downloadFallback('Dieses Audioformat kann im Browser nicht abgespielt werden.'));
           wrap.appendChild(audio);
         } else {
-          const a = document.createElement('a');
-          a.className = 'attachment-file';
-          a.href = url;
-          a.download = manifest.name;
-          a.appendChild(el('span', 'file-ic', '📄'));
-          const meta = el('div');
-          meta.appendChild(el('div', '', manifest.name));
-          meta.appendChild(el('div', 'file-meta', fmtBytes(manifest.size ?? bytes.length)));
-          a.appendChild(meta);
-          wrap.appendChild(a);
+          downloadFallback();
         }
       } catch (e) {
         status.textContent = `Fehler beim Laden (${e.message})`;
@@ -520,13 +630,22 @@ async function main() {
     activeFp = fp;
     const contact = contactByFp(fp);
     peerNameEl.textContent = contact?.alias ?? shortFp(fp);
-    setAvatar(peerAvatarEl, contact?.alias ?? fp);
+    setAvatar(peerAvatarEl, contact?.alias ?? fp, contact?.avatar);
     peerStatusEl.textContent = '…';
     appEl.classList.add('chat-open');
     emptyStateEl.classList.remove('show');
     chatPanelEl.classList.remove('hidden-empty');
 
+    // Erst NACH ensureRoom() (das den Kontakt-Userspace synct, siehe dort)
+    // nach dem Avatar fragen — vorher lokal nachzusehen würde bei einem
+    // gerade erst hinzugefügten Kontakt fast immer "keiner" liefern, weil
+    // schlicht noch nichts synct war.
     const roomId = await ensureRoom(fp);
+    if (!contact?.avatar) avatarFor(fp).then((url) => {
+      if (!url) return;
+      if (activeFp === fp) setAvatar(peerAvatarEl, contactByFp(fp)?.alias ?? fp, url);
+      renderContactList();
+    });
     renderPresence(fp, roomId);
     upsertContact(fp, { unread: 0 });
     renderContactList();
@@ -602,21 +721,44 @@ async function main() {
 
   // --- Profil-Modal ---
   const profileModal = $('profile-modal');
+  const avatarPreviewBtn = $('avatar-preview-btn');
+  const avatarInput = $('avatar-input');
+  let pendingAvatar; // undefined = unverändert, null = "entfernen", dataUrl = neu gewählt
   meAvatarBtn.addEventListener('click', () => {
     $('alias-input').value = myAlias;
     $('my-fp-full').textContent = qu.fingerprint;
+    pendingAvatar = undefined;
+    setAvatar(avatarPreviewBtn, myAlias, myAvatar);
     profileModal.hidden = false;
   });
   $('profile-cancel-btn').addEventListener('click', () => { profileModal.hidden = true; });
   profileModal.addEventListener('click', (ev) => { if (ev.target === profileModal) profileModal.hidden = true; });
+  $('avatar-pick-btn').addEventListener('click', () => avatarInput.click());
+  $('avatar-clear-btn').addEventListener('click', () => {
+    pendingAvatar = null;
+    setAvatar(avatarPreviewBtn, $('alias-input').value || myAlias);
+  });
+  avatarInput.addEventListener('change', async () => {
+    const file = avatarInput.files[0];
+    avatarInput.value = '';
+    if (!file) return;
+    try {
+      pendingAvatar = await resizeAvatar(file);
+      setAvatar(avatarPreviewBtn, $('alias-input').value || myAlias, pendingAvatar);
+    } catch (e) { console.error('[chat] avatar resize failed:', e); }
+  });
   $('profile-save-btn').addEventListener('click', async () => {
     const alias = $('alias-input').value.trim() || myAlias;
     myAlias = alias;
     localStorage.setItem(ALIAS_KEY, alias);
     meNameEl.textContent = alias;
-    setAvatar(meAvatarBtn, alias);
     aliasCache.set(qu.fingerprint, alias);
     await qu.publishProfile({ alias });
+    if (pendingAvatar !== undefined) {
+      myAvatar = pendingAvatar;
+      await qu.own.get('avatar').put(myAvatar); // `null` löscht (LWW-Register, wie jeder andere put())
+    }
+    setAvatar(meAvatarBtn, alias, myAvatar);
     await repl.sync({ topic: qu.userSpaceId }).catch((e) => console.error('[chat] self-profile sync failed:', e));
     profileModal.hidden = true;
   });
@@ -669,7 +811,11 @@ async function main() {
 
   // --- Start ---
   renderContactList();
-  for (const c of contacts) ensureRoom(c.fp).catch((e) => console.error('[chat] ensureRoom failed:', c.fp, e));
+  for (const c of contacts) {
+    ensureRoom(c.fp)
+      .then(() => { if (!c.avatar) avatarFor(c.fp).then((url) => { if (url) renderContactList(); }); })
+      .catch((e) => console.error('[chat] ensureRoom failed:', c.fp, e));
+  }
   window.addEventListener('beforeunload', () => { for (const stop of stopHeartbeatByRoom.values()) stop(); });
 }
 

@@ -76,6 +76,9 @@ button { font-family: inherit; }
   user-select: none;
 }
 .avatar.sm { width: 2rem; height: 2rem; font-size: 0.8rem; }
+.avatar.lg { width: 4.5rem; height: 4.5rem; font-size: 1.5rem; flex-shrink: 0; }
+.profile-avatar-row { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 0.5rem; }
+.profile-avatar-row .btn { display: block; margin-bottom: 0.4rem; font-size: 0.78rem; padding: 0.35rem 0.7rem; }
 .avatar .dot {
   position: absolute;
   right: -1px;

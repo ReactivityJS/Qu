@@ -55,6 +55,14 @@
   <div id="profile-modal" class="modal-backdrop" hidden>
     <div class="modal">
       <h2>Mein Profil</h2>
+      <div class="profile-avatar-row">
+        <button id="avatar-preview-btn" class="avatar lg" type="button" title="Avatar ändern"></button>
+        <div>
+          <button id="avatar-pick-btn" class="btn btn-secondary" type="button">Bild wählen</button>
+          <button id="avatar-clear-btn" class="btn btn-secondary" type="button">Entfernen</button>
+        </div>
+        <input type="file" id="avatar-input" accept="image/*" hidden />
+      </div>
       <label for="alias-input">Anzeigename</label>
       <input type="text" id="alias-input" maxlength="40" />
       <label>Mein Fingerprint (den geben Kontakte ein, um dich hinzuzufügen)</label>
