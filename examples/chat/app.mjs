@@ -225,6 +225,7 @@ async function main() {
     repl.ensureSynced(`${inboxId(qu.fingerprint)}/requests`).catch((e) => console.error('[chat] inbox re-watch failed:', e));
     for (const [fp, roomId] of ensuredRoomIds) {
       repl.ensureSynced(roomId).catch((e) => console.error('[chat] re-watch failed:', fp, e));
+      repl.ensureSynced(`~${fp}/avatar`).catch((e) => console.error('[chat] avatar re-watch failed:', fp, e));
     }
   }
 
@@ -337,6 +338,21 @@ async function main() {
     // frisch ist (z. B. nach einem Reload).
     await repl.sync({ topic: `~${fp}` }).catch((e) => console.error('[chat] peer profile sync failed:', fp, e));
     await repl.ensureSynced(roomId);
+
+    // Live-Abo auf den Avatar (nicht nur der einmalige Sync oben) — ändert
+    // ein Kontakt sein Profilbild, während der Chat schon offen ist, muss
+    // das sofort ankommen, genau wie Alias/Presence bereits live sind.
+    // `.on()` liefert per Default nur ZUKÜNFTIGE Änderungen (kein initial:
+    // true wie map(), core/space-handle.js's on()-Doku) — die aktuelle
+    // Anzeige oben (peer-avatar/Kontaktliste) speist sich weiterhin aus
+    // avatarFor()s einmaligem Abruf, dieses Abo hält sie danach aktuell.
+    qu.get(`~${fp}`).get('avatar').on((q) => {
+      const url = q?.value ?? null;
+      avatarCache.set(fp, url);
+      upsertContact(fp, { avatar: url });
+      if (activeFp === fp) setAvatar(peerAvatarEl, contactByFp(fp)?.alias ?? fp, url);
+      renderContactList();
+    });
 
     const manifest = await qu.get(roomId);
     if (!manifest) {
@@ -490,19 +506,51 @@ async function main() {
     const manifest = manifestQ.value;
     const kind = mediaKind(manifest.mime);
     const wrap = el('div', 'attachment');
-    const status = el('div', 'attachment-progress', 'wird geladen …');
+    let status = el('div', 'attachment-progress', 'wird geladen …');
     wrap.appendChild(status);
+
+    /** Zeigt einen Fehler + "Erneut versuchen"-Button statt eines kaputten Bild-/Player-Elements — z. B. wenn ein Chunk beim Absender/Relay (noch) nicht verfügbar ist. */
+    function showError(message) {
+      wrap.textContent = '';
+      wrap.appendChild(el('div', 'attachment-progress', message));
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'attachment-btn';
+      retry.textContent = 'Erneut versuchen';
+      retry.addEventListener('click', () => {
+        status = el('div', 'attachment-progress', 'wird geladen …');
+        wrap.textContent = '';
+        wrap.appendChild(status);
+        reveal();
+      });
+      wrap.appendChild(retry);
+    }
 
     async function reveal() {
       try {
-        const already = await fileTransfer.hasComplete(refId);
-        if (!already) {
-          const ready = await fileTransfer.waitUntilReady(refId, {
+        let complete = await fileTransfer.hasComplete(refId);
+        if (!complete) {
+          // waitUntilReady() fragt nur, ob der RELAY selbst inzwischen
+          // alle Chunks hat (vom Absender gespiegelt, siehe relay/relay.mjs's
+          // proaktives Mirroring) — überträgt dabei noch KEIN einziges Byte
+          // zu UNS. requestFile() ist der tatsächliche Download-Schritt und
+          // muss deshalb IMMER laufen, sobald überhaupt etwas fehlt — nicht
+          // nur, wenn waitUntilReady() "noch nicht bereit" meldet (das war
+          // der Bug: bei "bereit" wurde requestFile() übersprungen, wodurch
+          // reassembleFile() unten `null` lieferte und daraus ein kaputter
+          // Blob("null") statt eines Bildes/Videos entstand).
+          await fileTransfer.waitUntilReady(refId, {
             onProgress: () => { status.textContent = 'wird vom Absender übertragen …'; },
           });
-          if (!ready) await fileTransfer.requestFile(refId);
+          await fileTransfer.requestFile(refId, {
+            onProgress: ({ attempt, maxAttempts }) => { status.textContent = `Lädt … (${attempt}/${maxAttempts})`; },
+          });
+          complete = await fileTransfer.hasComplete(refId);
         }
+        if (!complete) { showError('Anhang ist (noch) nicht vollständig verfügbar.'); return; }
+
         const bytes = await reassembleFile(localFileStorage, manifest);
+        if (!bytes) { showError('Anhang konnte nicht zusammengesetzt werden.'); return; }
         const blob = new Blob([bytes], { type: manifest.mime });
         const url = URL.createObjectURL(blob);
         status.remove();
@@ -556,7 +604,7 @@ async function main() {
           downloadFallback();
         }
       } catch (e) {
-        status.textContent = `Fehler beim Laden (${e.message})`;
+        showError(`Fehler beim Laden (${e.message})`);
         console.error('[chat] attachment failed:', e);
       }
     }
