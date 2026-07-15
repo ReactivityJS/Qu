@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { Qu, createNetworkPlugin, createSpacesPlugin, createChatPlugin } from '../src/index.js';
+import { Qu, QuStore, MemoryAdapter, NullAdapter, createNetworkPlugin, createSpacesPlugin, createChatPlugin } from '../src/index.js';
 import { createWebSocketChannel } from '../src/network/transports/websocket-browser.js';
 import { createRelay } from '../relay/relay.mjs';
 import { bridgeWebSocketServer } from '../relay/node-ws-bridge.mjs';
@@ -16,7 +16,12 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * and exhaustively in relay/webpush.test.mjs; this file is purely about
  * relay.mjs's wiring: "an offline DM room member with a registered
  * subscription gets pushed at when a new message lands, everyone else
- * does not."
+ * does not" — AND that a subscription is registered the same way any
+ * other write is (an ordinary signed `qu.session.publish()` to
+ * `push-subscription/<fp>`, not a bespoke protocol message), so this
+ * suite also builds the `push-subscription/` NullAdapter mount itself,
+ * exactly as index.js's real deployment must (see relay.mjs's own doc
+ * comment on `sendPush`/`pushSubscriptions`).
  *
  * Every test below wraps its assertions in try/finally — an assertion
  * failure part-way through must still close its sockets/server, or the
@@ -29,7 +34,11 @@ async function startTestServer(sendPush) {
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
-  const relayApi = await createRelay({ allowDynamicSubscribe: true, sendPush, pushSubscriptions: new Map() });
+  const store = new QuStore([
+    { prefix: '', adapter: new MemoryAdapter() },
+    { prefix: 'push-subscription/', adapter: new NullAdapter(), replicate: false },
+  ]);
+  const relayApi = await createRelay({ store, allowDynamicSubscribe: true, sendPush, pushSubscriptions: new Map() });
   bridgeWebSocketServer(server, relayApi, { path: '/relay' });
   return { server, port, url: `ws://127.0.0.1:${port}/relay`, ...relayApi };
 }
@@ -38,6 +47,12 @@ async function closeAll(server, ...channels) {
   for (const ch of channels) await ch.close().catch(() => {});
   server.closeAllConnections?.();
   await new Promise((resolve) => server.close(resolve));
+}
+
+/** Exactly what examples/chat/app.mjs's publishPushSubscription() does. */
+async function registerPush(qu, repl, subscription) {
+  await qu.session.publish(`push-subscription/${qu.fingerprint}`, subscription);
+  await repl.sync({ topic: `push-subscription/${qu.fingerprint}` });
 }
 
 test('an offline DM member with a registered push subscription gets notified when a message arrives', async () => {
@@ -54,8 +69,7 @@ test('an offline DM member with a registered push subscription gets notified whe
     await chBRegister.connect();
     const replBRegister = await bob.connect(chBRegister, { pushTopics: [''] });
     const fakeSubscription = { endpoint: 'https://push.example.test/bob', keys: { p256dh: 'fake-p256dh', auth: 'fake-auth' } };
-    await chBRegister.send({ type: 'qu.push.subscribe', subscription: fakeSubscription });
-    await wait(50);
+    await registerPush(bob, replBRegister, fakeSubscription);
     replBRegister.close();
     await chBRegister.close();
     await wait(50);
@@ -96,8 +110,7 @@ test('an ONLINE DM member does not get pushed at (already receiving it live)', a
   try {
     await chB.connect();
     const replB = await bob.connect(chB, { pushTopics: [''] });
-    await chB.send({ type: 'qu.push.subscribe', subscription: { endpoint: 'https://push.example.test/bob-online', keys: { p256dh: 'x', auth: 'y' } } });
-    await wait(50);
+    await registerPush(bob, replB, { endpoint: 'https://push.example.test/bob-online', keys: { p256dh: 'x', auth: 'y' } });
 
     await chA.connect();
     const replA = await alice.connect(chA, { pushTopics: [''] });
@@ -127,8 +140,7 @@ test('a subscription is dropped after a 410 Gone from the push service', async (
   try {
     await chB.connect();
     const replB = await bob.connect(chB, { pushTopics: [''] });
-    await chB.send({ type: 'qu.push.subscribe', subscription: { endpoint: 'https://push.example.test/dead', keys: { p256dh: 'x', auth: 'y' } } });
-    await wait(50);
+    await registerPush(bob, replB, { endpoint: 'https://push.example.test/dead', keys: { p256dh: 'x', auth: 'y' } });
     replB.close();
     await chB.close();
     await wait(50);
@@ -147,5 +159,51 @@ test('a subscription is dropped after a 410 Gone from the push service', async (
     replA.close();
   } finally {
     await closeAll(server, chB, chA);
+  }
+});
+
+test('unsubscribing (publishing null) removes the stored subscription', async () => {
+  const { server, url, pushSubscriptions } = await startTestServer(async () => {});
+  const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin()).use(createChatPlugin());
+  const chB = createWebSocketChannel(url);
+  try {
+    await chB.connect();
+    const replB = await bob.connect(chB, { pushTopics: [''] });
+    // repl.sync()'s own Promise resolves once OUR side has caught up; the
+    // relay's reciprocal request-response (README, "ein Aufruf leert beide
+    // Richtungen") — the half that actually lands OUR write at the relay —
+    // is asynchronous and not itself awaited by that Promise. A short wait
+    // covers it, same as every other test in this file already needs.
+    await registerPush(bob, replB, { endpoint: 'https://push.example.test/bob', keys: { p256dh: 'x', auth: 'y' } });
+    await wait(100);
+    assert.equal(pushSubscriptions.has(bob.fingerprint), true);
+
+    await registerPush(bob, replB, null);
+    await wait(100);
+    assert.equal(pushSubscriptions.has(bob.fingerprint), false);
+  } finally {
+    await closeAll(server, chB);
+  }
+});
+
+test('nobody can register or overwrite a DIFFERENT fingerprint\'s push subscription', async () => {
+  const { server, url, pushSubscriptions } = await startTestServer(async () => {});
+  const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const mallory = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
+
+  const chM = createWebSocketChannel(url);
+  try {
+    await chM.connect();
+    const replM = await mallory.connect(chM, { pushTopics: [''] });
+    // Mallory tries to register a subscription under ALICE's fingerprint,
+    // not her own — the write-ACL (relay.mjs's push-subscription/<fp>
+    // resolver: writers = [fp] only) must reject it at ingest.
+    await mallory.session.publish(`push-subscription/${alice.fingerprint}`, { endpoint: 'https://push.example.test/hijacked', keys: { p256dh: 'x', auth: 'y' } });
+    await replM.sync({ topic: `push-subscription/${alice.fingerprint}` }).catch(() => {});
+    await wait(100);
+
+    assert.equal(pushSubscriptions.has(alice.fingerprint), false);
+  } finally {
+    await closeAll(server, chM);
   }
 });

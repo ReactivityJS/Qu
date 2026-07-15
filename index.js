@@ -80,6 +80,13 @@ const persistent = process.env.QU_STORE !== 'memory';
 const store = new QuStore([
   { prefix: '', adapter: persistent ? new FileSystemStorageAdapter(path.join(dataDir, 'qubits.ndjson')) : new MemoryAdapter() },
   { prefix: 'signal/', adapter: new NullAdapter() },
+  // `push-subscription/<fp>` (relay.mjs's sendPush hook + examples/chat/
+  // app.mjs): processed live (verify+ACL+dispatch run normally, see
+  // NullAdapter's own doc comment), never persisted as a QuBit, never
+  // forwarded to another peer (`replicate: false` — network/replication/
+  // default.js's isReplicable() check). `pushSubscriptions` below is
+  // relay.mjs's OWN, separate durability for what it needs to remember.
+  { prefix: 'push-subscription/', adapter: new NullAdapter(), replicate: false },
 ]);
 const fileStorage = persistent ? new FileSystemFileStorageAdapter(path.join(dataDir, 'files')) : new MemoryFileStorageAdapter();
 

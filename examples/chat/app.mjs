@@ -907,7 +907,24 @@ async function main() {
     pushStatusEl.textContent = overrideStatus ?? (sub ? 'Aktiv — du bekommst Nachrichten auch, wenn diese Seite geschlossen ist.' : 'Aus.');
   }
 
-  /** Beim Laden (nicht nur beim Klick auf den Button): ein bereits erteiltes Abo erneut ans Relay melden — die relay-seitige Zuordnung ist rein flüchtig innerhalb dieses Prozesses, bis eine neue 'qu.push.subscribe'-Nachricht kommt (persistiert wird sie erst serverseitig, siehe relay/persisted-map.mjs), ein Browser rotiert eine Subscription außerdem gelegentlich selbst. */
+  /**
+   * Registriert (oder löscht, `subscription: null`) das Push-Abo beim
+   * Relay — ein ganz normaler signierter Write, keine eigene
+   * Protokoll-Nachricht: `push-subscription/<eigener Fingerprint>` ist ein
+   * Space wie jeder andere auch (relay.mjs mountet dieses eine Präfix
+   * dort auf einen NullAdapter, damit es beim Relay flüchtig bleibt statt
+   * für immer gespeichert zu werden — dieselbe Idee wie Presence, siehe
+   * dessen `reads`/`presence`-Pfade). `repl.sync()` danach (statt uns auf
+   * das fire-and-forget `pushTopics`-Push zu verlassen) garantiert, dass
+   * der Write das Relay auch WIRKLICH erreicht — derselbe Grund, aus dem
+   * ensureAlias() das für das eigene Profil schon macht.
+   */
+  async function publishPushSubscription(subscription) {
+    await qu.session.publish(`push-subscription/${qu.fingerprint}`, subscription);
+    await repl.sync({ topic: `push-subscription/${qu.fingerprint}` }).catch((e) => console.error('[chat] push subscription sync failed:', e));
+  }
+
+  /** Beim Laden (nicht nur beim Klick auf den Button): ein bereits erteiltes Abo erneut ans Relay melden — dessen Zuordnung ist rein flüchtig (siehe publishPushSubscription()s Doku), ein Browser rotiert eine Subscription außerdem gelegentlich selbst. */
   async function initPush() {
     if (!pushSupported) { refreshPushUI(); return; }
     try {
@@ -919,7 +936,7 @@ async function main() {
     }
     if (Notification.permission === 'granted') {
       const sub = await swRegistration.pushManager.getSubscription();
-      if (sub) channel.send({ type: 'qu.push.subscribe', subscription: sub.toJSON() }).catch((e) => console.error('[chat] push re-register failed:', e));
+      if (sub) publishPushSubscription(sub.toJSON()).catch((e) => console.error('[chat] push re-register failed:', e));
     }
     refreshPushUI();
   }
@@ -931,7 +948,7 @@ async function main() {
       const existing = swRegistration ? await swRegistration.pushManager.getSubscription() : null;
       if (existing) {
         await existing.unsubscribe();
-        await channel.send({ type: 'qu.push.unsubscribe' }).catch(() => {});
+        await publishPushSubscription(null).catch(() => {});
         return;
       }
       if (vapidPublicKey === undefined) {
@@ -944,7 +961,7 @@ async function main() {
       const permission = await Notification.requestPermission();
       if (permission !== 'granted') return;
       const sub = await swRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) });
-      await channel.send({ type: 'qu.push.subscribe', subscription: sub.toJSON() });
+      await publishPushSubscription(sub.toJSON());
     } catch (e) {
       console.error('[chat] push toggle failed:', e);
       errorStatus = `Fehler: ${e.message}`;
