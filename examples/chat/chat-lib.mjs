@@ -43,6 +43,22 @@ export function dmRoomId(fingerprintA, fingerprintB) {
   return `dm-${x}-${y}`;
 }
 
+/**
+ * Der "Briefkasten"-Space eines Fingerprints — bewusst OHNE eigenes
+ * Manifest angelegt (bleibt dauerhaft im Bootstrap-Zustand von
+ * modules/spaces.js: "kein Manifest = jeder darf schreiben"), damit JEDE
+ * andere Identität dorthin einen Hinweis ablegen kann, ohne vorher vom
+ * Empfänger als Schreiber autorisiert worden zu sein — das ist genau der
+ * Mechanismus, der einen remote gestarteten Chat beim Empfänger auftauchen
+ * lässt, ohne dass der zuerst selbst denselben Kontakt hinzufügen müsste
+ * (siehe app.mjs's ensureRoom()/Inbox-Abo).
+ */
+export function inboxId(fingerprint) {
+  const fp = normalizeFingerprint(fingerprint);
+  if (!fp) throw new Error('[chat-lib] inboxId() braucht einen gültigen Fingerprint');
+  return `inbox-${fp}`;
+}
+
 /** Die ersten `n` Zeichen eines Fingerprints, für kompakte Anzeige (Avatar-Fallback, Kontaktliste). */
 export function shortFp(fingerprint, n = 8) {
   return fingerprint ? fingerprint.slice(0, n) : '';
