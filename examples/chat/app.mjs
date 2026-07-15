@@ -114,9 +114,16 @@ function insertAtCursor(textarea, text) {
   autoGrow();
 }
 
+const TEXTAREA_MAX_HEIGHT = 104;
 function autoGrow() {
   textInput.style.height = 'auto';
-  textInput.style.height = `${Math.min(textInput.scrollHeight, 104)}px`;
+  const overflows = textInput.scrollHeight > TEXTAREA_MAX_HEIGHT;
+  textInput.style.height = `${Math.min(textInput.scrollHeight, TEXTAREA_MAX_HEIGHT)}px`;
+  // Nur EINEN sichtbaren Scrollbalken zeigen, wenn wirklich mehr Text da
+  // ist, als selbst die max-height noch fasst — sonst reserviert der
+  // Browser (style.css's `overflow-y: hidden`-Default) schon bei einer
+  // einzelnen Zeile eine Scrollbar-Spur, obwohl gar nichts überläuft.
+  textInput.style.overflowY = overflows ? 'auto' : 'hidden';
 }
 textInput.addEventListener('input', autoGrow);
 
@@ -160,6 +167,10 @@ function upsertContact(fp, patch) {
 }
 function contactByFp(fp) {
   return contacts.find((c) => c.fp === fp) ?? null;
+}
+function removeContact(fp) {
+  contacts = contacts.filter((c) => c.fp !== fp);
+  saveContacts(contacts);
 }
 
 async function main() {
@@ -278,6 +289,7 @@ async function main() {
   const seenIdsByRoom = new Map(); // fp -> Set<id>  (Reconnect-Redelivery-sicher)
   const receiptsByRoom = new Map(); // fp -> { [fingerprint]: upToTs }
   const stopHeartbeatByRoom = new Map(); // fp -> stop()
+  const unsubsByRoom = new Map(); // fp -> Array<() => void>, siehe ensureRoom()/deleteContact()
   const aliasCache = new Map([[qu.fingerprint, myAlias]]);
   const avatarCache = new Map(); // fp -> dataUrl | null (null = bekannt abwesend, nicht "noch nicht geprüft")
   let activeFp = null;
@@ -330,12 +342,14 @@ async function main() {
     messagesByRoom.set(fp, []);
     seenIdsByRoom.set(fp, new Set());
 
-    qu.onMessage(roomId, (q) => handleIncomingMessage(fp, roomId, q));
-    qu.onPresenceChange(roomId, async () => renderPresence(fp, roomId));
-    qu.onReadReceipt(roomId, async () => {
+    const unsubs = [];
+    unsubsByRoom.set(fp, unsubs);
+    unsubs.push(qu.onMessage(roomId, (q) => handleIncomingMessage(fp, roomId, q)));
+    unsubs.push(qu.onPresenceChange(roomId, async () => renderPresence(fp, roomId)));
+    unsubs.push(qu.onReadReceipt(roomId, async () => {
       receiptsByRoom.set(fp, await qu.getReadReceipts(roomId));
       if (activeFp === fp) renderTicks(fp);
-    });
+    }));
 
     // Den Kontakt-Userspace (pub/epub/alias, immer öffentlich lesbar —
     // core/space.js's RESERVED_PROFILE_PATHS) VOR dem Raum selbst syncen:
@@ -354,13 +368,13 @@ async function main() {
     // true wie map(), core/space-handle.js's on()-Doku) — die aktuelle
     // Anzeige oben (peer-avatar/Kontaktliste) speist sich weiterhin aus
     // avatarFor()s einmaligem Abruf, dieses Abo hält sie danach aktuell.
-    qu.get(`~${fp}`).get('avatar').on((q) => {
+    unsubs.push(qu.get(`~${fp}`).get('avatar').on((q) => {
       const url = q?.value ?? null;
       avatarCache.set(fp, url);
       upsertContact(fp, { avatar: url });
       if (activeFp === fp) setAvatar(peerAvatarEl, contactByFp(fp)?.alias ?? fp, url);
       renderContactList();
-    });
+    }));
 
     const manifest = await qu.get(roomId);
     if (!manifest) {
@@ -741,6 +755,39 @@ async function main() {
     if (location.hash) location.hash = '';
   }
   backBtn.addEventListener('click', closeContact);
+
+  /**
+   * Löscht einen Chat nur LOKAL — der Nachrichtenverlauf bleibt für den
+   * Kontakt selbst unangetastet (QU ist ein append-only Log, Whitepaper
+   * §7; "löschen" heißt hier "wir hören auf hinzuschauen", nicht "die
+   * Vergangenheit verschwindet für alle Beteiligten", genau wie bei
+   * jedem anderen 1:1-Chat auch). Räumt alles auf, was ensureRoom() für
+   * diesen Kontakt angelegt hat: laufende Live-Abos (unsubsByRoom),
+   * Presence-Heartbeat, und den gesamten Pro-Kontakt-Zustand — ein
+   * erneutes Öffnen (z. B. über einen Direktlink oder eine neue
+   * Nachricht vom Kontakt) ruft ensureRoom() einfach wieder frisch auf.
+   */
+  function deleteContact(fp) {
+    stopHeartbeatByRoom.get(fp)?.();
+    stopHeartbeatByRoom.delete(fp);
+    for (const off of unsubsByRoom.get(fp) ?? []) off();
+    unsubsByRoom.delete(fp);
+    messagesByRoom.delete(fp);
+    seenIdsByRoom.delete(fp);
+    receiptsByRoom.delete(fp);
+    ensuredRoomIds.delete(fp);
+    avatarCache.delete(fp);
+    aliasCache.delete(fp);
+    removeContact(fp);
+    if (activeFp === fp) closeContact();
+    renderContactList();
+  }
+  $('delete-chat-btn').addEventListener('click', () => {
+    if (!activeFp) return;
+    const alias = contactByFp(activeFp)?.alias ?? shortFp(activeFp);
+    if (!confirm(`Chat mit ${alias} löschen?\n\nDer Nachrichtenverlauf bleibt beim Kontakt erhalten, wird hier aber entfernt.`)) return;
+    deleteContact(activeFp);
+  });
 
   /** Ein Chat wird über seinen Direktlink (`#<fingerprint>`, siehe buildChatHashRoute()) geöffnet — im Gegensatz zum Einladungslink (`#add=...`) ohne Zwischenschritt: die Kontaktliste wird bei Bedarf (Alias per qu.getProfile()) automatisch ergänzt, genau wie handleInboxRequest() es für einen remote gestarteten Chat schon tut. */
   async function openContactByHash(fp) {

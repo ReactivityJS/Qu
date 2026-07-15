@@ -38,14 +38,22 @@ button { font-family: inherit; }
 .app {
   display: grid;
   grid-template-columns: 340px 1fr;
-  height: 100dvh;
+  /* `vh` first, `dvh` second — NOT the other order: the cascade takes the
+     LAST valid declaration, so if `dvh` came first, the `vh` fallback
+     below it would win even in browsers that support `dvh`, permanently
+     shadowing it. `vh` doesn't shrink for the on-screen keyboard on most
+     mobile browsers, so with that (wrong) order the layout never
+     adjusted when the keyboard opened — header/composer ended up below
+     the fold, needing a scroll to reach either one. */
   height: 100vh;
+  height: 100dvh;
 }
 
 /* --- Sidebar / Kontaktliste --- */
 .sidebar {
   display: flex;
   flex-direction: column;
+  min-height: 0; /* a grid item's default min-height is `auto` (= "at least as tall as its content"), which would let .contact-list's own content grow the whole grid row instead of scrolling inside it */
   background: var(--panel);
   border-right: 1px solid var(--border);
   min-width: 0;
@@ -112,7 +120,7 @@ button { font-family: inherit; }
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 .icon-btn:active { transform: scale(0.94); }
 
-.contact-list { list-style: none; margin: 0; padding: 0.4rem; overflow-y: auto; flex: 1; }
+.contact-list { list-style: none; margin: 0; padding: 0.4rem; overflow-y: auto; flex: 1; min-height: 0; }
 .contact {
   display: flex;
   align-items: center;
@@ -148,7 +156,7 @@ button { font-family: inherit; }
 .empty-list button { color: var(--accent); background: none; border: none; text-decoration: underline; cursor: pointer; font-size: inherit; padding: 0; }
 
 /* --- Chat-Panel --- */
-.chat-panel { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.chat-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
 
 .chat-header {
   display: flex;
@@ -158,6 +166,7 @@ button { font-family: inherit; }
   padding-top: max(0.7rem, env(safe-area-inset-top));
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+  flex-shrink: 0; /* angeheftet — nie vom wachsenden message-list-Inhalt verdrängt, siehe .chat-panel's min-height:0 */
 }
 .back-btn { display: none; background: none; border: none; color: var(--text); font-size: 1.4rem; cursor: pointer; padding: 0 0.2rem; }
 .chat-peer-info { flex: 1; min-width: 0; }
@@ -170,6 +179,7 @@ button { font-family: inherit; }
   margin: 0;
   padding: 0.9rem;
   flex: 1;
+  min-height: 0; /* the actual fix for "header/composer only reachable after scrolling": without this, a flex item's default min-height (auto = at least content-sized) lets a long conversation grow .chat-panel itself instead of scrolling inside this list, pushing the composer off-screen */
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -240,11 +250,13 @@ button { font-family: inherit; }
   border-top: 1px solid var(--border);
   background: var(--panel);
   position: relative;
+  flex-shrink: 0; /* angeheftet, siehe .chat-header */
 }
 .composer textarea {
   flex: 1;
   resize: none;
   max-height: 6.5rem;
+  overflow-y: hidden; /* app.mjs's autoGrow() schaltet erst auf 'auto' um, sobald der Inhalt wirklich über max-height hinausgeht — sonst reserviert der Browser schon bei einer Zeile eine Scrollbar-Spur */
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -300,7 +312,7 @@ button { font-family: inherit; }
 }
 .emoji-picker button:hover { background: var(--border); }
 
-.pending-files { display: flex; gap: 0.4rem; flex-wrap: wrap; padding: 0 0.7rem 0.5rem; }
+.pending-files { display: flex; gap: 0.4rem; flex-wrap: wrap; padding: 0 0.7rem 0.5rem; flex-shrink: 0; }
 .pending-file { display: flex; align-items: center; gap: 0.3rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.25rem 0.5rem; font-size: 0.75rem; }
 .pending-file button { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 0.9rem; }
 
