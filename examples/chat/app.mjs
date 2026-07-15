@@ -439,7 +439,7 @@ async function main() {
     renderContactList();
 
     if (activeFp === fp) {
-      renderMessageList(fp);
+      appendLiveMessage(q);
       if (document.hasFocus()) markActiveRead();
     }
 
@@ -534,6 +534,26 @@ async function main() {
   }
 
   // --- Rendering: Chat-Panel ---
+
+  /** War die Liste (kurz bevor neuer Inhalt reinkommt) bereits am Ende? "Nahe dran" statt exakt — ein paar Pixel Toleranz für Rundungsfehler/Sub-Pixel-Scrollpositionen. */
+  function isNearBottom() {
+    return messageListEl.scrollHeight - messageListEl.scrollTop - messageListEl.clientHeight <= 60;
+  }
+
+  /**
+   * Nur dann ans Ende scrollen, wenn man SCHON dort war — sonst reißt
+   * jede neue Nachricht (oder ein nachträglich ladendes Bild/Video, das
+   * die Liste erst jetzt sichtbar wachsen lässt) jemanden aus der
+   * gerade gelesenen älteren Historie. Wird an zwei Stellen aufgerufen:
+   * beim Anhängen einer neuen Live-Nachricht (appendLiveMessage()) und
+   * innerhalb von renderAttachment(), sobald ein Anhang tatsächlich
+   * seine endgültige Höhe erreicht (Bild `load`, Video `loadedmetadata`,
+   * oder direkt nach dem Einfügen für Audio/Datei-Fallback).
+   */
+  function stickToBottomIfNeeded() {
+    if (isNearBottom()) messageListEl.scrollTop = messageListEl.scrollHeight;
+  }
+
   async function renderAttachment(refId) {
     const manifestQ = await qu.get(refId);
     if (!manifestQ) return el('div', 'attachment-progress', 'Anhang nicht gefunden');
@@ -607,6 +627,7 @@ async function main() {
           meta.appendChild(el('div', 'file-meta', `${manifest.mime} · ${fmtBytes(manifest.size ?? bytes.length)}`));
           a.appendChild(meta);
           wrap.appendChild(a);
+          stickToBottomIfNeeded();
         }
 
         if (kind === 'image') {
@@ -621,6 +642,11 @@ async function main() {
           // alt-Text (hier: der Dateiname) an, ganz ohne sichtbaren
           // Fehler — genau das sah wie "nur der Name, kein Bild" aus.
           img.addEventListener('error', () => downloadFallback('Dieses Bildformat kann im Browser nicht angezeigt werden (z. B. HEIC/HEIF von einem Smartphone).'));
+          // Die eigentliche Höhe steht erst nach `load` fest (vorher hat
+          // ein <img> ohne width/height keine intrinsische Größe) — genau
+          // der Moment, der die Liste sichtbar wachsen lässt, siehe
+          // stickToBottomIfNeeded()s Doku unten.
+          img.addEventListener('load', stickToBottomIfNeeded);
           wrap.appendChild(img);
         } else if (kind === 'video') {
           const video = document.createElement('video');
@@ -634,6 +660,7 @@ async function main() {
           // eines stillen/leeren Players: sofort auf den Download
           // umschalten, die Datei bleibt so nutzbar.
           video.addEventListener('error', () => downloadFallback('Dieses Videoformat kann im Browser nicht abgespielt werden.'));
+          video.addEventListener('loadedmetadata', stickToBottomIfNeeded);
           wrap.appendChild(video);
         } else if (kind === 'audio') {
           const audio = document.createElement('audio');
@@ -644,6 +671,7 @@ async function main() {
         } else {
           downloadFallback();
         }
+        stickToBottomIfNeeded();
       } catch (e) {
         showError(`Fehler beim Laden (${e.message})`);
         console.error('[chat] attachment failed:', e);
@@ -682,37 +710,58 @@ async function main() {
     return a;
   }
 
+  /** Baut genau ein `<li class="msg">` — geteilt zwischen dem vollständigen Neuaufbau (renderMessageList()) und dem Anhängen einer einzelnen neuen Live-Nachricht (appendLiveMessage()), damit beide garantiert dasselbe Markup erzeugen. */
+  async function buildMessageItem(q) {
+    const mine = q.writer === qu.fingerprint;
+    const li = el('li', `msg${mine ? ' mine' : ''}`);
+    li.dataset.ts = q.ts;
+    li.dataset.mine = mine ? '1' : '0';
+    const bubble = el('div', 'msg-bubble');
+    if (q.value?.text) {
+      const textEl = el('div', 'msg-text');
+      renderMessageText(textEl, q.value.text);
+      bubble.appendChild(textEl);
+      const preview = buildLinkPreview(q.value.text);
+      if (preview) bubble.appendChild(preview);
+    }
+    for (const refId of q.refs ?? []) {
+      bubble.appendChild(await renderAttachment(refId));
+    }
+    li.appendChild(bubble);
+    const meta = el('div', 'msg-meta');
+    meta.appendChild(document.createTextNode(fmtTime(q.ts)));
+    if (mine) meta.appendChild(el('span', 'tick', '✓'));
+    li.appendChild(meta);
+    return li;
+  }
+
+  let lastRenderedDay = null; // von renderMessageList() (Neuaufbau) UND appendLiveMessage() (einzelne neue Nachricht) gemeinsam gepflegter Tages-Trenner-Zustand der aktuell angezeigten Liste
+
   async function renderMessageList(fp) {
     messageListEl.textContent = '';
+    lastRenderedDay = null;
     const list = messagesByRoom.get(fp) ?? [];
-    let lastDay = null;
     for (const q of list) {
       const dayLabel = fmtDayLabel(q.ts);
-      if (dayLabel !== lastDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastDay = dayLabel; }
-      const mine = q.writer === qu.fingerprint;
-      const li = el('li', `msg${mine ? ' mine' : ''}`);
-      li.dataset.ts = q.ts;
-      li.dataset.mine = mine ? '1' : '0';
-      const bubble = el('div', 'msg-bubble');
-      if (q.value?.text) {
-        const textEl = el('div', 'msg-text');
-        renderMessageText(textEl, q.value.text);
-        bubble.appendChild(textEl);
-        const preview = buildLinkPreview(q.value.text);
-        if (preview) bubble.appendChild(preview);
-      }
-      for (const refId of q.refs ?? []) {
-        bubble.appendChild(await renderAttachment(refId));
-      }
-      li.appendChild(bubble);
-      const meta = el('div', 'msg-meta');
-      meta.appendChild(document.createTextNode(fmtTime(q.ts)));
-      if (mine) meta.appendChild(el('span', 'tick', '✓'));
-      li.appendChild(meta);
-      messageListEl.appendChild(li);
+      if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
+      messageListEl.appendChild(await buildMessageItem(q));
     }
+    // Ein frisch geöffneter Chat startet immer unten (neueste Nachricht),
+    // unabhängig vom bisherigen Scroll-Zustand — anders als
+    // appendLiveMessage() unten, das das bewusst NUR tut, wenn man schon
+    // dort war.
     messageListEl.scrollTop = messageListEl.scrollHeight;
     renderTicks(fp);
+  }
+
+  /** Hängt EINE neu eingetroffene Live-Nachricht an, statt die komplette Liste neu aufzubauen (kein erneutes Laden/Rendern schon vorhandener Anhänge bei jeder neuen Nachricht) — folgt dem Ende nur, wenn man vorher schon dort war (isNearBottom()), reißt also niemanden aus der gerade gelesenen älteren Historie. */
+  async function appendLiveMessage(q) {
+    const stick = isNearBottom();
+    const dayLabel = fmtDayLabel(q.ts);
+    if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
+    messageListEl.appendChild(await buildMessageItem(q));
+    if (stick) messageListEl.scrollTop = messageListEl.scrollHeight;
+    renderTicks(activeFp);
   }
 
   async function openContact(fp) {

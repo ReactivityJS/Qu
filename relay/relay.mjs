@@ -199,21 +199,49 @@ export async function createRelay({
   // later even after the uploader is gone. Pattern matches any single
   // space segment followed by "files/...", not tied to any specific app's
   // room-naming scheme.
-  relay.runtime.on('*/files/**', async (q) => {
+  //
+  // This is a ONE-SHOT attempt, triggered once at ingest time — which is
+  // exactly the gap this `pendingMirrors` bookkeeping closes: a real
+  // upload (a phone photo/video over a flaky mobile connection) can take
+  // long enough that the uploader disconnects mid-mirror, or hasn't even
+  // reconnected yet when their own file manifest QuBit arrives via a
+  // LATER sync from elsewhere. Without retrying, that file is stuck
+  // forever — a receiver's own requestFile() retries (data/files/
+  // transfer.js) are retrying against a relay that never actually got
+  // the chunks, so they can only ever fail the same way, repeatedly.
+  // `pendingMirrors` remembers which file ids from which uploader still
+  // need mirroring; attachChannel() below retries them the moment that
+  // uploader's fingerprint reconnects — no polling, no fixed retry
+  // schedule, just "try again the next time we plausibly can."
+  const pendingMirrors = new Map(); // fingerprint -> Set<qubit id>
+  const MAX_PENDING_MIRRORS_PER_UPLOADER = 200; // bounded, same reasoning as maxDynamicTopics above — one uploader shouldn't be able to grow this forever
+
+  async function mirrorFile(id, writer, fileTransfer) {
+    debug('relay', 'mirror-start', { id, writer });
+    try {
+      await fileTransfer.requestFile(id);
+      pendingMirrors.get(writer)?.delete(id);
+      debug('relay', 'mirror-complete', { id });
+    } catch (e) {
+      let pending = pendingMirrors.get(writer);
+      if (!pending) { pending = new Set(); pendingMirrors.set(writer, pending); }
+      if (pending.size < MAX_PENDING_MIRRORS_PER_UPLOADER) pending.add(id);
+      debug('relay', 'mirror-failed', { id, error: e.message });
+      console.error(`[Relay] failed to mirror ${id}:`, e.message);
+    }
+  }
+
+  relay.runtime.on('*/files/**', (q) => {
     if (q.ephemeral || !q.writer) return;
     const uploader = connected.get(q.writer);
     if (!uploader) {
       debug('relay', 'mirror-skip-uploader-offline', { id: q.id, writer: q.writer });
+      let pending = pendingMirrors.get(q.writer);
+      if (!pending) { pending = new Set(); pendingMirrors.set(q.writer, pending); }
+      if (pending.size < MAX_PENDING_MIRRORS_PER_UPLOADER) pending.add(q.id);
       return;
     }
-    debug('relay', 'mirror-start', { id: q.id, writer: q.writer });
-    try {
-      await uploader.fileTransfer.requestFile(q.id);
-      debug('relay', 'mirror-complete', { id: q.id });
-    } catch (e) {
-      debug('relay', 'mirror-failed', { id: q.id, error: e.message });
-      console.error(`[Relay] failed to mirror ${q.id}:`, e.message);
-    }
+    mirrorFile(q.id, q.writer, uploader.fileTransfer);
   });
 
   /** Authenticates and attaches one Channel. Returns its proven peerFingerprint (or null if anonymous) and its per-connection DefaultFileTransfer. */
@@ -222,6 +250,17 @@ export async function createRelay({
     debug('relay', 'channel-attached', { channelId: channel.id, peerFingerprint });
     const fileTransfer = new DefaultFileTransfer(relay.runtime, channel, fileStorage);
     if (peerFingerprint) connected.set(peerFingerprint, { channel, fileTransfer });
+
+    // Retry any of THIS fingerprint's uploads the proactive mirror above
+    // couldn't finish earlier (they were offline, or the attempt failed
+    // mid-transfer) — see pendingMirrors' doc comment. Iterated as a copy
+    // (`[...pending]`) since mirrorFile() mutates the same Set it's
+    // iterating (deletes on success).
+    const pendingForThisUploader = peerFingerprint ? pendingMirrors.get(peerFingerprint) : null;
+    if (pendingForThisUploader?.size) {
+      debug('relay', 'mirror-retry-on-reconnect', { fingerprint: peerFingerprint, count: pendingForThisUploader.size });
+      for (const id of [...pendingForThisUploader]) mirrorFile(id, peerFingerprint, fileTransfer);
+    }
 
     // Generisches, geroutetes, ephemeres Event nach Fingerprint — dritte
     // Kategorie neben gespeicherten Daten (publish/append) und lokalen
