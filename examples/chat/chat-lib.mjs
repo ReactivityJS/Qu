@@ -81,6 +81,16 @@ export function fmtTime(ts) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+/** "1:05" / "12:03" — verstrichene Anrufdauer aus Sekunden, kein führendes Stunden-Segment unter einer Stunde (wie jeder Telefon-Timer). */
+export function fmtCallDuration(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return h > 0 ? `${h}:${mm}:${String(sec).padStart(2, '0')}` : `${mm}:${String(sec).padStart(2, '0')}`;
+}
+
 /** "Heute"/"Gestern"/"12.03.2026" — Tages-Trenner zwischen Nachrichtengruppen. `now` ist injizierbar, damit dies ohne Systemzeit-Abhängigkeit testbar bleibt. */
 export function fmtDayLabel(ts, now = Date.now()) {
   const d = new Date(ts);

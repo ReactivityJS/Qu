@@ -9,12 +9,13 @@
 import {
   createNetworkPlugin, createSpacesPlugin, createFileHandlerPlugin,
   createChatPlugin, createWebSocketChannel, IndexedDBFileStorageAdapter, reassembleFile,
+  createWebRTCPlugin, sendRoutedEvent, onRoutedEvent,
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
   dmRoomId, inboxId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
   linkify, mediaKind, sortContactsByActivity, buildInviteLink, parseInviteHash,
-  buildChatHashRoute, parseChatHash,
+  buildChatHashRoute, parseChatHash, fmtCallDuration,
 } from './chat-lib.mjs';
 
 const IDENTITY_KEY = 'qu-chat-identity';
@@ -44,6 +45,24 @@ const meAvatarBtn = $('me-avatar');
 const meNameEl = $('me-name');
 const meFpShortEl = $('me-fp-short');
 const addContactBtn = $('add-contact-btn');
+const audioCallBtn = $('audio-call-btn');
+const videoCallBtn = $('video-call-btn');
+const callOverlay = $('call-overlay');
+const callAvatarEl = $('call-avatar');
+const callPeerNameEl = $('call-peer-name');
+const callStatusEl = $('call-status');
+const callVideoArea = $('call-video-area');
+const callRemoteVideo = $('call-remote-video');
+const callLocalVideo = $('call-local-video');
+const callIncomingActions = $('call-incoming-actions');
+const callOutgoingActions = $('call-outgoing-actions');
+const callConnectedActions = $('call-connected-actions');
+const callAcceptBtn = $('call-accept-btn');
+const callDeclineBtn = $('call-decline-btn');
+const callCancelBtn = $('call-cancel-btn');
+const callHangupBtn = $('call-hangup-btn');
+const callMuteBtn = $('call-mute-btn');
+const callCameraBtn = $('call-camera-btn');
 
 // --- kleine DOM-Helfer ---
 function initialsOf(name) {
@@ -175,7 +194,7 @@ function removeContact(fp) {
 
 async function main() {
   const qu = await loadOrCreateIdentity(IDENTITY_KEY);
-  qu.use(createNetworkPlugin()).use(createSpacesPlugin()).use(createChatPlugin());
+  qu.use(createNetworkPlugin()).use(createSpacesPlugin()).use(createChatPlugin()).use(createWebRTCPlugin());
   // IndexedDB, nicht MemoryFileStorageAdapter — Anhänge (Bilder, Videos, …)
   // sollen nach dem ersten Herunterladen auch einen Reload überleben, statt
   // bei jedem Laden erneut vom Relay angefragt zu werden (renderAttachment()
@@ -222,11 +241,47 @@ async function main() {
   let fileTransfer;
   let reconnecting = false;
   let reconnectAttempt = 0;
+
+  // Anruf-Zustand (siehe der ausführliche Kommentar im Anruf-Abschnitt
+  // weiter unten) — hier oben deklariert, weil setupCallSignaling()
+  // schon beim ALLERERSTEN connectToRelay()-Aufruf gleich unten zuweist.
+  let webrtcManager = null;
+  // { peerFp, kind: 'audio'|'video', direction: 'incoming'|'outgoing',
+  //   state: 'ringing'|'connecting'|'connected', callerAlias, localStream,
+  //   remoteStream, pc, channel, startedAt, ringTimeout, timerInterval }
+  let activeCall = null;
+  const pendingCallDecisions = new Map(); // fp -> resolve(opts|null), ein Eintrag pro gerade klingelndem eingehendem Anruf
+  const RING_TIMEOUT_MS = 45_000;
   const ensuredRoomIds = new Map(); // fp -> roomId, schon abonniert/erstellt
 
+  function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
   async function connectToRelay() {
-    channel = createWebSocketChannel(relayUrl());
-    await channel.connect();
+    // Ein eigener, lokaler `attempt`-Channel statt direkt in `channel` zu
+    // schreiben — verhindert, dass ein GESCHEITERTER Versuch das
+    // weiterhin funktionierende alte `channel` überschreibt, und lässt
+    // uns den hängengebliebenen Versuch unten wirklich schließen statt
+    // ihn nur zu verwerfen.
+    const attempt = createWebSocketChannel(relayUrl());
+    try {
+      // `channel.connect()` selbst hat kein eingebautes Timeout — im
+      // schlimmsten Fall (Netz technisch "da", aber tot: Flugmodus-artige
+      // Situationen, ein Router, der Pakete kommentarlos verwirft) hängt
+      // der native WebSocket-Verbindungsversuch auf unbestimmte Zeit in
+      // CONNECTING, ohne je 'open' oder 'error' zu feuern. Ohne dieses
+      // Race bliebe `reconnecting` unten für immer `true` — kein
+      // Zeitüberschreitungs-Fehler bedeutet ohne dieses Race auch kein
+      // erneuter Versuch, jemals wieder, genau das Symptom "reconnect
+      // bleibt im Hintergrund hängen".
+      await Promise.race([
+        attempt.connect(),
+        wait(10000).then(() => { throw new Error('Zeitüberschreitung beim Verbindungsaufbau'); }),
+      ]);
+    } catch (e) {
+      attempt.close().catch(() => {});
+      throw e;
+    }
+    channel = attempt;
     // '' als Präfix (matcht jede Id) — Räume entstehen dynamisch per
     // Kontakt (dmRoomId()), ihre Id steht beim Verbinden nicht fest;
     // Gegenstück zum Relay's eigenem allowDynamicSubscribe (README,
@@ -246,6 +301,7 @@ async function main() {
       repl.ensureSynced(roomId).catch((e) => console.error('[chat] re-watch failed:', fp, e));
       repl.ensureSynced(`~${fp}/avatar`).catch((e) => console.error('[chat] avatar re-watch failed:', fp, e));
     }
+    setupCallSignaling(channel); // siehe Anruf-Abschnitt weiter unten — an JEDEN (neuen) Channel neu gebunden
   }
 
   function scheduleReconnect() {
@@ -256,10 +312,20 @@ async function main() {
     statusBar.textContent = `Verbindung getrennt — neuer Versuch in ${Math.round(delayMs / 1000)}s …`;
     statusBar.classList.add('err');
     setTimeout(async () => {
-      try { await connectToRelay(); } catch (e) {
+      let ok = false;
+      try { await connectToRelay(); ok = true; } catch (e) {
         console.error('[chat] reconnect failed:', e);
-        statusBar.textContent = `Wiederverbindung fehlgeschlagen: ${e.message}`;
+        statusBar.textContent = `Wiederverbindung fehlgeschlagen (${e.message})`;
       } finally { reconnecting = false; }
+      // Vorher brach die Retry-Schleife nach GENAU EINEM fehlgeschlagenen
+      // Versuch endgültig ab (kein erneutes scheduleReconnect() im
+      // Fehlerfall) — blieb die Seite danach im Hintergrund, ohne einen
+      // weiteren 'online'/visibilitychange-Trigger, war die Verbindung
+      // dauerhaft tot. `reconnecting` ist an dieser Stelle (nach der
+      // finally oben) garantiert schon wieder `false`, der Aufruf hier
+      // löst also wirklich einen neuen, länger zurückgestellten Versuch
+      // aus statt an der Guard-Prüfung oben abzuprallen.
+      if (!ok) scheduleReconnect();
     }, delayMs);
   }
 
@@ -1119,6 +1185,239 @@ async function main() {
     // Direktlink zu einem Chat (#<fingerprint>, siehe buildChatHashRoute()).
     const chatFp = parseChatHash(location.hash);
     if (chatFp && chatFp !== qu.fingerprint) openContactByHash(chatFp);
+  }
+
+  // --- Anruf (Audio/Video über WebRTC) ---
+  //
+  // Baut auf dem bereits im Framework vorhandenen WebRTC-Unterbau auf
+  // (src/network/webrtc-*.js) statt ihn neu zu erfinden: Perfect
+  // Negotiation, die Signalisierung über den Relay (core/routed-events.js's
+  // geroutete ephemere Events — "ein Anruf-Invite" ist dort wörtlich als
+  // Beispiel genannt) und die erneute QU-Handshake-Verifikation NACH dem
+  // WebRTC-Verbindungsaufbau (DTLS beweist nur Verschlüsselung, nicht WER
+  // am anderen Ende ist) sind dort schon fertig. Neu ist hier nur: echte
+  // Medien-Tracks auf GENAU dieselbe RTCPeerConnection legen, die
+  // createWebRTCChannel() für den QU-Datenkanal sowieso schon aufbaut
+  // (deren `peerConnection`-Getter ist laut eigenem Kommentar dort exakt
+  // für diese spätere A/V-Erweiterung gedacht) — das eingebaute
+  // `onnegotiationneeded` übernimmt die Neuverhandlung dafür automatisch,
+  // ganz ohne Zusatzcode. Plus die Anruf-eigene Oberfläche/State-Machine.
+  // (Zustandsvariablen selbst stehen bereits weiter oben, VOR dem ersten
+  // connectToRelay()-Aufruf — setupCallSignaling() weist ihnen dort schon
+  // zu, `let`/`const` sind bis zur eigenen Deklaration im "temporal dead
+  // zone", ein Zugriff davor wirft, anders als bei gehoisteten
+  // function-Deklarationen wie dieser hier.)
+
+  async function getLocalStream(kind) {
+    return navigator.mediaDevices.getUserMedia({ audio: true, video: kind === 'video' ? { facingMode: 'user' } : false });
+  }
+  function stopStream(stream) { stream?.getTracks().forEach((t) => t.stop()); }
+
+  function renderCallUI() {
+    if (!activeCall) { callOverlay.hidden = true; return; }
+    callOverlay.hidden = false;
+    const contact = contactByFp(activeCall.peerFp);
+    const name = contact?.alias ?? activeCall.callerAlias ?? shortFp(activeCall.peerFp);
+    callPeerNameEl.textContent = name;
+    setAvatar(callAvatarEl, name, contact?.avatar);
+
+    callIncomingActions.hidden = !(activeCall.state === 'ringing' && activeCall.direction === 'incoming');
+    callOutgoingActions.hidden = !(activeCall.state === 'ringing' && activeCall.direction === 'outgoing');
+    callConnectedActions.hidden = activeCall.state === 'ringing';
+    callCameraBtn.hidden = activeCall.kind !== 'video';
+
+    if (activeCall.state === 'ringing') {
+      callStatusEl.textContent = activeCall.direction === 'incoming'
+        ? `Eingehender ${activeCall.kind === 'video' ? 'Videoanruf' : 'Anruf'} …`
+        : 'Ruft an …';
+      callStatusEl.classList.remove('connected');
+    } else if (activeCall.state === 'connecting') {
+      callStatusEl.textContent = 'Verbinde …';
+      callStatusEl.classList.remove('connected');
+    } else {
+      callStatusEl.textContent = fmtCallDuration((Date.now() - activeCall.startedAt) / 1000);
+      callStatusEl.classList.add('connected');
+    }
+
+    callVideoArea.hidden = !(activeCall.kind === 'video' && activeCall.state !== 'ringing');
+  }
+
+  function startCallTimer() {
+    stopCallTimer();
+    activeCall.timerInterval = setInterval(() => { if (activeCall?.state === 'connected') renderCallUI(); }, 1000);
+  }
+  function stopCallTimer() { if (activeCall?.timerInterval) clearInterval(activeCall.timerInterval); }
+
+  /** Beendet den aktuell aktiven Anruf (egal in welchem Zustand) und räumt alles auf — `notifyPeer: false` nur, wenn die Gegenseite selbst schon aufgelegt/abgelehnt hat (sonst bekäme sie ihr eigenes Hangup-Event zurückgespiegelt). */
+  function endCall(reason, { notifyPeer = true } = {}) {
+    if (!activeCall) return;
+    console.log('[chat] call ended:', reason);
+    if (activeCall.ringTimeout) clearTimeout(activeCall.ringTimeout);
+    stopCallTimer();
+    if (notifyPeer) sendRoutedEvent(channel, activeCall.peerFp, 'call-hangup', {}).catch(() => {});
+    pendingCallDecisions.delete(activeCall.peerFp);
+    stopStream(activeCall.localStream);
+    activeCall.channel?.close().catch(() => {});
+    callRemoteVideo.srcObject = null;
+    callLocalVideo.srcObject = null;
+    activeCall = null;
+    renderCallUI();
+  }
+
+  /** Feuert für JEDE erfolgreich aufgebaute WebRTC-Direktverbindung (eingehend wie ausgehend, PeerConnectionManager.onConnect()) — hier wird aus "Datenkanal steht" ein echter Anruf: eigene Tracks drauflegen, auf die der Gegenseite warten. */
+  function onCallConnected(peerFp, rtcChannel) {
+    if (!activeCall || activeCall.peerFp !== peerFp) return;
+    activeCall.channel = rtcChannel;
+    const pc = rtcChannel.peerConnection;
+    activeCall.pc = pc;
+    activeCall.state = 'connecting'; // muss VOR der ersten connectionstatechange-Prüfung unten stehen — siehe deren Kommentar
+    if (activeCall.ringTimeout) { clearTimeout(activeCall.ringTimeout); activeCall.ringTimeout = null; }
+
+    for (const track of activeCall.localStream.getTracks()) pc.addTrack(track, activeCall.localStream);
+
+    pc.addEventListener('track', (ev) => {
+      if (!activeCall || activeCall.pc !== pc) return;
+      activeCall.remoteStream = ev.streams[0];
+      callRemoteVideo.srcObject = activeCall.remoteStream;
+    });
+    const onConnectionStateChange = () => {
+      if (!activeCall || activeCall.pc !== pc) return;
+      if (pc.connectionState === 'connected' && activeCall.state !== 'connected') {
+        activeCall.state = 'connected';
+        activeCall.startedAt = Date.now();
+        startCallTimer();
+        renderCallUI();
+      } else if (['failed', 'disconnected', 'closed'].includes(pc.connectionState) && activeCall.state !== 'ended') {
+        // "disconnected" kann sich bei WebRTC von selbst wieder erholen
+        // (kurzer Netzwerk-Hänger) — nur "failed"/"closed" hier wirklich
+        // als Gesprächsende behandeln, sonst legt eine kurze Funklücke
+        // sofort und unnötig auf.
+        if (pc.connectionState === 'disconnected') return;
+        endCall(`connection-${pc.connectionState}`, { notifyPeer: pc.connectionState === 'failed' });
+      }
+    };
+    pc.addEventListener('connectionstatechange', onConnectionStateChange);
+    // pc erreicht "connected" schon während der ERSTEN Aushandlung (nur
+    // Datenkanal, für den QU-Handshake) — der hiesige Listener wird erst
+    // NACH dem Handshake registriert (onCallConnected() läuft erst, wenn
+    // der PeerConnectionManager die Verbindung als aufgebaut meldet), kann
+    // den bereits vergangenen Übergang also verpassen. Einmal den
+    // aktuellen Stand direkt nachholen, statt nur auf künftige Events zu warten.
+    onConnectionStateChange();
+    rtcChannel.onClose(() => { if (activeCall?.peerFp === peerFp) endCall('peer-closed', { notifyPeer: false }); });
+
+    callLocalVideo.srcObject = activeCall.localStream;
+    renderCallUI();
+  }
+
+  async function startCall(peerFp, kind) {
+    if (activeCall) return; // schon in einem Gespräch — kein Anklopfen in diesem einfachen Ausbau
+    if (!webrtcManager) { statusBar.textContent = 'Nicht verbunden — Anruf gerade nicht möglich.'; return; }
+    activeCall = { peerFp, kind, direction: 'outgoing', state: 'ringing', callerAlias: myAlias, localStream: null, remoteStream: null, pc: null, channel: null, startedAt: null, timerInterval: null, ringTimeout: null };
+    renderCallUI();
+    activeCall.ringTimeout = setTimeout(() => { if (activeCall?.state === 'ringing') endCall('timeout'); }, RING_TIMEOUT_MS);
+    try {
+      sendRoutedEvent(channel, peerFp, 'call-invite', { callType: kind, callerAlias: myAlias }).catch(() => {});
+      const stream = await getLocalStream(kind);
+      if (!activeCall) { stopStream(stream); return; } // währenddessen schon wieder aufgelegt
+      activeCall.localStream = stream;
+      callLocalVideo.srcObject = stream;
+      await webrtcManager.connectDirect(peerFp, { pushTopics: [] });
+      // onCallConnected() (über onConnect() unten) übernimmt den Rest, sobald die Verbindung wirklich steht.
+    } catch (e) {
+      console.error('[chat] call failed:', e);
+      statusBar.textContent = `Anruf fehlgeschlagen: ${e.message}`;
+      endCall('error');
+    }
+  }
+
+  audioCallBtn.addEventListener('click', () => { if (activeFp) startCall(activeFp, 'audio'); });
+  videoCallBtn.addEventListener('click', () => { if (activeFp) startCall(activeFp, 'video'); });
+
+  callAcceptBtn.addEventListener('click', async () => {
+    if (!activeCall || activeCall.direction !== 'incoming') return;
+    const peerFp = activeCall.peerFp;
+    try {
+      const stream = await getLocalStream(activeCall.kind);
+      if (!activeCall || activeCall.peerFp !== peerFp) { stopStream(stream); return; } // z. B. während der Berechtigungsabfrage selbst abgelehnt/aufgelegt
+      activeCall.localStream = stream;
+      callLocalVideo.srcObject = stream;
+      activeCall.state = 'connecting';
+      renderCallUI();
+      pendingCallDecisions.get(peerFp)?.({ pushTopics: [] });
+      pendingCallDecisions.delete(peerFp);
+    } catch (e) {
+      console.error('[chat] accepting call failed (Mikrofon/Kamera verweigert?):', e);
+      pendingCallDecisions.get(peerFp)?.(null);
+      pendingCallDecisions.delete(peerFp);
+      sendRoutedEvent(channel, peerFp, 'call-decline', { reason: 'media-denied' }).catch(() => {});
+      endCall('media-denied', { notifyPeer: false });
+    }
+  });
+
+  callDeclineBtn.addEventListener('click', () => {
+    if (!activeCall) return;
+    pendingCallDecisions.get(activeCall.peerFp)?.(null);
+    pendingCallDecisions.delete(activeCall.peerFp);
+    sendRoutedEvent(channel, activeCall.peerFp, 'call-decline', {}).catch(() => {});
+    endCall('declined', { notifyPeer: false });
+  });
+
+  callCancelBtn.addEventListener('click', () => { endCall('local-cancel'); });
+  callHangupBtn.addEventListener('click', () => { endCall('local-hangup'); });
+
+  callMuteBtn.addEventListener('click', () => {
+    const track = activeCall?.localStream?.getAudioTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    callMuteBtn.classList.toggle('off', !track.enabled);
+    callMuteBtn.textContent = track.enabled ? '🎤' : '🔇';
+  });
+  callCameraBtn.addEventListener('click', () => {
+    const track = activeCall?.localStream?.getVideoTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    callCameraBtn.classList.toggle('off', !track.enabled);
+    callCameraBtn.textContent = track.enabled ? '📷' : '🚫';
+  });
+
+  /**
+   * An JEDEN (neuen) Relay-Channel neu gebunden — siehe connectToRelay(),
+   * ganz analog zu den anderen `on...`-Abos dort: eine neue Channel-
+   * Instanz kennt keine vorherigen Listener. Ein bereits laufendes
+   * Gespräch übersteht das unangetastet (dessen RTCPeerConnection/
+   * WebRTC-Channel hängt nicht am Relay-Channel, siehe onCallConnected()
+   * oben), nur NEUE eingehende Signale brauchen den frischen Manager.
+   */
+  function setupCallSignaling(currentChannel) {
+    webrtcManager = qu.webrtc(currentChannel, {
+      onIncomingConnection: (fromFp) => new Promise((resolve) => pendingCallDecisions.set(fromFp, resolve)),
+    });
+    webrtcManager.onConnect((peerFp, entry) => onCallConnected(peerFp, entry.channel));
+
+    onRoutedEvent(currentChannel, 'call-invite', (msg) => {
+      if (activeCall) { sendRoutedEvent(currentChannel, msg.from, 'call-decline', { reason: 'busy' }).catch(() => {}); return; }
+      const fromFp = msg.from;
+      const alias = contactByFp(fromFp)?.alias ?? msg.payload?.callerAlias ?? shortFp(fromFp);
+      activeCall = {
+        peerFp: fromFp, kind: msg.payload?.callType === 'video' ? 'video' : 'audio', direction: 'incoming', state: 'ringing',
+        callerAlias: alias, localStream: null, remoteStream: null, pc: null, channel: null, startedAt: null, timerInterval: null,
+        ringTimeout: setTimeout(() => {
+          if (activeCall?.peerFp === fromFp && activeCall.state === 'ringing') {
+            pendingCallDecisions.get(fromFp)?.(null);
+            pendingCallDecisions.delete(fromFp);
+            endCall('timeout', { notifyPeer: false });
+          }
+        }, RING_TIMEOUT_MS),
+      };
+      renderCallUI();
+    });
+    onRoutedEvent(currentChannel, 'call-decline', (msg) => {
+      if (activeCall?.peerFp === msg.from) endCall(msg.payload?.reason === 'busy' ? 'busy' : 'declined', { notifyPeer: false });
+    });
+    onRoutedEvent(currentChannel, 'call-hangup', (msg) => {
+      if (activeCall?.peerFp === msg.from) endCall('peer-hangup', { notifyPeer: false });
+    });
   }
 
   // --- Start ---

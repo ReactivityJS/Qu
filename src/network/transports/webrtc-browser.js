@@ -46,8 +46,24 @@ export function createWebRTCChannel({
   peerFingerprint,
   iceServers = DEFAULT_ICE_SERVERS,
   initialSignal = null,
+  // Wer erzeugt proaktiv den Datenkanal (und löst damit die erste
+  // Aushandlung aus)? Per Default die Fingerprint-Regel (Perfect
+  // Negotiation, für den unkoordinierten Fall: beide Seiten rufen
+  // z. B. gleichzeitig connectDirect() auf, ohne voneinander zu wissen —
+  // deterministisch anhand der Fingerprints, damit nicht beide einen
+  // Datenkanal aufmachen). ABER: kennt der Aufrufer die Rollen bereits
+  // eindeutig (z. B. PeerConnectionManager: "ich rufe selbst
+  // connectDirect() auf" vs. "ich reagiere auf ein bereits eingetroffenes
+  // Signal"), MUSS das Vorrang vor der Fingerprint-Regel haben — sonst
+  // kann die aufrufende Seite per Fingerprint zufällig "polite" sein,
+  // selbst nie proaktiv verbinden UND die Gegenseite (die rein reaktiv
+  // ist und nie selbst initiiert) ewig auf ein Signal warten lassen, das
+  // nie kommt (stiller Deadlock, ca. 50% der Anrufe je nach
+  // Fingerprint-Zufall).
+  initiator = null,
 } = {}) {
   const polite = isPolite(myFingerprint, peerFingerprint);
+  const shouldCreateDataChannel = initiator === null ? !polite : initiator;
   const pc = new RTCPeerConnection({ iceServers });
 
   let dc = null;
@@ -88,11 +104,10 @@ export function createWebRTCChannel({
     closeListeners.forEach((fn) => fn());
   }
 
-  // Nur die "unpolite" Seite erzeugt proaktiv den Datenkanal — die polite
-  // Seite empfängt ihn über ondatachannel. Deterministisch aus beiden
-  // Fingerprints, keine Koordinationsnachricht nötig.
-  if (!polite) wireDataChannel(pc.createDataChannel('qu'));
-  pc.ondatachannel = (ev) => { if (polite) wireDataChannel(ev.channel); };
+  // Nur eine Seite erzeugt proaktiv den Datenkanal — die andere empfängt
+  // ihn über ondatachannel (siehe shouldCreateDataChannel oben).
+  if (shouldCreateDataChannel) wireDataChannel(pc.createDataChannel('qu'));
+  pc.ondatachannel = (ev) => { if (!shouldCreateDataChannel) wireDataChannel(ev.channel); };
 
   // --- Perfect Negotiation (MDN-Referenzmuster) ---
   async function handleSignal(msg) {
@@ -121,8 +136,20 @@ export function createWebRTCChannel({
     }
   }
 
-  const offSignal = onRoutedEvent(signalingChannel, 'webrtc-signal', (msg) => { handleSignal(msg); });
-  if (initialSignal) handleSignal(initialSignal); // siehe Doku oben — der eigene Listener oben wurde zu spät registriert, um diese Nachricht selbst zu sehen
+  // handleSignal() awaitet intern (setRemoteDescription etc.) — ohne
+  // Serialisierung würde ein ICE-Kandidat, der kurz nach dem initialen
+  // Offer eintrifft, seinen eigenen handleSignal()-Aufruf schon starten
+  // (und addIceCandidate() aufrufen), BEVOR das await von
+  // setRemoteDescription() für das Offer fertig ist — "remote description
+  // was null". Eine simple Promise-Kette erzwingt strikt sequentielle
+  // Verarbeitung in Eintreffreihenfolge.
+  let signalChain = Promise.resolve();
+  function enqueueSignal(msg) {
+    signalChain = signalChain.then(() => handleSignal(msg));
+  }
+
+  const offSignal = onRoutedEvent(signalingChannel, 'webrtc-signal', (msg) => { enqueueSignal(msg); });
+  if (initialSignal) enqueueSignal(initialSignal); // siehe Doku oben — der eigene Listener oben wurde zu spät registriert, um diese Nachricht selbst zu sehen
 
   pc.onnegotiationneeded = async () => {
     try {

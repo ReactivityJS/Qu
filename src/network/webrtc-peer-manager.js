@@ -22,6 +22,7 @@ export class PeerConnectionManager {
   #router;
   #signalingChannel;
   #connections = new Map(); // peerFingerprint -> { channel, repl }
+  #pendingIncoming = new Set(); // peerFingerprint, während #onIncomingConnection()/#establish() noch laufen (siehe #handleIncoming())
   #offIncoming;
   #onIncomingConnection;
   #connectListeners = new Set();
@@ -47,14 +48,28 @@ export class PeerConnectionManager {
 
   async #handleIncoming(msg) {
     if (msg.type !== 'qu.route' || msg.event !== 'webrtc-signal' || !msg.from) return;
-    if (this.#connections.has(msg.from)) return; // schon verbunden/im Aufbau — die WebRTCChannel-eigene Signaling-Verarbeitung übernimmt ab hier
-    const opts = await this.#onIncomingConnection(msg.from);
-    if (!opts) { debug('webrtc-pm', 'incoming-declined', { from: msg.from }); return; }
+    // Schon verbunden ODER im Aufbau (inkl. noch klingelnd, d.h.
+    // #onIncomingConnection() hängt noch auf eine Nutzer-Entscheidung):
+    // ohne diese zweite Prüfung würde JEDER weitere ICE-Kandidat, der
+    // während des Klingelns eintrifft, hier erneut hereinkommen (derselbe
+    // `msg.from`, aber noch kein Eintrag in #connections) und
+    // #onIncomingConnection() ein weiteres Mal aufrufen — der Aufrufer
+    // (z. B. die Chat-App) würde seinen "Anruf annehmen"-Resolver dabei
+    // überschreiben, sodass beim tatsächlichen Annehmen der FALSCHE
+    // `initialSignal` (ein ICE-Kandidat statt des ursprünglichen SDP-
+    // Offers) an #establish() übergeben wird — genau das führte zu
+    // "remote description was null" in createWebRTCChannel().
+    if (this.#connections.has(msg.from) || this.#pendingIncoming.has(msg.from)) return;
+    this.#pendingIncoming.add(msg.from);
     try {
+      const opts = await this.#onIncomingConnection(msg.from);
+      if (!opts) { debug('webrtc-pm', 'incoming-declined', { from: msg.from }); return; }
       await this.#establish(msg.from, { ...opts, initialSignal: msg });
     } catch (e) {
       debug('webrtc-pm', 'incoming-failed', { from: msg.from, error: e.message });
       console.error('[PeerConnectionManager] incoming connection failed:', e);
+    } finally {
+      this.#pendingIncoming.delete(msg.from);
     }
   }
 
@@ -70,6 +85,14 @@ export class PeerConnectionManager {
       myFingerprint: this.#qu.fingerprint,
       peerFingerprint,
       initialSignal,
+      // #establish() weiß hier eindeutig, welche Rolle diese Seite hat:
+      // ohne initialSignal ruft DIESE Seite gerade selbst connectDirect()
+      // auf (= Initiator), MIT initialSignal reagieren wir auf ein
+      // bereits eingetroffenes Signal der Gegenseite (= die Gegenseite
+      // hat längst initiiert). Siehe createWebRTCChannel()s
+      // initiator-Doku für die Fingerprint-Zufalls-Falle, die das
+      // vermeidet.
+      initiator: !initialSignal,
     });
 
     await channel.connect(); // wartet auf offenen Datenkanal
