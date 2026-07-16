@@ -197,6 +197,12 @@ button { font-family: inherit; }
   padding: 0.5rem 0.7rem;
 }
 .msg.mine .msg-bubble { background: var(--bubble-out); border-bottom-left-radius: 16px; border-bottom-right-radius: 4px; }
+/* Kurzes Aufblitzen fürs Ansprung-Ziel aus der Suche (scrollToMessage() in app.mjs) — sonst ist in einer langen Historie nicht klar, WELCHE Nachricht gemeint war. */
+.msg-bubble.jump-highlight { animation: msg-jump-flash 1.6s ease-out; }
+@keyframes msg-jump-flash {
+  0%, 15% { box-shadow: 0 0 0 2px var(--accent-strong); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
 .msg-text { white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; }
 .msg-meta { display: flex; gap: 0.3rem; align-items: center; justify-content: flex-end; font-size: 0.68rem; color: var(--muted); margin-top: 0.2rem; }
 .msg-meta .tick { color: var(--muted); }
@@ -436,6 +442,69 @@ button { font-family: inherit; }
 .call-btn-secondary { background: #ffffff26; }
 .call-btn-secondary.off { background: var(--danger); }
 .call-btn:active { transform: scale(0.94); }
+
+/* --- Suche (über alle Chats hinweg) --- */
+.search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+.search-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  padding-top: max(0.7rem, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.search-header input {
+  flex: 1;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.5rem 0.9rem;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+.search-header input:focus { outline: none; border-color: var(--accent); }
+.search-filters {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.search-filter-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.search-filter-btn.active { background: var(--accent-strong); color: #06202b; border-color: var(--accent-strong); font-weight: 600; }
+.search-results { list-style: none; margin: 0; padding: 0.4rem; overflow-y: auto; flex: 1; min-height: 0; }
+.search-result {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.search-result:hover { background: var(--panel-2); }
+.search-result-body { flex: 1; min-width: 0; }
+.search-result-top { display: flex; justify-content: space-between; gap: 0.5rem; }
+.search-result-name { font-weight: 600; font-size: 0.88rem; }
+.search-result-time { font-size: 0.72rem; color: var(--muted); flex-shrink: 0; }
+.search-result-snippet { font-size: 0.82rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-result-snippet mark { background: var(--accent-strong); color: #06202b; border-radius: 3px; padding: 0 0.1rem; }
+.search-empty { color: var(--muted); font-size: 0.85rem; padding: 2rem 1.2rem; text-align: center; }
 
 /* --- Lightbox (Vollbild + Zoom) --- */
 .lightbox {
