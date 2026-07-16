@@ -9,7 +9,7 @@
 import {
   createNetworkPlugin, createSpacesPlugin, createFileHandlerPlugin,
   createChatPlugin, createWebSocketChannel, IndexedDBFileStorageAdapter, reassembleFile,
-  createWebRTCPlugin, sendRoutedEvent, onRoutedEvent,
+  createWebRTCPlugin, sendRoutedEvent, onRoutedEvent, enableConsoleDebug,
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
@@ -17,6 +17,18 @@ import {
   linkify, mediaKind, sortContactsByActivity, buildInviteLink, parseInviteHash,
   buildChatHashRoute, parseChatHash, fmtCallDuration,
 } from './chat-lib.mjs';
+
+// Anruf-Diagnose: jede Signaling-/ICE-/Verbindungs-Phase eines Anrufs
+// landet mit [webrtc:...]/[webrtc-pm:...]-Präfix in der Browser-Konsole
+// (core/debug.js) — welche Kandidaten gesammelt wurden (host/srflx/relay,
+// entscheidend für "geht's ohne TURN?"), ob ein Angebot/eine Antwort/ein
+// ICE-Kandidat je den anderen erreicht (Signaling-Phase) oder ob
+// Signaling durchläuft, aber die eigentliche P2P-Verbindung scheitert
+// (Verbindungs-Phase). Immer an, nicht nur zum manuellen Debuggen — ein
+// Nutzer, der Devtools öffnet (auch via chrome://inspect vom PC auf ein
+// Android-Handy), sieht so ohne Codeänderung, an welcher Phase ein
+// fehlgeschlagener Anruf tatsächlich hängt.
+enableConsoleDebug({ filter: ['webrtc', 'webrtc-pm'] });
 
 const IDENTITY_KEY = 'qu-chat-identity';
 const ALIAS_KEY = 'qu-chat-alias';
@@ -1071,6 +1083,44 @@ async function main() {
     const link = buildInviteLink(location.origin + location.pathname, qu.fingerprint);
     if (navigator.share) { await navigator.share({ title: 'QU Chat', text: `Schreib mir im Chat: ${link}` }).catch(() => {}); }
     else { await navigator.clipboard.writeText(link).catch(() => {}); }
+  });
+
+  /**
+   * "App zurücksetzen" — für den Fall, dass ein Update (Anruf-Code, ein
+   * Bugfix) im Browser nicht ankommt: alten Service Worker loswerden
+   * (`registration.update()` reicht bei einer bewusst NEUEN Version oft
+   * nicht, ein Browser prüft Byte-Gleichheit erst mit Verzögerung),
+   * CacheStorage leeren (heute ungenutzt von sw.js, defensiv trotzdem),
+   * den lokalen Anhang-Cache (IndexedDB, s. IndexedDBFileStorageAdapter
+   * oben) löschen — Dateien kommen bei Bedarf einfach erneut vom Relay —
+   * und JEDES localStorage-Feld AUSSER dem Identitäts-Schlüssel selbst
+   * (der private Schlüssel + Fingerprint sind das Einzige, dessen Verlust
+   * nicht einfach neu geladen werden kann). Ein Reload mit
+   * Cache-Busting-Query-Parameter erzwingt danach frische Netzwerk-Fetches
+   * für app.mjs/chat-lib.mjs/style.css statt eines evtl. gecachten Standes.
+   */
+  $('reset-app-btn').addEventListener('click', async () => {
+    if (!confirm('App zurücksetzen? Kontaktliste, Anzeigename und zwischengespeicherte Anhänge werden gelöscht. Dein Fingerprint (Identität) bleibt erhalten.')) return;
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+      await new Promise((resolve) => {
+        const req = indexedDB.deleteDatabase('qu-chat-files');
+        req.onsuccess = resolve; req.onerror = resolve; req.onblocked = resolve;
+      });
+      for (const key of Object.keys(localStorage)) {
+        if (key !== IDENTITY_KEY) localStorage.removeItem(key);
+      }
+    } catch (e) {
+      console.error('[chat] reset failed:', e);
+    }
+    location.href = `${location.pathname}?reset=${Date.now()}`;
   });
 
   // --- Push-Benachrichtigungen (Web Push — relay/webpush.mjs + sw.js) ---

@@ -270,6 +270,15 @@ export async function createRelay({
     // der eine adressierte, verbundene Fingerprint bekommt die Nachricht.
     const offSignaling = channel.onMessage((msg) => {
       if (msg?.type !== 'qu.route' || !msg.to) return;
+      // `kind`/`sdpType` NUR fürs Log ausgelesen (webrtc-signal-spezifisch,
+      // s. src/network/transports/webrtc-browser.js) — der Relay
+      // interpretiert `payload` sonst nirgends, das bleibt so; hilft aber
+      // beim Debuggen enorm zu sehen, ob z. B. ein Offer/Answer/ICE-
+      // Kandidat überhaupt beim Relay ankommt und weitergeleitet wird,
+      // getrennt davon, ob die eigentliche P2P-Verbindung danach klappt.
+      const kind = msg.event === 'webrtc-signal' ? msg.payload?.kind : undefined;
+      const sdpType = kind === 'sdp' ? msg.payload?.data?.type : undefined;
+      debug('relay', 'route-received', { to: msg.to, from: peerFingerprint, event: msg.event, kind, sdpType });
       const target = connected.get(msg.to);
       if (!target) {
         debug('relay', 'route-target-offline', { to: msg.to, from: peerFingerprint, event: msg.event });
@@ -279,7 +288,9 @@ export async function createRelay({
       // dieser Verbindung — ein eventuell mitgeschicktes `msg.from` wird
       // ignoriert, genau wie bei jedem anderen Schreibpfad hier (kein
       // Vertrauen auf eine Behauptung).
-      target.channel.send({ type: 'qu.route', to: msg.to, from: peerFingerprint, event: msg.event, payload: msg.payload }).catch((e) => {
+      target.channel.send({ type: 'qu.route', to: msg.to, from: peerFingerprint, event: msg.event, payload: msg.payload }).then(() => {
+        debug('relay', 'route-forwarded', { to: msg.to, from: peerFingerprint, event: msg.event, kind, sdpType });
+      }).catch((e) => {
         debug('relay', 'route-forward-failed', { to: msg.to, from: peerFingerprint, error: e.message });
       });
     });

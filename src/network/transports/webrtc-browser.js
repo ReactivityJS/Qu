@@ -24,6 +24,24 @@ function isPolite(myFingerprint, peerFingerprint) {
 }
 
 /**
+ * "host"/"srflx"/"relay"/"prflx" aus einem RTCIceCandidate — `.type` ist
+ * in modernen Browsern direkt gesetzt, der Regex-Fallback liest es aus
+ * dem rohen SDP-Kandidatenstring (`candidate:... typ <type> ...`), falls
+ * nicht. Zum Debuggen entscheidend: nur "host" gesammelt heißt "STUN hat
+ * nie geantwortet" (Firewall/Netzwerk blockiert UDP zum STUN-Server, oder
+ * der Server ist falsch/nicht erreichbar) — ohne mindestens EIN "srflx"
+ * (oder "relay") auf mindestens einer Seite kann eine Verbindung über
+ * getrennte Netzwerke hinweg (zwei Heim-NATs, Handy-Netz) gar nicht erst
+ * zustande kommen, unabhängig von TURN.
+ */
+function candidateType(candidate) {
+  if (!candidate) return null;
+  if (candidate.type) return candidate.type;
+  const m = /\btyp (\w+)/.exec(candidate.candidate ?? '');
+  return m ? m[1] : 'unknown';
+}
+
+/**
  * Erfüllt den bestehenden Channel-Contract (core/channel.js) — alles
  * darüber (DefaultReplication, DefaultFileTransfer, der QU-Handshake)
  * funktioniert unverändert, weil es nur diesen Contract kennt, nie
@@ -87,7 +105,7 @@ export function createWebRTCChannel({
   function wireDataChannel(channel) {
     dc = channel;
     dc.onopen = () => { debug('webrtc', 'datachannel-open', { peerFingerprint }); openResolve(); };
-    dc.onclose = () => { fireClose(); };
+    dc.onclose = () => { debug('webrtc', 'datachannel-close', { peerFingerprint }); fireClose(); };
     dc.onerror = (ev) => debug('webrtc', 'datachannel-error', { peerFingerprint, error: ev?.error?.message ?? String(ev) });
     dc.onmessage = (ev) => {
       let obj;
@@ -106,12 +124,15 @@ export function createWebRTCChannel({
 
   // Nur eine Seite erzeugt proaktiv den Datenkanal — die andere empfängt
   // ihn über ondatachannel (siehe shouldCreateDataChannel oben).
+  debug('webrtc', 'channel-init', { peerFingerprint, polite, shouldCreateDataChannel, hasInitialSignal: !!initialSignal, iceServerCount: iceServers.length });
   if (shouldCreateDataChannel) wireDataChannel(pc.createDataChannel('qu'));
   pc.ondatachannel = (ev) => { if (!shouldCreateDataChannel) wireDataChannel(ev.channel); };
 
   // --- Perfect Negotiation (MDN-Referenzmuster) ---
   async function handleSignal(msg) {
     if (msg.from !== peerFingerprint) return; // onRoutedEvent already filtered by event name; this filters by sender
+    const sdpType = msg.payload?.kind === 'sdp' ? msg.payload.data?.type : undefined;
+    debug('webrtc', 'signal-received', { peerFingerprint, kind: msg.payload?.kind, sdpType, signalingState: pc.signalingState });
     try {
       if (msg.payload.kind === 'sdp') {
         const description = msg.payload.data;
@@ -121,12 +142,15 @@ export function createWebRTCChannel({
         await pc.setRemoteDescription(description);
         if (description.type === 'offer') {
           await pc.setLocalDescription();
+          debug('webrtc', 'signal-sent', { peerFingerprint, kind: 'sdp', sdpType: pc.localDescription.type });
           await sendRoutedEvent(signalingChannel, peerFingerprint, 'webrtc-signal', { kind: 'sdp', data: pc.localDescription });
         }
       } else if (msg.payload.kind === 'ice') {
         try {
           await pc.addIceCandidate(msg.payload.data);
+          debug('webrtc', 'remote-ice-applied', { peerFingerprint, candidateType: candidateType(msg.payload.data) });
         } catch (e) {
+          debug('webrtc', 'remote-ice-error', { peerFingerprint, error: e.message, ignoreOffer });
           if (!ignoreOffer) throw e; // ein ICE-Kandidat für ein ignoriertes Offer darf ruhig scheitern
         }
       }
@@ -152,9 +176,11 @@ export function createWebRTCChannel({
   if (initialSignal) enqueueSignal(initialSignal); // siehe Doku oben — der eigene Listener oben wurde zu spät registriert, um diese Nachricht selbst zu sehen
 
   pc.onnegotiationneeded = async () => {
+    debug('webrtc', 'negotiation-needed', { peerFingerprint, signalingState: pc.signalingState });
     try {
       makingOffer = true;
       await pc.setLocalDescription();
+      debug('webrtc', 'signal-sent', { peerFingerprint, kind: 'sdp', sdpType: pc.localDescription.type });
       await sendRoutedEvent(signalingChannel, peerFingerprint, 'webrtc-signal', { kind: 'sdp', data: pc.localDescription });
     } catch (e) {
       debug('webrtc', 'negotiation-error', { peerFingerprint, error: e.message });
@@ -164,7 +190,33 @@ export function createWebRTCChannel({
   };
 
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) sendRoutedEvent(signalingChannel, peerFingerprint, 'webrtc-signal', { kind: 'ice', data: candidate });
+    // `candidate: null` markiert das ENDE der Kandidatensammlung (kein
+    // eigenes Signal, nur intern interessant) — siehe onicegatheringstatechange
+    // unten für den expliziten "fertig gesammelt"-Zeitpunkt.
+    if (!candidate) return;
+    debug('webrtc', 'local-ice-candidate', { peerFingerprint, candidateType: candidateType(candidate), protocol: candidate.protocol });
+    sendRoutedEvent(signalingChannel, peerFingerprint, 'webrtc-signal', { kind: 'ice', data: candidate });
+  };
+
+  // Feuert bei einem Fehler WÄHREND der Kandidatensammlung selbst — z. B.
+  // wenn der STUN-/TURN-Server nicht erreichbar ist (DNS-Fehler, Timeout,
+  // blockiertes UDP). Das ist der direkteste Hinweis, WARUM nie ein
+  // "srflx"/"relay"-Kandidat auftaucht (reine "host"-Kandidaten reichen
+  // über zwei getrennte Netzwerke hinweg praktisch nie).
+  pc.onicecandidateerror = (ev) => {
+    debug('webrtc', 'ice-candidate-error', { peerFingerprint, errorCode: ev.errorCode, errorText: ev.errorText, url: ev.url, address: ev.address, port: ev.port });
+  };
+
+  pc.onicegatheringstatechange = () => {
+    debug('webrtc', 'ice-gathering-state', { peerFingerprint, state: pc.iceGatheringState });
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    debug('webrtc', 'ice-connection-state', { peerFingerprint, state: pc.iceConnectionState });
+  };
+
+  pc.onsignalingstatechange = () => {
+    debug('webrtc', 'signaling-state', { peerFingerprint, state: pc.signalingState });
   };
 
   pc.onconnectionstatechange = () => {
