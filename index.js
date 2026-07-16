@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { startServer } from './server/static-server.mjs';
 import { createTestRoutes } from './server/test-runner.mjs';
 import { createPushRoutes } from './server/push-routes.mjs';
+import { createWebRTCRoutes } from './server/webrtc-routes.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
@@ -101,10 +102,34 @@ const sendPush = pushEnabled
   ? ({ subscription, payload }) => sendWebPush({ subscription, payload, vapidKeys: { publicKey: vapidPublicKey, privateKey: vapidPrivateKey }, subject: vapidSubject })
   : null;
 
+// WebRTC calling (examples/chat) works with just a public STUN server
+// (src/network/transports/webrtc-browser.js's DEFAULT_ICE_SERVERS) ONLY
+// when at least one side is directly reachable or STUN-reflexive-reachable
+// — plenty of real networks (mobile carrier-grade NAT, symmetric NAT,
+// restrictive firewalls) need a TURN relay instead, and unlike STUN there
+// is no free public TURN service (relaying media costs real bandwidth), so
+// this has to be an explicit opt-in: QU_TURN_URLS (comma-separated, e.g.
+// "turn:turn.example.com:3478,turns:turn.example.com:5349"),
+// QU_TURN_USERNAME, QU_TURN_CREDENTIAL. Unset by default — calls between
+// peers that can't reach each other directly will fail to connect, same
+// as before this existed.
+const turnUrls = (process.env.QU_TURN_URLS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const iceServers = [
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  ...(turnUrls.length ? [{ urls: turnUrls, username: process.env.QU_TURN_USERNAME || '', credential: process.env.QU_TURN_CREDENTIAL || '' }] : []),
+];
+
 // /test/manifest.json is always on (read-only, no code runs); the
 // server-side test-EXECUTION endpoint (/test/run-node-tests) is opt-in via
 // QU_ENABLE_TEST_ENDPOINT=1 — see server/test-runner.mjs for why.
-const server = startServer({ root, port, routes: [...createTestRoutes({ root }), ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null })] });
+const server = startServer({
+  root, port,
+  routes: [
+    ...createTestRoutes({ root }),
+    ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null }),
+    ...createWebRTCRoutes({ iceServers }),
+  ],
+});
 
 const store = new QuStore([
   { prefix: '', adapter: persistent ? new FileSystemStorageAdapter(path.join(dataDir, 'qubits.ndjson')) : new MemoryAdapter() },

@@ -246,12 +246,22 @@ async function main() {
   // weiter unten) — hier oben deklariert, weil setupCallSignaling()
   // schon beim ALLERERSTEN connectToRelay()-Aufruf gleich unten zuweist.
   let webrtcManager = null;
+  // Vom Server abgefragte ICE-Server (index.js's QU_TURN_URLS etc., über
+  // /webrtc/ice-servers, server/webrtc-routes.mjs) — `null` bis geladen,
+  // dann entweder das konfigurierte Set oder `undefined` (Server hat
+  // nichts Eigenes konfiguriert, createWebRTCChannel()s STUN-only-Default
+  // greift). Ein reiner STUN-Server reicht nur, wenn mindestens eine Seite
+  // direkt/STUN-reflexiv erreichbar ist — hinter Mobilfunk-NAT o. Ä. ohne
+  // TURN bleibt ein Anruf sonst bei "verbindet …" hängen (siehe
+  // endCall()s Hinweistext für den Nutzer).
+  let iceServers;
   // { peerFp, kind: 'audio'|'video', direction: 'incoming'|'outgoing',
   //   state: 'ringing'|'connecting'|'connected', callerAlias, localStream,
   //   remoteStream, pc, channel, startedAt, ringTimeout, timerInterval }
   let activeCall = null;
   const pendingCallDecisions = new Map(); // fp -> resolve(opts|null), ein Eintrag pro gerade klingelndem eingehendem Anruf
   const RING_TIMEOUT_MS = 45_000;
+  const CALL_CONNECT_FAILED_MSG = 'Anruf fehlgeschlagen — keine Verbindung zustande gekommen (evtl. Netzwerk-/NAT-Problem; falls das öfter passiert, braucht dieser Server einen TURN-Server, siehe QU_TURN_URLS).';
   const ensuredRoomIds = new Map(); // fp -> roomId, schon abonniert/erstellt
 
   function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -289,7 +299,16 @@ async function main() {
     // immer, unabhängig vom Topic.
     repl = await qu.connect(channel, { pushTopics: [''] });
     fileTransfer = qu.fileTransfer(channel, localFileStorage);
-    channel.onClose(() => scheduleReconnect());
+    // NUR im Vordergrund automatisch neu verbinden: relay.mjs entscheidet
+    // "schon online, kein Push nötig" allein danach, ob unser WebSocket
+    // noch offen ist (`connected`-Map) — würden wir im Hintergrund sofort
+    // wieder neu verbinden, bliebe dieser Fingerprint für das Relay
+    // dauerhaft "online", obwohl niemand da ist, der die Nachricht sieht,
+    // und Push würde nie ausgelöst (genau das gemeldete "Aktivierung
+    // gelingt, aber Push kommt nicht an", wenn der Tab im Hintergrund
+    // hängt statt sauber getrennt zu werden). Sichtbar wird ohnehin schon
+    // per visibilitychange unten neu verbunden.
+    channel.onClose(() => { if (document.visibilityState === 'visible') scheduleReconnect(); });
     statusBar.textContent = 'Verbunden';
     statusBar.classList.remove('err');
     reconnectAttempt = 0;
@@ -329,6 +348,8 @@ async function main() {
     }, delayMs);
   }
 
+  iceServers = await fetch('/webrtc/ice-servers').then((r) => r.json()).then((r) => r.iceServers).catch(() => undefined);
+
   await connectToRelay();
   myAlias = await ensureAlias();
   meNameEl.textContent = myAlias;
@@ -345,8 +366,25 @@ async function main() {
   // es beim allerersten Aufruf ins Leere.
   qu.get(inboxId(qu.fingerprint)).get('requests').map((q) => handleInboxRequest(q));
 
+  // Nach einer Weile im Hintergrund die Verbindung aktiv trennen — siehe
+  // Kommentar bei channel.onClose() oben: ein Mobil-Browser hält einen
+  // WebSocket im Hintergrund oft noch minutenlang technisch offen (OS
+  // friert erst später ein/killt ihn), das Relay hielte uns so lange
+  // fälschlich für "live erreichbar" und würde Push zurückhalten. Kurze
+  // Tab-Wechsel (< BACKGROUND_DISCONNECT_MS) werfen die Verbindung NICHT
+  // weg — der Timer wird beim Wieder-Sichtbarwerden einfach abgebrochen.
+  const BACKGROUND_DISCONNECT_MS = 20_000;
+  let backgroundCloseTimer = null;
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && !reconnecting && !channel.isOpen()) scheduleReconnect();
+    if (document.visibilityState === 'visible') {
+      if (backgroundCloseTimer) { clearTimeout(backgroundCloseTimer); backgroundCloseTimer = null; }
+      if (!reconnecting && !channel.isOpen()) scheduleReconnect();
+    } else if (!backgroundCloseTimer) {
+      backgroundCloseTimer = setTimeout(() => {
+        backgroundCloseTimer = null;
+        if (document.visibilityState !== 'visible' && channel?.isOpen()) channel.close().catch(() => {});
+      }, BACKGROUND_DISCONNECT_MS);
+    }
   });
   window.addEventListener('online', () => { if (!reconnecting && !channel.isOpen()) scheduleReconnect(); });
 
@@ -1293,6 +1331,7 @@ async function main() {
         // als Gesprächsende behandeln, sonst legt eine kurze Funklücke
         // sofort und unnötig auf.
         if (pc.connectionState === 'disconnected') return;
+        if (pc.connectionState === 'failed') statusBar.textContent = CALL_CONNECT_FAILED_MSG;
         endCall(`connection-${pc.connectionState}`, { notifyPeer: pc.connectionState === 'failed' });
       }
     };
@@ -1326,7 +1365,7 @@ async function main() {
       // onCallConnected() (über onConnect() unten) übernimmt den Rest, sobald die Verbindung wirklich steht.
     } catch (e) {
       console.error('[chat] call failed:', e);
-      statusBar.textContent = `Anruf fehlgeschlagen: ${e.message}`;
+      statusBar.textContent = CALL_CONNECT_FAILED_MSG;
       endCall('error');
     }
   }
@@ -1392,8 +1431,14 @@ async function main() {
   function setupCallSignaling(currentChannel) {
     webrtcManager = qu.webrtc(currentChannel, {
       onIncomingConnection: (fromFp) => new Promise((resolve) => pendingCallDecisions.set(fromFp, resolve)),
+      iceServers,
     });
     webrtcManager.onConnect((peerFp, entry) => onCallConnected(peerFp, entry.channel));
+    webrtcManager.onConnectFailed((peerFp) => {
+      if (activeCall?.peerFp !== peerFp) return;
+      statusBar.textContent = CALL_CONNECT_FAILED_MSG;
+      endCall('error', { notifyPeer: false });
+    });
 
     onRoutedEvent(currentChannel, 'call-invite', (msg) => {
       if (activeCall) { sendRoutedEvent(currentChannel, msg.from, 'call-decline', { reason: 'busy' }).catch(() => {}); return; }

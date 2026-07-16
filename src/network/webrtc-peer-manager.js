@@ -26,6 +26,8 @@ export class PeerConnectionManager {
   #offIncoming;
   #onIncomingConnection;
   #connectListeners = new Set();
+  #connectFailedListeners = new Set();
+  #iceServers;
 
   /**
    * `onIncomingConnection(peerFingerprint)`: optionaler Hook, wird
@@ -37,12 +39,17 @@ export class PeerConnectionManager {
    * Verbindungen werden mit `pushTopics: []` angenommen (Kanal steht,
    * repliziert aber nichts, bis die App das explizit konfiguriert) —
    * sicherer Default, kein automatisches Datenteilen mit Unbekannten.
+   *
+   * `iceServers`: passed straight through to every RTCPeerConnection this
+   * manager creates (createWebRTCChannel()'s own `iceServers`) —
+   * `undefined` keeps that function's STUN-only default.
    */
-  constructor(qu, { router = null, signalingChannel, onIncomingConnection = null } = {}) {
+  constructor(qu, { router = null, signalingChannel, onIncomingConnection = null, iceServers } = {}) {
     this.#qu = qu;
     this.#router = router;
     this.#signalingChannel = signalingChannel;
     this.#onIncomingConnection = onIncomingConnection ?? (async () => ({ pushTopics: [] }));
+    this.#iceServers = iceServers;
     this.#offIncoming = signalingChannel.onMessage((msg) => this.#handleIncoming(msg));
   }
 
@@ -68,6 +75,16 @@ export class PeerConnectionManager {
     } catch (e) {
       debug('webrtc-pm', 'incoming-failed', { from: msg.from, error: e.message });
       console.error('[PeerConnectionManager] incoming connection failed:', e);
+      // Ohne dies erfährt die reagierende Seite (die #onIncomingConnection()
+      // selbst nie proaktiv aufruft, siehe connectDirect() vs. hier) NIE,
+      // dass es nicht geklappt hat — nur die AUSGEHENDE Seite bekommt einen
+      // Fehler direkt aus ihrem eigenen await connectDirect() zurück. Ohne
+      // diesen Hook bliebe z. B. eine Anruf-UI beim Angerufenen für immer
+      // auf "verbindet …" hängen, wenn die Verbindung (z. B. mangels
+      // TURN-Server hinter NAT) nie zustande kommt.
+      this.#connectFailedListeners.forEach((fn) => {
+        try { fn(msg.from, e); } catch (listenerErr) { console.error('[PeerConnectionManager] onConnectFailed listener error:', listenerErr); }
+      });
     } finally {
       this.#pendingIncoming.delete(msg.from);
     }
@@ -85,6 +102,7 @@ export class PeerConnectionManager {
       myFingerprint: this.#qu.fingerprint,
       peerFingerprint,
       initialSignal,
+      iceServers: this.#iceServers,
       // #establish() weiß hier eindeutig, welche Rolle diese Seite hat:
       // ohne initialSignal ruft DIESE Seite gerade selbst connectDirect()
       // auf (= Initiator), MIT initialSignal reagieren wir auf ein
@@ -133,6 +151,20 @@ export class PeerConnectionManager {
   onConnect(callback) {
     this.#connectListeners.add(callback);
     return () => this.#connectListeners.delete(callback);
+  }
+
+  /**
+   * `callback(peerFingerprint, error)` — feuert, wenn eine EINGEHENDE
+   * Verbindung (jemand kontaktiert uns, #handleIncoming()) fehlschlägt,
+   * z. B. weil kein P2P-Pfad zustande kommt (fehlender TURN-Server hinter
+   * NAT). Für eine SELBST per connectDirect() angestoßene Verbindung
+   * braucht es das nicht — deren Promise lehnt sich direkt beim Aufrufer
+   * ab. Ohne dieses Gegenstück hätte die rein reaktive Seite gar keine
+   * Möglichkeit, je von einem gescheiterten Aufbau zu erfahren.
+   */
+  onConnectFailed(callback) {
+    this.#connectFailedListeners.add(callback);
+    return () => this.#connectFailedListeners.delete(callback);
   }
 
   disconnect(peerFingerprint) {
