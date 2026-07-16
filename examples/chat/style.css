@@ -85,6 +85,7 @@ button { font-family: inherit; }
 }
 .avatar.sm { width: 2rem; height: 2rem; font-size: 0.8rem; }
 .avatar.lg { width: 4.5rem; height: 4.5rem; font-size: 1.5rem; flex-shrink: 0; }
+.avatar.xl { width: 6.5rem; height: 6.5rem; font-size: 2.1rem; flex-shrink: 0; }
 .profile-avatar-row { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 0.5rem; }
 .profile-avatar-row .btn { display: block; margin-bottom: 0.4rem; font-size: 0.78rem; padding: 0.35rem 0.7rem; }
 .avatar .dot {
@@ -384,6 +385,57 @@ button { font-family: inherit; }
 .push-row { justify-content: flex-start; align-items: center; }
 .push-status { margin: 0; }
 .modal-hint { color: var(--muted); font-size: 0.78rem; margin: 0.4rem 0 0; }
+
+/* --- Anruf (Audio/Video, WebRTC — siehe app.mjs's Anruf-Abschnitt) --- */
+.call-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  background: radial-gradient(ellipse at center, #1c2130 0%, #0b0d12 75%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(2rem, env(safe-area-inset-top)) 1.5rem max(2rem, env(safe-area-inset-bottom));
+  color: var(--text);
+}
+.call-info { display: flex; flex-direction: column; align-items: center; gap: 0.6rem; margin-top: 2rem; }
+.call-peer-name { font-size: 1.3rem; font-weight: 700; }
+.call-status { color: var(--muted); font-size: 0.9rem; }
+.call-status.connected { color: var(--online); }
+
+.call-video-area {
+  position: absolute; inset: 0;
+  background: #000;
+}
+.call-remote-video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+.call-local-video {
+  position: absolute;
+  bottom: max(6.5rem, calc(6.5rem + env(safe-area-inset-bottom)));
+  right: 1rem;
+  width: 28vw;
+  max-width: 9rem;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 2px solid var(--border);
+  background: #000;
+  transform: scaleX(-1); /* Selfie-Vorschau spiegeln, wie jede Kamera-App */
+}
+
+.call-actions { display: flex; gap: 1.5rem; align-items: center; z-index: 1; }
+.call-btn {
+  width: 4rem; height: 4rem;
+  border-radius: 50%;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+}
+.call-btn-accept { background: var(--online); }
+.call-btn-decline { background: var(--danger); }
+.call-btn-secondary { background: #ffffff26; }
+.call-btn-secondary.off { background: var(--danger); }
+.call-btn:active { transform: scale(0.94); }
 
 /* --- Lightbox (Vollbild + Zoom) --- */
 .lightbox {

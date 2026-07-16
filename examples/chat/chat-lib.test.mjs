@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isValidFingerprint, normalizeFingerprint, dmRoomId, inboxId, shortFp, fmtBytes,
-  fmtTime, fmtDayLabel, linkify, mediaKind, sortContactsByActivity,
+  fmtTime, fmtDayLabel, fmtCallDuration, linkify, mediaKind, sortContactsByActivity,
   buildInviteLink, parseInviteHash, buildChatHashRoute, parseChatHash,
 } from './chat-lib.mjs';
 
@@ -50,6 +50,15 @@ test('fmtBytes()', () => {
 
 test('fmtTime() is always HH:MM', () => {
   assert.match(fmtTime(Date.now()), /^\d{2}:\d{2}$/);
+});
+
+test('fmtCallDuration()', () => {
+  assert.equal(fmtCallDuration(0), '0:00');
+  assert.equal(fmtCallDuration(5), '0:05');
+  assert.equal(fmtCallDuration(65), '1:05');
+  assert.equal(fmtCallDuration(3600), '1:00:00');
+  assert.equal(fmtCallDuration(3725), '1:02:05');
+  assert.equal(fmtCallDuration(-5), '0:00'); // negative/garbage clamps instead of throwing or showing "-1:-5"
 });
 
 test('fmtDayLabel() with an injected "now"', () => {

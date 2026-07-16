@@ -30,6 +30,8 @@
           <div class="chat-peer-name" id="peer-name">…</div>
           <div class="chat-peer-status" id="peer-status">…</div>
         </div>
+        <button id="audio-call-btn" class="icon-btn" type="button" title="Anrufen">📞</button>
+        <button id="video-call-btn" class="icon-btn" type="button" title="Videoanruf">🎥</button>
         <button id="delete-chat-btn" class="icon-btn" type="button" title="Chat löschen">🗑</button>
       </header>
 
@@ -106,6 +108,36 @@
     <button id="lightbox-close" class="lightbox-close" type="button">&times;</button>
     <img id="lightbox-img" src="" alt="" />
     <div class="lightbox-hint">Tippen zum Zoomen</div>
+  </div>
+
+  <!-- Anruf: klingelnd (ein-/ausgehend) und verbunden — ein Overlay für
+       beide Zustände, renderCallUI() (app.mjs) schaltet per Klasse um. -->
+  <div id="call-overlay" class="call-overlay" hidden>
+    <div class="call-info">
+      <div id="call-avatar" class="avatar xl"></div>
+      <div id="call-peer-name" class="call-peer-name">…</div>
+      <div id="call-status" class="call-status">…</div>
+    </div>
+
+    <div id="call-video-area" class="call-video-area" hidden>
+      <video id="call-remote-video" class="call-remote-video" autoplay playsinline></video>
+      <video id="call-local-video" class="call-local-video" autoplay playsinline muted></video>
+    </div>
+
+    <div id="call-incoming-actions" class="call-actions" hidden>
+      <button id="call-decline-btn" class="call-btn call-btn-decline" type="button" title="Ablehnen">✕</button>
+      <button id="call-accept-btn" class="call-btn call-btn-accept" type="button" title="Annehmen">✓</button>
+    </div>
+
+    <div id="call-outgoing-actions" class="call-actions" hidden>
+      <button id="call-cancel-btn" class="call-btn call-btn-decline" type="button" title="Anruf beenden">✕</button>
+    </div>
+
+    <div id="call-connected-actions" class="call-actions" hidden>
+      <button id="call-mute-btn" class="call-btn call-btn-secondary" type="button" title="Stummschalten">🎤</button>
+      <button id="call-camera-btn" class="call-btn call-btn-secondary" type="button" title="Kamera aus">📷</button>
+      <button id="call-hangup-btn" class="call-btn call-btn-decline" type="button" title="Auflegen">✕</button>
+    </div>
   </div>
 
   <script type="module" src="./app.mjs"></script>
