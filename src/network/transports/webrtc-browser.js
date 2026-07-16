@@ -53,17 +53,21 @@ function candidateType(candidate) {
  * `signalingChannel`, den sie übergeben bekommt — dadurch bleibt der
  * Transport für das Signaling selbst austauschbar.
  *
- * `initialSignal`: falls dieser Channel REAKTIV entsteht (jemand ruft uns
- * an), muss die Nachricht, die das ausgelöst hat, hier mitgegeben werden —
- * der eigene `onMessage`-Listener wird erst NACH diesem Aufruf registriert
- * und würde sie sonst verpassen (siehe PeerConnectionManager).
+ * `initialSignals`: falls dieser Channel REAKTIV entsteht (jemand ruft uns
+ * an), müssen ALLE Nachrichten, die vor diesem Aufruf schon für diesen
+ * Peer eintrafen (das ursprüngliche Offer UND jeder ICE-Kandidat, der
+ * während des Klingelns/vor dem tatsächlichen Verbindungsaufbau schon
+ * ankam), hier mitgegeben werden — der eigene `onMessage`-Listener wird
+ * erst NACH diesem Aufruf registriert und würde sie sonst verpassen
+ * (siehe PeerConnectionManager, das genau deshalb selbst zwischenspeichert).
+ * In der ursprünglichen Eintreffreihenfolge, Offer zuerst.
  */
 export function createWebRTCChannel({
   signalingChannel,
   myFingerprint,
   peerFingerprint,
   iceServers = DEFAULT_ICE_SERVERS,
-  initialSignal = null,
+  initialSignals = [],
   // Wer erzeugt proaktiv den Datenkanal (und löst damit die erste
   // Aushandlung aus)? Per Default die Fingerprint-Regel (Perfect
   // Negotiation, für den unkoordinierten Fall: beide Seiten rufen
@@ -124,7 +128,7 @@ export function createWebRTCChannel({
 
   // Nur eine Seite erzeugt proaktiv den Datenkanal — die andere empfängt
   // ihn über ondatachannel (siehe shouldCreateDataChannel oben).
-  debug('webrtc', 'channel-init', { peerFingerprint, polite, shouldCreateDataChannel, hasInitialSignal: !!initialSignal, iceServerCount: iceServers.length });
+  debug('webrtc', 'channel-init', { peerFingerprint, polite, shouldCreateDataChannel, initialSignalCount: initialSignals.length, iceServerCount: iceServers.length });
   if (shouldCreateDataChannel) wireDataChannel(pc.createDataChannel('qu'));
   pc.ondatachannel = (ev) => { if (!shouldCreateDataChannel) wireDataChannel(ev.channel); };
 
@@ -173,7 +177,7 @@ export function createWebRTCChannel({
   }
 
   const offSignal = onRoutedEvent(signalingChannel, 'webrtc-signal', (msg) => { enqueueSignal(msg); });
-  if (initialSignal) enqueueSignal(initialSignal); // siehe Doku oben — der eigene Listener oben wurde zu spät registriert, um diese Nachricht selbst zu sehen
+  for (const sig of initialSignals) enqueueSignal(sig); // siehe Doku oben — der eigene Listener oben wurde zu spät registriert, um diese Nachrichten selbst zu sehen
 
   pc.onnegotiationneeded = async () => {
     debug('webrtc', 'negotiation-needed', { peerFingerprint, signalingState: pc.signalingState });

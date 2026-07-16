@@ -23,6 +23,8 @@ export class PeerConnectionManager {
   #signalingChannel;
   #connections = new Map(); // peerFingerprint -> { channel, repl }
   #pendingIncoming = new Set(); // peerFingerprint, während #onIncomingConnection()/#establish() noch laufen (siehe #handleIncoming())
+  #pendingOutgoing = new Set(); // peerFingerprint, während UNSERE eigene connectDirect()/#establish() noch läuft (siehe #handleIncoming())
+  #pendingSignals = new Map(); // peerFingerprint -> msg[], siehe #handleIncoming()s Zwischenspeicherung während des Klingelns
   #offIncoming;
   #onIncomingConnection;
   #connectListeners = new Set();
@@ -55,24 +57,52 @@ export class PeerConnectionManager {
 
   async #handleIncoming(msg) {
     if (msg.type !== 'qu.route' || msg.event !== 'webrtc-signal' || !msg.from) return;
-    debug('webrtc-pm', 'incoming-signal', { from: msg.from, kind: msg.payload?.kind, alreadyConnected: this.#connections.has(msg.from), alreadyPending: this.#pendingIncoming.has(msg.from) });
-    // Schon verbunden ODER im Aufbau (inkl. noch klingelnd, d.h.
-    // #onIncomingConnection() hängt noch auf eine Nutzer-Entscheidung):
-    // ohne diese zweite Prüfung würde JEDER weitere ICE-Kandidat, der
-    // während des Klingelns eintrifft, hier erneut hereinkommen (derselbe
-    // `msg.from`, aber noch kein Eintrag in #connections) und
-    // #onIncomingConnection() ein weiteres Mal aufrufen — der Aufrufer
-    // (z. B. die Chat-App) würde seinen "Anruf annehmen"-Resolver dabei
-    // überschreiben, sodass beim tatsächlichen Annehmen der FALSCHE
-    // `initialSignal` (ein ICE-Kandidat statt des ursprünglichen SDP-
-    // Offers) an #establish() übergeben wird — genau das führte zu
-    // "remote description was null" in createWebRTCChannel().
-    if (this.#connections.has(msg.from) || this.#pendingIncoming.has(msg.from)) return;
+    debug('webrtc-pm', 'incoming-signal', { from: msg.from, kind: msg.payload?.kind, alreadyConnected: this.#connections.has(msg.from), alreadyPending: this.#pendingIncoming.has(msg.from), ownOutgoingInFlight: this.#pendingOutgoing.has(msg.from) });
+    if (this.#connections.has(msg.from)) return;
+    // WIR haben selbst gerade connectDirect() zu diesem Fingerprint
+    // aufgerufen (#establish() unten läuft noch, VOR dem Eintrag in
+    // #connections) — dieses Signal ist die Antwort (Answer/ICE) DARAUF,
+    // kein neuer unaufgeforderter Anruf. Der eigene createWebRTCChannel()
+    // dieser laufenden #establish() hat SEINEN EIGENEN onRoutedEvent-
+    // Listener längst registriert (synchron bei seiner Erzeugung, vor
+    // jedem await) und verarbeitet dieses Signal bereits korrekt — ohne
+    // diese Prüfung würde #handleIncoming() es fälschlich als neue
+    // eingehende Verbindung behandeln, #onIncomingConnection() für einen
+    // Anruf aufrufen, den niemand je annimmt/ablehnt, und #pendingIncoming
+    // für diesen Fingerprint DAUERHAFT hängen lassen — jeder SPÄTERE
+    // echte eingehende Anruf von genau diesem Fingerprint würde dann nur
+    // noch stumm gepuffert (siehe #pendingSignals unten), aber nie mehr
+    // tatsächlich verarbeitet.
+    if (this.#pendingOutgoing.has(msg.from)) return;
+    // Schon am Klingeln (#onIncomingConnection() hängt noch auf eine
+    // Nutzer-Entscheidung, RTCPeerConnection existiert für diese Seite
+    // noch GAR NICHT — die entsteht erst unten in #establish(), NACHDEM
+    // angenommen wurde): dieses Signal ist typischerweise ein
+    // ICE-Kandidat, den die Gegenseite schickt, während wir noch klingeln
+    // (Kandidaten trudeln oft schon Sekundenbruchteile nach dem Anruf
+    // ein, ein Mensch braucht zum Rangehen aber typischerweise deutlich
+    // länger). Es einfach zu verwerfen (wie es hier früher passierte)
+    // verliert diese Kandidaten UNWIDERBRINGLICH — der Channel, dessen
+    // eigener onRoutedEvent-Listener sie sonst auffangen würde, existiert
+    // ja noch nicht. Je nachdem, wie viele ICE-Kandidaten so verloren
+    // gehen, kann die Verbindung trotzdem zufällig zustande kommen (die
+    // übrigen, NACH dem Annehmen eingetroffenen Kandidaten reichen manchmal)
+    // oder eben nicht — genau das Bild "verbindet sehr unzuverlässig".
+    // Zwischenspeichern und beim tatsächlichen Aufbau unten (initialSignals)
+    // in derselben Reihenfolge nachreichen behebt das strukturell, nicht
+    // nur zufällig.
+    if (this.#pendingIncoming.has(msg.from)) {
+      this.#pendingSignals.get(msg.from)?.push(msg);
+      return;
+    }
     this.#pendingIncoming.add(msg.from);
+    this.#pendingSignals.set(msg.from, []);
     try {
       const opts = await this.#onIncomingConnection(msg.from);
       if (!opts) { debug('webrtc-pm', 'incoming-declined', { from: msg.from }); return; }
-      await this.#establish(msg.from, { ...opts, initialSignal: msg });
+      const buffered = this.#pendingSignals.get(msg.from) ?? [];
+      debug('webrtc-pm', 'incoming-accepted', { from: msg.from, bufferedSignalCount: buffered.length });
+      await this.#establish(msg.from, { ...opts, initialSignals: [msg, ...buffered] });
     } catch (e) {
       debug('webrtc-pm', 'incoming-failed', { from: msg.from, error: e.message });
       console.error('[PeerConnectionManager] incoming connection failed:', e);
@@ -88,6 +118,7 @@ export class PeerConnectionManager {
       });
     } finally {
       this.#pendingIncoming.delete(msg.from);
+      this.#pendingSignals.delete(msg.from);
     }
   }
 
@@ -98,58 +129,73 @@ export class PeerConnectionManager {
     return this.#establish(peerFingerprint, opts);
   }
 
-  async #establish(peerFingerprint, { pushTopics = [], group = `peer:${peerFingerprint}`, metric = 10, initialSignal = null } = {}) {
-    debug('webrtc-pm', 'establish-start', { peerFingerprint, initiator: !initialSignal });
-    const channel = createWebRTCChannel({
-      signalingChannel: this.#signalingChannel,
-      myFingerprint: this.#qu.fingerprint,
-      peerFingerprint,
-      initialSignal,
-      iceServers: this.#iceServers,
-      // #establish() weiß hier eindeutig, welche Rolle diese Seite hat:
-      // ohne initialSignal ruft DIESE Seite gerade selbst connectDirect()
-      // auf (= Initiator), MIT initialSignal reagieren wir auf ein
-      // bereits eingetroffenes Signal der Gegenseite (= die Gegenseite
-      // hat längst initiiert). Siehe createWebRTCChannel()s
-      // initiator-Doku für die Fingerprint-Zufalls-Falle, die das
-      // vermeidet.
-      initiator: !initialSignal,
-    });
-
-    await channel.connect(); // wartet auf offenen Datenkanal
-    debug('webrtc-pm', 'establish-datachannel-open', { peerFingerprint });
-
-    const provenFp = await authenticateChannel(channel, this.#qu.identity);
-    debug('webrtc-pm', 'establish-handshake-done', { peerFingerprint, provenFp, matches: provenFp === peerFingerprint });
-    if (provenFp !== peerFingerprint) {
-      channel.close();
-      throw new Error(`[PeerConnectionManager] Handshake-Mismatch: erwartet ${peerFingerprint}, bewiesen wurde ${provenFp}`);
-    }
-    debug('webrtc-pm', 'verified', { peerFingerprint });
-
-    const repl = new DefaultReplication(this.#qu.runtime, channel, {
-      pushTopics,
-      peerFingerprint,
-      router: this.#router,
-    });
-    if (this.#router) {
-      this.#router.addRoute({
-        channelId: repl.channelId, channel, pushTopics, role: 'sync', group, metric,
-        transport: 'webrtc', peerFingerprint,
+  async #establish(peerFingerprint, { pushTopics = [], group = `peer:${peerFingerprint}`, metric = 10, initialSignals = [] } = {}) {
+    const isOutgoing = initialSignals.length === 0;
+    // Markiert, solange DIESE Seite selbst gerade eine Verbindung zu
+    // `peerFingerprint` aufbaut (via connectDirect(), nicht reaktiv) —
+    // #handleIncoming() muss die Antwort (Answer/ICE) darauf ignorieren
+    // statt sie fälschlich als neuen eingehenden Anruf zu behandeln (siehe
+    // dortiger Kommentar). Nur für den ausgehenden Fall relevant: der
+    // eingehende Fall hat mit #pendingIncoming/#pendingSignals bereits
+    // sein eigenes Bein dafür.
+    if (isOutgoing) this.#pendingOutgoing.add(peerFingerprint);
+    try {
+      debug('webrtc-pm', 'establish-start', { peerFingerprint, initiator: isOutgoing, initialSignalCount: initialSignals.length });
+      const channel = createWebRTCChannel({
+        signalingChannel: this.#signalingChannel,
+        myFingerprint: this.#qu.fingerprint,
+        peerFingerprint,
+        initialSignals,
+        iceServers: this.#iceServers,
+        // #establish() weiß hier eindeutig, welche Rolle diese Seite hat:
+        // OHNE initialSignals ruft DIESE Seite gerade selbst connectDirect()
+        // auf (= Initiator), MIT initialSignals reagieren wir auf bereits
+        // eingetroffene Signale der Gegenseite (= die Gegenseite hat längst
+        // initiiert). Siehe createWebRTCChannel()s initiator-Doku für die
+        // Fingerprint-Zufalls-Falle, die das vermeidet.
+        initiator: isOutgoing,
       });
-    }
 
-    const entry = { channel, repl };
-    this.#connections.set(peerFingerprint, entry);
-    channel.onClose(() => {
-      repl.close(); // entfernt auch die Router-Route (siehe DefaultReplication.close())
-      this.#connections.delete(peerFingerprint);
-      debug('webrtc-pm', 'disconnected', { peerFingerprint });
-    });
-    this.#connectListeners.forEach((fn) => {
-      try { fn(peerFingerprint, entry); } catch (e) { console.error('[PeerConnectionManager] onConnect listener error:', e); }
-    });
-    return entry;
+      await channel.connect(); // wartet auf offenen Datenkanal
+      debug('webrtc-pm', 'establish-datachannel-open', { peerFingerprint });
+
+      const provenFp = await authenticateChannel(channel, this.#qu.identity);
+      debug('webrtc-pm', 'establish-handshake-done', { peerFingerprint, provenFp, matches: provenFp === peerFingerprint });
+      if (provenFp !== peerFingerprint) {
+        channel.close();
+        throw new Error(`[PeerConnectionManager] Handshake-Mismatch: erwartet ${peerFingerprint}, bewiesen wurde ${provenFp}`);
+      }
+      debug('webrtc-pm', 'verified', { peerFingerprint });
+
+      const repl = new DefaultReplication(this.#qu.runtime, channel, {
+        pushTopics,
+        peerFingerprint,
+        router: this.#router,
+      });
+      if (this.#router) {
+        this.#router.addRoute({
+          channelId: repl.channelId, channel, pushTopics, role: 'sync', group, metric,
+          transport: 'webrtc', peerFingerprint,
+        });
+      }
+
+      const entry = { channel, repl };
+      this.#connections.set(peerFingerprint, entry);
+      channel.onClose(() => {
+        repl.close(); // entfernt auch die Router-Route (siehe DefaultReplication.close())
+        this.#connections.delete(peerFingerprint);
+        debug('webrtc-pm', 'disconnected', { peerFingerprint });
+      });
+      this.#connectListeners.forEach((fn) => {
+        try { fn(peerFingerprint, entry); } catch (e) { console.error('[PeerConnectionManager] onConnect listener error:', e); }
+      });
+      return entry;
+    } finally {
+      // Ab hier (Erfolg ODER Fehlschlag) ist #connections bzw. gar nichts
+      // mehr der zuständige Zustand — #pendingOutgoing hat seinen Zweck
+      // (die Aufbauphase VOR #connections abzudecken) so oder so erfüllt.
+      if (isOutgoing) this.#pendingOutgoing.delete(peerFingerprint);
+    }
   }
 
   /** `callback(peerFingerprint, { channel, repl })` — feuert für JEDE erfolgreich aufgebaute Verbindung, ausgehend über connectDirect() oder eingehend, ohne dass Aufrufer beide Fälle getrennt behandeln müssen. */
