@@ -55,6 +55,7 @@ export class PeerConnectionManager {
 
   async #handleIncoming(msg) {
     if (msg.type !== 'qu.route' || msg.event !== 'webrtc-signal' || !msg.from) return;
+    debug('webrtc-pm', 'incoming-signal', { from: msg.from, kind: msg.payload?.kind, alreadyConnected: this.#connections.has(msg.from), alreadyPending: this.#pendingIncoming.has(msg.from) });
     // Schon verbunden ODER im Aufbau (inkl. noch klingelnd, d.h.
     // #onIncomingConnection() hängt noch auf eine Nutzer-Entscheidung):
     // ohne diese zweite Prüfung würde JEDER weitere ICE-Kandidat, der
@@ -92,11 +93,13 @@ export class PeerConnectionManager {
 
   /** Baut (falls noch nicht vorhanden) eine Direktverbindung zu `peerFingerprint` auf und registriert sie im Router. */
   async connectDirect(peerFingerprint, opts = {}) {
+    debug('webrtc-pm', 'connect-direct', { peerFingerprint, alreadyConnected: this.#connections.has(peerFingerprint) });
     if (this.#connections.has(peerFingerprint)) return this.#connections.get(peerFingerprint);
     return this.#establish(peerFingerprint, opts);
   }
 
   async #establish(peerFingerprint, { pushTopics = [], group = `peer:${peerFingerprint}`, metric = 10, initialSignal = null } = {}) {
+    debug('webrtc-pm', 'establish-start', { peerFingerprint, initiator: !initialSignal });
     const channel = createWebRTCChannel({
       signalingChannel: this.#signalingChannel,
       myFingerprint: this.#qu.fingerprint,
@@ -114,8 +117,10 @@ export class PeerConnectionManager {
     });
 
     await channel.connect(); // wartet auf offenen Datenkanal
+    debug('webrtc-pm', 'establish-datachannel-open', { peerFingerprint });
 
     const provenFp = await authenticateChannel(channel, this.#qu.identity);
+    debug('webrtc-pm', 'establish-handshake-done', { peerFingerprint, provenFp, matches: provenFp === peerFingerprint });
     if (provenFp !== peerFingerprint) {
       channel.close();
       throw new Error(`[PeerConnectionManager] Handshake-Mismatch: erwartet ${peerFingerprint}, bewiesen wurde ${provenFp}`);
