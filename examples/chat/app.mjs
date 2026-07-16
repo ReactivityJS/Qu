@@ -57,6 +57,14 @@ const meAvatarBtn = $('me-avatar');
 const meNameEl = $('me-name');
 const meFpShortEl = $('me-fp-short');
 const addContactBtn = $('add-contact-btn');
+const searchBtn = $('search-btn');
+const searchOverlay = $('search-overlay');
+const searchBackBtn = $('search-back-btn');
+const searchInput = $('search-input');
+const searchClearBtn = $('search-clear-btn');
+const searchFiltersEl = document.querySelector('.search-filters');
+const searchResultsEl = $('search-results');
+const searchEmptyEl = $('search-empty');
 const audioCallBtn = $('audio-call-btn');
 const videoCallBtn = $('video-call-btn');
 const callOverlay = $('call-overlay');
@@ -831,6 +839,7 @@ async function main() {
     const mine = q.writer === qu.fingerprint;
     const li = el('li', `msg${mine ? ' mine' : ''}`);
     li.dataset.ts = q.ts;
+    li.dataset.id = q.id;
     li.dataset.mine = mine ? '1' : '0';
     const bubble = el('div', 'msg-bubble');
     if (q.value?.text) {
@@ -920,6 +929,137 @@ async function main() {
     if (location.hash) location.hash = '';
   }
   backBtn.addEventListener('click', closeContact);
+
+  // --- Suche (über alle Chats hinweg) ---
+  // messagesByRoom hält bereits JEDEN Raum jedes Kontakts geladen
+  // (ensureRoom() läuft beim Start für alle Kontakte, siehe main()s
+  // Ende) — Suche ist also ein reiner In-Memory-Filter, keine eigene
+  // Server-Anfrage nötig. Filtert nach Nachrichtentext UND/ODER (per
+  // Filter-Chip) danach, ob eine Nachricht einen Link (chat-lib.mjs's
+  // linkify()) bzw. einen Anhang (q.refs) enthält — eine reine
+  // Dateiname-Suche innerhalb von Anhängen ist bewusst NICHT enthalten:
+  // Name/MIME stehen erst im (asynchron nachzuladenden) Datei-Manifest,
+  // nicht in der Nachricht selbst, das würde die Suche pro Tastendruck
+  // in einen Netzwerk-Vorgang verwandeln statt eines simplen Array-Filters.
+  let searchFilter = 'all'; // 'all' | 'links' | 'files'
+  const SEARCH_RESULT_LIMIT = 100;
+
+  function messageHasLink(q) {
+    return !!q.value?.text && linkify(q.value.text).some((seg) => seg.type === 'link');
+  }
+  function messageHasFile(q) {
+    return (q.refs?.length ?? 0) > 0;
+  }
+  function matchesSearch(q, query) {
+    if (searchFilter === 'links' && !messageHasLink(q)) return false;
+    if (searchFilter === 'files' && !messageHasFile(q)) return false;
+    if (!query) return true;
+    return (q.value?.text ?? '').toLowerCase().includes(query);
+  }
+
+  /** Baut das Snippet mit dem Treffer in der Mitte (statt immer ab Zeichen 0) und dem gesuchten Teil in `<mark>` — bei einer reinen Filter-Suche (Links/Dateien) ohne Textabfrage ist `query` leer, dann einfach der volle Text/Platzhalter. */
+  function buildSnippet(text, query) {
+    const snippet = el('div', 'search-result-snippet');
+    const idx = query ? text.toLowerCase().indexOf(query) : -1;
+    if (idx === -1) { snippet.textContent = text; return snippet; }
+    const CONTEXT = 40;
+    const start = Math.max(0, idx - CONTEXT);
+    const end = Math.min(text.length, idx + query.length + CONTEXT);
+    if (start > 0) snippet.appendChild(document.createTextNode('… '));
+    snippet.appendChild(document.createTextNode(text.slice(start, idx)));
+    snippet.appendChild(el('mark', undefined, text.slice(idx, idx + query.length)));
+    snippet.appendChild(document.createTextNode(text.slice(idx + query.length, end)));
+    if (end < text.length) snippet.appendChild(document.createTextNode(' …'));
+    return snippet;
+  }
+
+  function renderSearchResults() {
+    const rawQuery = searchInput.value.trim();
+    const query = rawQuery.toLowerCase();
+    searchClearBtn.hidden = !rawQuery;
+    searchResultsEl.textContent = '';
+
+    if (!query && searchFilter === 'all') {
+      searchEmptyEl.hidden = false;
+      searchEmptyEl.textContent = 'Suche nach Text, oder wähle „Links“/„Dateien“, um zu stöbern.';
+      return;
+    }
+
+    const matches = [];
+    for (const [fp, list] of messagesByRoom) {
+      for (const q of list) {
+        if (matchesSearch(q, query)) matches.push({ fp, q });
+      }
+    }
+    matches.sort((a, b) => b.q.ts - a.q.ts);
+
+    if (!matches.length) {
+      searchEmptyEl.hidden = false;
+      searchEmptyEl.textContent = 'Keine Treffer.';
+      return;
+    }
+    searchEmptyEl.hidden = true;
+
+    for (const { fp, q } of matches.slice(0, SEARCH_RESULT_LIMIT)) {
+      const contact = contactByFp(fp);
+      const name = contact?.alias ?? shortFp(fp);
+      const li = el('li', 'search-result');
+      const avatar = el('div', 'avatar sm');
+      setAvatar(avatar, name, contact?.avatar);
+      li.appendChild(avatar);
+      const body = el('div', 'search-result-body');
+      const top = el('div', 'search-result-top');
+      top.appendChild(el('span', 'search-result-name', name));
+      top.appendChild(el('span', 'search-result-time', `${fmtDayLabel(q.ts)} · ${fmtTime(q.ts)}`));
+      body.appendChild(top);
+      const text = q.value?.text || (q.refs?.length ? '📎 Anhang' : '');
+      body.appendChild(buildSnippet(text, query));
+      li.appendChild(body);
+      li.addEventListener('click', () => openSearchResult(fp, q.id));
+      searchResultsEl.appendChild(li);
+    }
+  }
+
+  function scrollToMessage(id) {
+    const li = messageListEl.querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (!li) return;
+    li.scrollIntoView({ block: 'center' });
+    const bubble = li.querySelector('.msg-bubble');
+    // Klasse erst entfernen+reflow+wieder setzen, sonst startet die
+    // CSS-Animation beim zweiten Sprung auf DIESELBE Nachricht nicht neu.
+    bubble?.classList.remove('jump-highlight');
+    void bubble?.offsetWidth;
+    bubble?.classList.add('jump-highlight');
+  }
+
+  async function openSearchResult(fp, messageId) {
+    closeSearch();
+    if (activeFp !== fp) await openContact(fp);
+    scrollToMessage(messageId);
+  }
+
+  function openSearch() {
+    searchOverlay.hidden = false;
+    searchInput.value = '';
+    searchFilter = 'all';
+    for (const btn of searchFiltersEl.querySelectorAll('.search-filter-btn')) btn.classList.toggle('active', btn.dataset.filter === 'all');
+    renderSearchResults();
+    searchInput.focus();
+  }
+  function closeSearch() { searchOverlay.hidden = true; }
+
+  searchBtn.addEventListener('click', openSearch);
+  searchBackBtn.addEventListener('click', closeSearch);
+  searchInput.addEventListener('input', renderSearchResults);
+  searchClearBtn.addEventListener('click', () => { searchInput.value = ''; renderSearchResults(); searchInput.focus(); });
+  for (const btn of searchFiltersEl.querySelectorAll('.search-filter-btn')) {
+    btn.addEventListener('click', () => {
+      searchFilter = btn.dataset.filter;
+      for (const b of searchFiltersEl.querySelectorAll('.search-filter-btn')) b.classList.toggle('active', b === btn);
+      renderSearchResults();
+    });
+  }
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !searchOverlay.hidden) closeSearch(); });
 
   /**
    * Löscht einen Chat nur LOKAL — der Nachrichtenverlauf bleibt für den

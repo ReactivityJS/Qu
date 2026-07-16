@@ -16,6 +16,7 @@
           <div class="me-name" id="me-name">…</div>
           <div class="me-fp" id="me-fp-short">…</div>
         </div>
+        <button id="search-btn" class="icon-btn" type="button" title="Suchen">🔍</button>
         <button id="add-contact-btn" class="icon-btn" type="button" title="Kontakt hinzufügen">+</button>
       </header>
       <div id="status-bar" class="status-bar">Verbinde …</div>
@@ -143,6 +144,25 @@
       <button id="call-camera-btn" class="call-btn call-btn-secondary" type="button" title="Kamera aus">📷</button>
       <button id="call-hangup-btn" class="call-btn call-btn-decline" type="button" title="Auflegen">✕</button>
     </div>
+  </div>
+
+  <!-- Suche: über ALLE Chats hinweg (nicht nur den gerade offenen) —
+       messagesByRoom (app.mjs) hält ohnehin schon jeden Raum jedes
+       Kontakts geladen (ensureRoom() läuft beim Start für alle), eine
+       separate Server-Suche ist dafür nicht nötig. -->
+  <div id="search-overlay" class="search-overlay" hidden>
+    <header class="search-header">
+      <button id="search-back-btn" class="back-btn" type="button">&larr;</button>
+      <input id="search-input" type="search" placeholder="Nachrichten durchsuchen …" autocomplete="off" />
+      <button id="search-clear-btn" class="icon-btn" type="button" title="Löschen" hidden>&times;</button>
+    </header>
+    <div class="search-filters">
+      <button class="search-filter-btn active" data-filter="all" type="button">Alle</button>
+      <button class="search-filter-btn" data-filter="links" type="button">🔗 Links</button>
+      <button class="search-filter-btn" data-filter="files" type="button">📎 Dateien</button>
+    </div>
+    <ul id="search-results" class="search-results"></ul>
+    <div id="search-empty" class="search-empty">Suche nach Text, oder wähle „Links“/„Dateien“, um zu stöbern.</div>
   </div>
 
   <script type="module" src="./app.mjs"></script>
