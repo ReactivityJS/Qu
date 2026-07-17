@@ -9,6 +9,15 @@
 self.addEventListener('install', () => { self.skipWaiting(); });
 self.addEventListener('activate', (event) => { event.waitUntil(self.clients.claim()); });
 
+// Reiner Pass-through, kein Caching/Offline-Modus (bewusst NICHT Teil
+// dieser Änderung — nur "installierbar" war gefragt, nicht "funktioniert
+// ohne Netz"). Ein registrierter Service Worker MIT fetch-Handler ist
+// trotzdem eines der Installierbarkeits-Kriterien mancher Browser (u. a.
+// ältere Chrome-Versionen prüfen das explizit) — ohne diesen Listener
+// würde der PWA-Installations-Prompt auf solchen Browsern gar nicht erst
+// erscheinen, obwohl Manifest + Service Worker sonst vollständig da sind.
+self.addEventListener('fetch', (event) => { event.respondWith(fetch(event.request)); });
+
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { /* not JSON — ignore, fall back to defaults below */ }

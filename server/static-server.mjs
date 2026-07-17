@@ -11,6 +11,12 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
+  '.png': 'image/png',
+  // Ohne einen korrekten Content-Type hier akzeptieren manche Browser das
+  // Web App Manifest (examples/chat/manifest.webmanifest) nicht als
+  // installierbar — der generische application/octet-stream-Fallback
+  // unten reicht dafür nicht.
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 
 /**
