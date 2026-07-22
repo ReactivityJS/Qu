@@ -224,6 +224,8 @@ async function main() {
   const localFileStorage = new IndexedDBFileStorageAdapter({ dbName: 'qu-chat-files' });
   qu.use(createFileHandlerPlugin({ fileStorage: localFileStorage }));
 
+  registerServiceWorker(); // so früh wie möglich, unabhängig von der restlichen Chat-Initialisierung — siehe dessen Doku oben
+
   meFpShortEl.textContent = shortFp(qu.fingerprint, 10) + '…';
   setAvatar(meAvatarBtn, localStorage.getItem(ALIAS_KEY) || qu.fingerprint);
   let myAlias = localStorage.getItem(ALIAS_KEY) || `Ich-${qu.fingerprint.slice(0, 4)}`;
@@ -261,6 +263,24 @@ async function main() {
   let fileTransfer;
   let reconnecting = false;
   let reconnectAttempt = 0;
+
+  // Service Worker: unabhängig von Push registriert (s. registerServiceWorker()
+  // unten) — er ist zusammen mit manifest.webmanifest die eigentliche
+  // Installierbarkeits-Voraussetzung (Add to Home Screen / Desktop-
+  // Installation), Push-Benachrichtigungen sind nur EINE Sache, die er
+  // zusätzlich kann. `null`, solange die Registrierung noch läuft oder
+  // fehlgeschlagen ist (z. B. Browser ohne Service-Worker-Unterstützung).
+  let swRegistration = null;
+  /** Wird früh in main() aufgerufen (unten), unabhängig von pushSupported — auf z. B. iOS Safari fehlt PushManager, "Zum Home-Bildschirm hinzufügen" funktioniert (über Safaris eigenen Mechanismus, nicht den Chrome-Installations-Prompt) trotzdem, sobald Manifest + Service Worker da sind. */
+  async function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return null;
+    try {
+      swRegistration = await navigator.serviceWorker.register('./sw.js');
+    } catch (e) {
+      console.error('[chat] service worker registration failed:', e);
+    }
+    return swRegistration;
+  }
 
   // Anruf-Zustand (siehe der ausführliche Kommentar im Anruf-Abschnitt
   // weiter unten) — hier oben deklariert, weil setupCallSignaling()
@@ -1275,7 +1295,6 @@ async function main() {
   const pushStatusEl = $('push-status');
   const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined';
   let vapidPublicKey; // undefined = noch nicht abgefragt, null = Server hat kein Push konfiguriert
-  let swRegistration = null;
 
   function urlBase64ToUint8Array(base64url) {
     const base64 = (base64url + '='.repeat((4 - (base64url.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');
@@ -1320,16 +1339,11 @@ async function main() {
     await repl.sync({ topic: `push-subscription/${qu.fingerprint}` }).catch((e) => console.error('[chat] push subscription sync failed:', e));
   }
 
-  /** Beim Laden (nicht nur beim Klick auf den Button): ein bereits erteiltes Abo erneut ans Relay melden — dessen Zuordnung ist rein flüchtig (siehe publishPushSubscription()s Doku), ein Browser rotiert eine Subscription außerdem gelegentlich selbst. */
+  /** Beim Laden (nicht nur beim Klick auf den Button): ein bereits erteiltes Abo erneut ans Relay melden — dessen Zuordnung ist rein flüchtig (siehe publishPushSubscription()s Doku), ein Browser rotiert eine Subscription außerdem gelegentlich selbst. Registriert den Service Worker NICHT mehr selbst (siehe registerServiceWorker() oben, längst beim main()-Start gelaufen) — nur noch die Push-spezifischen Folgeschritte. */
   async function initPush() {
     if (!pushSupported) { refreshPushUI(); return; }
-    try {
-      swRegistration = await navigator.serviceWorker.register('./sw.js');
-    } catch (e) {
-      console.error('[chat] service worker registration failed:', e);
-      refreshPushUI();
-      return;
-    }
+    if (!swRegistration) await registerServiceWorker();
+    if (!swRegistration) { refreshPushUI(); return; }
     if (Notification.permission === 'granted') {
       const sub = await swRegistration.pushManager.getSubscription();
       if (sub) publishPushSubscription(sub.toJSON()).catch((e) => console.error('[chat] push re-register failed:', e));
