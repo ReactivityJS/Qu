@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Qu, createSpacesPlugin, createFileHandlerPlugin, MemoryFileStorageAdapter,
-  publishFile, reassembleFile, QuIdentity,
+  publishFile, reassembleFile, readFileMeta, QuIdentity,
 } from '../src/index.js';
 import { encryptBytesFor, decryptBytesWith } from '../src/core/crypto.js';
 import { randomBytes } from './helpers.mjs';
@@ -46,7 +46,22 @@ test('publishFile()+reassembleFile() with encryptFor: file content is genuinely 
   });
 
   assert.ok(manifest.contentEncryption, 'manifest must record how to decrypt the content');
-  assert.equal(manifest.size, original.length, 'size stays the PLAINTEXT length, not the (slightly larger) ciphertext length');
+  assert.ok(manifest.metaEncryption, 'name/mime/size must be encrypted too, separately from the content');
+  assert.equal(manifest.name, undefined, 'plaintext name must not leak onto the manifest when encrypted');
+  assert.equal(manifest.mime, undefined, 'plaintext mime must not leak onto the manifest when encrypted');
+  assert.equal(manifest.size, undefined, 'plaintext size must not leak onto the manifest when encrypted');
+
+  const metaForBob = await readFileMeta(manifest, bob.identity);
+  assert.deepEqual(metaForBob, { name: 'geheim.bin', mime: 'application/octet-stream', size: original.length }, 'the addressed recipient can read the real metadata, with size staying the PLAINTEXT length');
+
+  const metaForOutsider = await readFileMeta(manifest, outsider.identity);
+  assert.equal(metaForOutsider, undefined, 'a non-recipient identity cannot decrypt the metadata either');
+
+  await assert.rejects(
+    () => readFileMeta(manifest), // no identity at all
+    /identity is required/,
+    'reading encrypted metadata without any identity must fail loudly',
+  );
 
   // The stored chunk bytes themselves must not be the plaintext — verify
   // directly against the storage adapter, not just via reassembleFile()
@@ -76,6 +91,8 @@ test('publishFile() without encryptFor stays plaintext, unchanged from before th
   const { manifest } = await publishFile(owner.session, 'plain-file', original, { name: 'offen.bin', fileStorage: storage });
 
   assert.equal(manifest.contentEncryption, undefined, 'no contentEncryption field when encryptFor was never given');
+  assert.equal(manifest.metaEncryption, undefined, 'no metaEncryption field when encryptFor was never given');
+  assert.deepEqual(await readFileMeta(manifest), { name: 'offen.bin', mime: 'application/octet-stream', size: original.length }, 'readFileMeta() works without an identity when the manifest was never encrypted');
   const firstChunk = await storage.getChunk(manifest.chunks[0]);
   assert.deepEqual(firstChunk, original.subarray(0, firstChunk.length), 'chunk bytes are exactly the plaintext, exactly as before');
 

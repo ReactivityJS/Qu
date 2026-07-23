@@ -1,7 +1,7 @@
 import { sha256Hex } from '../../core/bytes.js';
 import { debug } from '../../core/debug.js';
 import { assertFileStorageAdapter } from './contract.js';
-import { encryptBytesFor, decryptBytesWith } from '../../core/crypto.js';
+import { encryptFor as encryptValueFor, decryptWith, encryptBytesFor, decryptBytesWith } from '../../core/crypto.js';
 
 const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64 KiB
 const YIELD_EVERY_N_CHUNKS = 8; // give the event loop (and the WebSocket connection's own housekeeping) room to breathe on a long file
@@ -46,6 +46,16 @@ function yieldToEventLoop() {
  * today's plaintext, dedup-friendly behavior exactly as before — this is
  * opt-in, not a breaking change.
  *
+ * `name`/`mime`/`size` are ALSO encrypted when `encryptFor` is given — a
+ * filename alone can be plenty revealing ("Kündigung.pdf",
+ * "IMG_Passbild.jpg"). They're encrypted SEPARATELY from the content
+ * (core/crypto.js's ordinary JSON encryptFor(), not encryptBytesFor()) —
+ * a small ciphertext stored in the manifest's own `metaEncryption` field
+ * — specifically so a UI can show a real filename/type/size (readFileMeta()
+ * below) WITHOUT first downloading and decrypting the entire file, which
+ * could be large. Only `chunkSize`/`chunks` stay in the clear on the
+ * manifest itself when encrypted.
+ *
  * The MANIFEST QuBit itself is deliberately published UNENCRYPTED,
  * always — NOT forwarded to session.publish() the way an ordinary
  * encryptFor write would be. data/files/transfer.js's DefaultFileTransfer
@@ -54,9 +64,10 @@ function yieldToEventLoop() {
  * (it has no identity to decrypt with — chunk transfer is deliberately
  * agnostic to what's inside a chunk). An encrypted manifest QuBit would
  * make `.chunks` invisible to that raw read and break file transfer
- * entirely, for sender and recipient alike — this bit content-hides
- * name/mime/size, which encryptFor alone cannot do for a file without
- * also breaking the ability to ever fetch it.
+ * entirely, for sender and recipient alike — encrypting name/mime/size
+ * as their OWN separate fields (metaEncryption/contentEncryption) inside
+ * an otherwise-plaintext manifest sidesteps that without touching the
+ * transfer protocol at all.
  */
 export async function publishFile(session, id, bytes, { name, mime = 'application/octet-stream', chunkSize = DEFAULT_CHUNK_SIZE, fileStorage, refs, encryptFor } = {}) {
   if (!fileStorage) throw new Error('[publishFile] fileStorage (a FileStorageAdapter) is required');
@@ -65,11 +76,17 @@ export async function publishFile(session, id, bytes, { name, mime = 'applicatio
   const plainSize = data.length;
 
   let contentEncryption;
+  let metaEncryption;
   if (encryptFor && encryptFor.length) {
     const recipients = await session.resolveEncryptionRecipients(encryptFor);
     const { envelope, ciphertext } = await encryptBytesFor(recipients, data);
     contentEncryption = envelope;
     data = ciphertext;
+    // `size` bleibt die KLARTEXT-Größe (für eine sinnvolle Anzeige, "3.2 MB"
+    // statt der um den AES-GCM-Auth-Tag leicht größeren Chiffretext-Länge)
+    // — reassembleFile() liefert ohnehin wieder Klartext-Bytes zurück, die
+    // tatsächlich gespeicherte/übertragene Chunk-Summe darf davon abweichen.
+    metaEncryption = await encryptValueFor(recipients, { name, mime, size: plainSize });
   }
 
   const chunks = splitChunks(data, chunkSize);
@@ -81,15 +98,35 @@ export async function publishFile(session, id, bytes, { name, mime = 'applicatio
     hashes.push(hash);
     if (i % YIELD_EVERY_N_CHUNKS === 0) await yieldToEventLoop();
   }
-  // `size` bleibt die KLARTEXT-Größe (für eine sinnvolle Anzeige, "3.2 MB"
-  // statt der um den AES-GCM-Auth-Tag leicht größeren Chiffretext-Länge)
-  // — reassembleFile() liefert ohnehin wieder Klartext-Bytes zurück, die
-  // tatsächlich gespeicherte/übertragene Chunk-Summe darf davon abweichen.
-  const manifest = { name, mime, size: plainSize, chunkSize, chunks: hashes };
-  if (contentEncryption) manifest.contentEncryption = contentEncryption;
+  const manifest = { chunkSize, chunks: hashes };
+  if (contentEncryption) {
+    manifest.contentEncryption = contentEncryption;
+    manifest.metaEncryption = metaEncryption;
+  } else {
+    manifest.name = name;
+    manifest.mime = mime;
+    manifest.size = plainSize;
+  }
   const result = await session.publish(id, manifest, { refs, encryptFor: null }); // siehe Doku oben — muss für DefaultFileTransfer roh lesbar bleiben
   debug('files', 'chunking-complete', { id, chunkCount: chunks.length });
   return { manifestId: id, manifest, ...result };
+}
+
+/**
+ * `{ name, mime, size }` for a manifest — decrypts `metaEncryption` if
+ * present (needs `identity`; throws if omitted, same reasoning as
+ * reassembleFile()), otherwise just reads the plaintext fields directly.
+ * Deliberately independent of the file's actual content/chunks — a UI
+ * can show a real filename, type, and size immediately (e.g. while a
+ * large attachment is still downloading) instead of only after
+ * reassembling and decrypting the whole thing. `undefined` if `identity`
+ * is valid but isn't among the file's recipients (same convention as
+ * core/crypto.js's decryptWith()/decryptBytesWith()).
+ */
+export async function readFileMeta(manifest, identity = null) {
+  if (!manifest.metaEncryption) return { name: manifest.name, mime: manifest.mime, size: manifest.size };
+  if (!identity) throw new Error('[readFileMeta] this file\'s metadata is encrypted (manifest.metaEncryption) — an identity is required to decrypt it');
+  return decryptWith(identity, manifest.metaEncryption);
 }
 
 /**
