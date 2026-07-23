@@ -208,6 +208,7 @@ button { font-family: inherit; }
 .msg-meta { display: flex; gap: 0.3rem; align-items: center; justify-content: flex-end; font-size: 0.68rem; color: var(--muted); margin-top: 0.2rem; }
 .msg-meta .tick { color: var(--muted); }
 .msg-meta .tick.read { color: var(--accent-strong); }
+.msg-meta .tick.pending { opacity: 0.55; }
 .msg-sender { font-size: 0.72rem; color: var(--accent); margin-bottom: 0.15rem; }
 
 .msg-link {

@@ -49,6 +49,7 @@ const MUTED_ROOMS_KEY = 'qu-chat-muted-rooms';
 const SOUND_MESSAGES_KEY = 'qu-chat-sound-messages';
 const SOUND_CALLS_KEY = 'qu-chat-sound-calls';
 const UNENCRYPTED_ROOMS_KEY = 'qu-chat-unencrypted-rooms'; // siehe isRoomEncrypted() weiter unten
+const PENDING_DELIVERY_KEY = 'qu-chat-pending-delivery'; // siehe confirmDelivery() weiter unten
 // Enger als modules/chat.js's eigene Defaults (8s/20s) — ein Kontakt soll
 // sichtbar zügig als "offline" erkannt werden, nicht erst nach bis zu 20s
 // Unschärfe. 3x Heartbeat als Stale-Schwelle lässt trotzdem genug
@@ -276,6 +277,21 @@ function setRoomEncrypted(roomId, encrypted) {
   localStorage.setItem(UNENCRYPTED_ROOMS_KEY, JSON.stringify([...unencryptedRooms]));
 }
 
+// --- "Beim Relay angekommen?"-Status eigener Nachrichten (siehe
+// confirmDelivery() weiter unten) ---
+// Persistiert (nicht nur im Speicher), WEIL genau der Fall zählt, den
+// dieses Feature adressiert: ein Upload, dessen Bestätigung noch nicht da
+// war, als das Gerät ausgeschaltet/die Seite geschlossen wurde — ohne
+// Persistenz würde der nächste Appstart einfach vergessen, dass da noch
+// etwas unbestätigt in der Luft hängt, und die UI zeigte dauerhaft (fälschlich)
+// "gesendet" statt es beim nächsten Verbindungsaufbau erneut zu prüfen.
+function loadPendingDeliveries() {
+  try { return JSON.parse(localStorage.getItem(PENDING_DELIVERY_KEY)) ?? []; } catch { return []; }
+}
+function savePendingDeliveries(list) {
+  localStorage.setItem(PENDING_DELIVERY_KEY, JSON.stringify(list));
+}
+
 // --- Töne (Web Audio API, synthetisiert — kein externes Audio-Asset
 // nötig, funktioniert also ohne jeden zusätzlichen Download/Lizenzfrage) ---
 // Ein/Aus je Ereignistyp global (SOUND_MESSAGES_KEY/SOUND_CALLS_KEY,
@@ -394,6 +410,56 @@ async function main() {
   let reconnecting = false;
   let reconnectAttempt = 0;
 
+  // --- "Beim Relay angekommen?"-Status eigener Nachrichten ---
+  // Vor connectToRelay() deklariert (das confirmDelivery() weiter unten
+  // schon beim allerersten Verbindungsaufbau aufruft) — als `let`
+  // deklarierte Bindungen sind NICHT wie Funktionsdeklarationen gehoben,
+  // eine spätere Deklaration hier würde bei diesem ersten Aufruf mit einem
+  // "Cannot access before initialization" (TDZ) crashen.
+  //
+  // deliveredMsgIds: welche (dieser Session bekannten) eigenen Nachrichten
+  // bereits BESTÄTIGT beim Relay angekommen sind (Uhr-Symbol → einfacher
+  // Haken). pendingDeliveries (aus localStorage vorbefüllt, siehe
+  // PENDING_DELIVERY_KEY oben) ist die Kehrseite: eigene Nachrichten, die
+  // NOCH NICHT bestätigt sind — nur diese zeigen überhaupt das Uhr-Symbol,
+  // jede ältere/unbekannte eigene Nachricht gilt stillschweigend als
+  // "gesendet" (renderTicks() weiter unten), genau wie vor diesem Feature.
+  const deliveredMsgIds = new Set();
+  let pendingDeliveries = loadPendingDeliveries();
+
+  /**
+   * Prüft für EINE eigene Nachricht (+ ihre Anhänge), ob sie inzwischen
+   * beim Relay angekommen ist — über die neue DefaultReplication#
+   * waitUntilReplicated() (für die Nachricht selbst) und die schon
+   * bestehende DefaultFileTransfer#waitUntilReady() (für jeden Anhang:
+   * "hat der Relay wirklich ALLE Chunks", nicht nur das Manifest). Beide
+   * pollen mit Backoff über das Netzwerk — kein blindes UI-Polling, nur
+   * EIN Aufruf pro (Wieder-)Verbindung (siehe connectToRelay()) oder
+   * direkt nach dem Senden. Läuft die Wartezeit ab, OHNE dass
+   * connectToRelay() zwischenzeitlich fehlschlug, bleibt der Eintrag
+   * einfach in pendingDeliveries stehen — der nächste Reconnect versucht
+   * es erneut, unbegrenzt, bis es klappt oder der Nutzer den Chat löscht.
+   */
+  async function confirmDelivery(entry) {
+    if (deliveredMsgIds.has(entry.id)) return;
+    if (!channel?.isOpen()) return; // nichts zu prüfen gerade — nächster Reconnect versucht es erneut
+    try {
+      const msgOk = await repl.waitUntilReplicated(entry.id, { ts: entry.ts, maxWaitMs: 20000 });
+      if (!msgOk) return;
+      for (const ref of entry.refs ?? []) {
+        const ready = await fileTransfer.waitUntilReady(ref, { maxWaitMs: 20000 });
+        if (!ready) return;
+      }
+    } catch (e) {
+      console.error('[chat] confirmDelivery fehlgeschlagen:', entry.id, e);
+      return;
+    }
+    deliveredMsgIds.add(entry.id);
+    pendingDeliveries = pendingDeliveries.filter((p) => p.id !== entry.id);
+    savePendingDeliveries(pendingDeliveries);
+    if (activeFp === entry.fp) renderTicks(entry.fp);
+  }
+
   // Service Worker: unabhängig von Push registriert (s. registerServiceWorker()
   // unten) — er ist zusammen mit manifest.webmanifest die eigentliche
   // Installierbarkeits-Voraussetzung (Add to Home Screen / Desktop-
@@ -491,6 +557,13 @@ async function main() {
       repl.ensureSynced(`~${fp}/avatar`).catch((e) => console.error('[chat] avatar re-watch failed:', fp, e));
     }
     setupCallSignaling(channel); // siehe Anruf-Abschnitt weiter unten — an JEDEN (neuen) Channel neu gebunden
+
+    // Jede noch unbestätigte eigene Nachricht (auch über einen App-Neustart
+    // hinweg, siehe pendingDeliveries' Initialisierung aus localStorage)
+    // erneut prüfen — deckt genau den Fall ab, dass die Bestätigung beim
+    // letzten Mal nicht mehr rechtzeitig ankam, bevor die Verbindung/App
+    // beendet wurde (siehe confirmDelivery()'s Doku).
+    for (const entry of pendingDeliveries) confirmDelivery(entry).catch(() => {});
   }
 
   function scheduleReconnect() {
@@ -801,11 +874,21 @@ async function main() {
 
   function renderTicks(fp) {
     const receipts = receiptsByRoom.get(fp) ?? {};
+    const pendingIds = new Set(pendingDeliveries.map((p) => p.id));
     for (const li of messageListEl.querySelectorAll('[data-mine="1"]')) {
+      const id = li.dataset.id;
       const ts = Number(li.dataset.ts);
       const read = Object.entries(receipts).some(([reader, upTo]) => reader !== qu.fingerprint && upTo >= ts);
       const tick = li.querySelector('.tick');
-      if (tick) { tick.textContent = read ? '✓✓' : '✓'; tick.classList.toggle('read', read); }
+      if (!tick) continue;
+      // Reihenfolge: gelesen schlägt immer "noch nicht beim Relay
+      // bestätigt" (ein Empfänger, der es gelesen hat, hat es zwangsläufig
+      // auch empfangen — sonst könnte er es gar nicht gelesen haben,
+      // selbst wenn UNSERE eigene waitUntilReplicated()-Prüfung noch
+      // aussteht/fehlgeschlagen ist).
+      if (read) { tick.textContent = '✓✓'; tick.classList.add('read'); tick.classList.remove('pending'); }
+      else if (pendingIds.has(id) && !deliveredMsgIds.has(id)) { tick.textContent = '🕐'; tick.classList.remove('read'); tick.classList.add('pending'); }
+      else { tick.textContent = '✓'; tick.classList.remove('read', 'pending'); }
     }
   }
 
@@ -1385,9 +1468,10 @@ async function main() {
     const text = textInput.value.trim();
     const files = pendingFiles;
     if (!text && !files.length) return;
+    const roomId = ensuredRoomIds.get(activeFp);
+    const fp = activeFp;
     sendBtn.disabled = true;
     try {
-      const roomId = ensuredRoomIds.get(activeFp);
       const attachments = [];
       for (const file of files) {
         const bytes = new Uint8Array(await file.arrayBuffer());
@@ -1401,11 +1485,34 @@ async function main() {
       // Verschlüsselung bewusst abgeschaltet hat (isRoomEncrypted() oben,
       // per mute-chat-btn-Pendant im Header) — session.js's eigene Doku
       // nennt genau das den vorgesehenen expliziten Opt-out.
-      await qu.sendMessage(roomId, { text, attachments, encryptFor: isRoomEncrypted(roomId) ? [qu.fingerprint, activeFp] : null });
+      const sent = await qu.sendMessage(roomId, {
+        text, attachments, encryptFor: isRoomEncrypted(roomId) ? [qu.fingerprint, activeFp] : null,
+        // Fortschritt für lokales Verschlüsseln/Zerstückeln GROSSER Anhänge
+        // (z. B. ein Video) — ohne das sah ein größerer Upload nach einem
+        // hängenden Sendevorgang aus, weil die UI vorher bis zum Schluss
+        // nichts von der Arbeit zeigte, die publishFile() dabei im
+        // Hintergrund macht (Hashing/Verschlüsseln pro Chunk).
+        onAttachmentProgress: attachments.length ? (i, p) => {
+          const label = attachments.length > 1 ? ` (${i + 1}/${attachments.length})` : '';
+          statusBar.textContent = p.phase === 'encrypting'
+            ? `Anhang wird verschlüsselt${label} …`
+            : `Anhang wird hochgeladen${label} … ${Math.round((p.done / p.total) * 100)}%`;
+        } : undefined,
+      });
+      statusBar.textContent = 'Verbunden';
       textInput.value = '';
       autoGrow();
       pendingFiles = [];
       renderPendingFiles();
+
+      // "Beim Relay angekommen?"-Status: als unbestätigt eintragen (auch
+      // persistiert, siehe PENDING_DELIVERY_KEY) und im Hintergrund prüfen
+      // — siehe confirmDelivery()'s eigene Doku oben für das Wie/Warum.
+      const entry = { id: sent.qubit.id, ts: sent.qubit.ts, roomId, fp, refs: sent.refs };
+      pendingDeliveries.push(entry);
+      savePendingDeliveries(pendingDeliveries);
+      if (activeFp === fp) renderTicks(fp);
+      confirmDelivery(entry).catch(() => {});
     } catch (e) {
       console.error('[chat] send failed:', e);
       statusBar.textContent = `Senden fehlgeschlagen: ${e.message}`;

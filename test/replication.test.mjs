@@ -262,3 +262,56 @@ test('without a router, DefaultReplication behaves exactly as before (backward c
   assert.equal(seen, true);
   repl.close();
 });
+
+test('hasRemote()/waitUntilReplicated(): a writer can confirm its own write actually reached the peer, gated by the same read-ACL as everything else', async () => {
+  const server = makeRuntime();
+  server.use(createACLPlugin(async () => null));
+  const client = makeRuntime();
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+  const serverRepl = new DefaultReplication(server, chA, {
+    getACL: async () => ({ readers: ['*'] }),
+    peerFingerprint: 'client-fp',
+  });
+  const clientRepl = new DefaultReplication(client, chB, {});
+
+  // Nothing published yet — the peer genuinely doesn't have it.
+  assert.equal(await clientRepl.hasRemote('room/msg1'), false, 'must report false, not throw, for an id the peer has never seen');
+
+  const alice = await QuIdentity.generate();
+  const session = new QuSession(client, { identity: alice });
+  const id = 'room/msg1';
+  await session.publish(id, 'hello'); // publish() returns only { accepted }, not the qubit — read it back for its ts
+  const { ts } = await client.get(id);
+  await wait(50); // let the live push (client has no pushTopics restriction by default — same as maybePush's own tests) land on the server side
+
+  assert.equal(await serverRepl.hasRemote(id, { ts }), true, 'the server, having received the live push, must confirm it now has the exact (id, ts)');
+  assert.equal(await serverRepl.hasRemote(id, { ts: ts + 1 }), false, 'a mismatched ts must not be reported as present');
+
+  const readyQuickly = await clientRepl.waitUntilReplicated(id, { ts, intervalMs: 20, maxWaitMs: 500 });
+  assert.equal(readyQuickly, false, 'the client itself never receives its own push back (no echo) — waitUntilReplicated() must time out, not hang or falsely resolve');
+
+  serverRepl.close();
+  clientRepl.close();
+});
+
+test('hasRemote(): a read-restricted qubit is not confirmed to a peer without read access, even though it does exist', async () => {
+  const server = makeRuntime();
+  const readACL = { 'secret/x': { readers: ['someone-else-fp'] } };
+  server.use(createACLPlugin(async (id) => readACL[id] ?? { readers: ['*'] }));
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+  const serverRepl = new DefaultReplication(server, chA, {
+    getACL: async (id) => readACL[id] ?? { readers: ['*'] },
+    peerFingerprint: 'client-fp', // not "someone-else-fp" — must be denied
+  });
+  const clientRepl = new DefaultReplication(makeRuntime(), chB, {});
+
+  const alice = await QuIdentity.generate();
+  const session = new QuSession(server, { identity: alice });
+  const id = 'secret/x';
+  await session.publish(id, 'classified');
+
+  assert.equal(await clientRepl.hasRemote(id), false, 'existence must not leak to a peer the read-ACL denies, even though the qubit genuinely exists');
+
+  serverRepl.close();
+  clientRepl.close();
+});
