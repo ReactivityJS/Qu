@@ -47,6 +47,8 @@
         </div>
         <button id="audio-call-btn" class="icon-btn" type="button" title="Anrufen">📞</button>
         <button id="video-call-btn" class="icon-btn" type="button" title="Videoanruf">🎥</button>
+        <button id="mute-chat-btn" class="icon-btn" type="button" title="Diesen Chat stummschalten">🔔</button>
+        <button id="encryption-chat-btn" class="icon-btn" type="button" title="Verschlüsselung für diesen Chat">🔒</button>
         <button id="delete-chat-btn" class="icon-btn" type="button" title="Chat löschen">🗑</button>
       </header>
 
@@ -95,6 +97,10 @@
         <button id="push-toggle-btn" class="btn btn-secondary" type="button">…</button>
         <span id="push-status" class="modal-hint push-status"></span>
       </div>
+      <label>Töne</label>
+      <label class="toggle-row"><input type="checkbox" id="sound-messages-toggle" /> Ton bei neuen Nachrichten</label>
+      <label class="toggle-row"><input type="checkbox" id="sound-calls-toggle" /> Klingelton bei Anrufen</label>
+      <p class="modal-hint">Pro Chat lässt sich zusätzlich stummschalten (🔔-Symbol im jeweiligen Chat).</p>
       <label>Fehlerbehebung</label>
       <div class="modal-actions">
         <button id="reset-app-btn" class="btn btn-secondary" type="button">App zurücksetzen</button>

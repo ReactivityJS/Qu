@@ -23,7 +23,19 @@ export async function sendMessage(space, { text, attachments = [], encryptFor } 
   const refs = [];
   for (const att of attachments) {
     const fileId = `files/${fp}/${space.runtime.nextTs()}-${randomId()}`;
-    const { manifestId } = await space.get(fileId).put(att.bytes, { name: att.name, mime: att.mime, fileStorage: att.fileStorage });
+    // `encryptFor` durchreichen wie beim Nachrichtentext — sonst würde
+    // dieselbe Nachricht am Ende inkonsistent verschlüsselt: Text
+    // geschützt, aber Dateiname/MIME-Typ/Größe des Anhangs im Klartext,
+    // egal was der Aufrufer für die Nachricht selbst gewählt hat. WICHTIG:
+    // das verschlüsselt nur das MANIFEST (Metadaten) — die eigentlichen
+    // Datei-BYTES bleiben unverschlüsselt (data/files/manifest.js's
+    // publishFile(): Chunks werden inhaltsadressiert über den Klartext-
+    // Hash gespeichert, absichtlich, für kostenloses Dedup über mehrere
+    // Sender hinweg — Verschlüsselung würde pro Empfänger einen anderen
+    // Hash für denselben Inhalt erzeugen und dieses Dedup strukturell
+    // zerstören). Ein 1:1-Chat ist heute also für TEXT Ende-zu-Ende
+    // verschlüsselbar, für ANHANG-INHALTE (noch) nicht.
+    const { manifestId } = await space.get(fileId).put(att.bytes, { name: att.name, mime: att.mime, fileStorage: att.fileStorage, encryptFor });
     refs.push(manifestId);
   }
   return space.get('msgs').set({ text }, { refs: refs.length ? refs : undefined, encryptFor });
