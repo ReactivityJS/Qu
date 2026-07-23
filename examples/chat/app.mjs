@@ -1933,13 +1933,40 @@ async function main() {
     if (!activeCall) { stopStream(stream); return; } // währenddessen schon wieder aufgelegt
     activeCall.localStream = stream;
     callLocalVideo.srcObject = stream;
-    try {
-      await webrtcManager.connectDirect(peerFp, { pushTopics: [] });
-      // onCallConnected() (über onConnect() unten) übernimmt den Rest, sobald die Verbindung wirklich steht.
-    } catch (e) {
-      console.error('[chat] call failed:', e);
-      statusBar.textContent = CALL_CONNECT_FAILED_MSG;
-      endCall('error');
+
+    // Klingel-Ping (call-invite) UND das eigentliche WebRTC-Angebot sind
+    // beides einmalige, ungepufferte Nachrichten (core/routed-events.js) —
+    // ist die Gegenseite gerade nicht verbunden, verwirft der Relay sie
+    // stillschweigend (relay.mjs's `route-target-offline`), es gibt KEINE
+    // Warteschlange. relay.mjs weckt eine offline Gegenseite in diesem
+    // Fall zwar per Web Push, aber ohne diese Schleife bliebe der EINE
+    // schon verworfene Verbindungsversuch trotzdem für immer verloren —
+    // die Gegenseite müsste selbst zurückrufen. Solange noch geklingelt
+    // wird (RING_TIMEOUT_MS begrenzt das Ganze ohnehin), also alle
+    // CALL_RETRY_INTERVAL_MS erneut anklingeln UND einen frischen
+    // connectDirect()-Versuch anstoßen — channel.connect() hat selbst kein
+    // Timeout (wartet sonst bis RING_TIMEOUT_MS unbegrenzt auf eine nie
+    // kommende Antwort), deshalb hier bewusst NICHT abgewartet, sondern
+    // nur beobachtet: ein WIRKLICHER Fehler (Handshake-Mismatch o. Ä., kein
+    // simples "niemand antwortet") beendet den Anruf sofort, ein
+    // schlicht (noch) unbeantworteter Versuch lässt einfach die nächste
+    // Runde starten. Ein spät/parallel doch noch erfolgreicher älterer
+    // Versuch ist unschädlich — onCallConnected() (siehe dort) prüft vor
+    // jeder Wirkung, ob `activeCall`/dessen `pc` noch der AKTUELLE ist.
+    const CALL_RETRY_INTERVAL_MS = 6000;
+    while (activeCall?.peerFp === peerFp && activeCall.state === 'ringing') {
+      webrtcManager.connectDirect(peerFp, { pushTopics: [] }).catch((e) => {
+        if (activeCall?.peerFp === peerFp && activeCall.state === 'ringing') {
+          console.error('[chat] call failed:', e);
+          statusBar.textContent = CALL_CONNECT_FAILED_MSG;
+          endCall('error');
+        }
+      });
+      // onCallConnected() (über onConnect() unten) übernimmt den Rest, sobald irgendein Versuch wirklich steht.
+      await wait(CALL_RETRY_INTERVAL_MS);
+      if (activeCall?.peerFp === peerFp && activeCall.state === 'ringing') {
+        sendRoutedEvent(channel, peerFp, 'call-invite', { callType: kind, callerAlias: myAlias }).catch(() => {});
+      }
     }
   }
 
@@ -2016,7 +2043,17 @@ async function main() {
     });
 
     onRoutedEvent(currentChannel, 'call-invite', (msg) => {
-      if (activeCall) { sendRoutedEvent(currentChannel, msg.from, 'call-decline', { reason: 'busy' }).catch(() => {}); return; }
+      // startCall() klingelt bei einer (noch) nicht erreichbaren Gegenseite
+      // periodisch erneut an (siehe dortige Doku) — eine wiederholte
+      // Einladung VOM SELBEN Anrufer, während wir SEINETWEGEN schon
+      // klingeln, ist genau das, kein zweiter Anruf: einfach ignorieren,
+      // statt fälschlich mit "besetzt" zu antworten (das würde den
+      // eigentlich noch laufenden Anruf sofort abwürgen).
+      if (activeCall) {
+        if (activeCall.peerFp === msg.from && activeCall.direction === 'incoming' && activeCall.state === 'ringing') return;
+        sendRoutedEvent(currentChannel, msg.from, 'call-decline', { reason: 'busy' }).catch(() => {});
+        return;
+      }
       const fromFp = msg.from;
       const alias = contactByFp(fromFp)?.alias ?? msg.payload?.callerAlias ?? shortFp(fromFp);
       activeCall = {

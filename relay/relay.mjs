@@ -119,6 +119,8 @@ export async function createRelay({
     allowDynamicSubscribe, maxDynamicTopics,
   });
   const connected = new Map(); // fingerprint -> { channel, fileTransfer }
+  const recentCallPushes = new Map(); // to-fingerprint -> timestamp of the last call-invite push sent them
+  const CALL_PUSH_COOLDOWN_MS = 20_000; // examples/chat/app.mjs's startCall() re-announces 'call-invite' every 6s while ringing — without this, one ring would trigger a push every 6s instead of once
 
   // Notify an OFFLINE room member by Web Push instead of the live delivery
   // they'd otherwise get through their own connection — this is what lets
@@ -282,6 +284,41 @@ export async function createRelay({
       const target = connected.get(msg.to);
       if (!target) {
         debug('relay', 'route-target-offline', { to: msg.to, from: peerFingerprint, event: msg.event });
+        // Ein Anruf-Klingeln (examples/chat/app.mjs's startCall(), 'call-
+        // invite') ist der einzige geroutete Event-Typ, für den "die
+        // Gegenseite bekommt es sonst NIE" tatsächlich ein Problem ist —
+        // anders als z. B. ein ICE-Kandidat (der ohnehin nur Sinn ergibt,
+        // während schon eine laufende Verbindung ausgehandelt wird) lohnt
+        // sich hier ein Weckruf: dieselbe Web-Push-Infrastruktur wie beim
+        // Nachrichten-Hook oben, nur mit anderem Titel/Text und OHNE
+        // jeglichen Anruf-Inhalt (SDP/ICE bleiben weiterhin ungepuffert
+        // verloren — der Push weckt nur das Gerät/die App; startCall()
+        // klingelt periodisch erneut an, solange noch geklingelt wird,
+        // genau damit ein rechtzeitig reconnectender Angerufener den
+        // Anruf tatsächlich noch bekommt, siehe dortige Doku).
+        if (sendPush && msg.event === 'call-invite') {
+          const subscription = pushSubscriptions.get(msg.to);
+          const lastPush = recentCallPushes.get(msg.to) ?? 0;
+          if (subscription && Date.now() - lastPush >= CALL_PUSH_COOLDOWN_MS) {
+            recentCallPushes.set(msg.to, Date.now());
+            relay.runtime.get(`~${peerFingerprint}/alias`).then((aliasQ) => {
+              const callerName = aliasQ?.value ?? null;
+              return sendPush({
+                subscription,
+                payload: {
+                  title: 'QU Chat', call: true, fp: peerFingerprint,
+                  body: callerName ? `📞 ${callerName} ruft an` : '📞 Eingehender Anruf',
+                },
+              });
+            }).then(() => {
+              debug('relay', 'call-push-sent', { to: msg.to, from: peerFingerprint });
+            }).catch((e) => {
+              if (e.status === 404 || e.status === 410) pushSubscriptions.delete(msg.to);
+              debug('relay', 'call-push-failed', { to: msg.to, from: peerFingerprint, error: e.message, status: e.status });
+              console.error(`[Relay] call push to ${msg.to} failed:`, e.message);
+            });
+          }
+        }
         return;
       }
       // `from` kommt aus der eigenen, per Handshake bewiesenen Kenntnis

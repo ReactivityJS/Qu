@@ -27,6 +27,11 @@ self.addEventListener('push', (event) => {
     tag: data.fp || 'qu-chat', // same sender -> replaces the previous notification instead of stacking
     renotify: true,
     data: { fp: data.fp || null },
+    // Ein Anruf-Weckruf (relay.mjs's call-invite push hook) soll nicht
+    // von selbst verschwinden, bevor jemand ihn überhaupt gesehen hat —
+    // eine normale Nachricht darf das schon (kein requireInteraction).
+    requireInteraction: !!data.call,
+    vibrate: data.call ? [300, 150, 300, 150, 300] : undefined,
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
