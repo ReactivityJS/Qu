@@ -1,1 +1,6 @@
 .relay-data/
+node_modules/
+# Build-Artefakt (scripts/build.mjs) — lebt nur im dist-Branch, den
+# .github/workflows/build-cdn.yml nach jedem Merge nach main aktualisiert,
+# nicht in main selbst (siehe dessen Doku-Kommentar).
+dist/
