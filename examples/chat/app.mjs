@@ -48,6 +48,7 @@ const CONTACTS_KEY = 'qu-chat-contacts';
 const MUTED_ROOMS_KEY = 'qu-chat-muted-rooms';
 const SOUND_MESSAGES_KEY = 'qu-chat-sound-messages';
 const SOUND_CALLS_KEY = 'qu-chat-sound-calls';
+const UNENCRYPTED_ROOMS_KEY = 'qu-chat-unencrypted-rooms'; // siehe isRoomEncrypted() weiter unten
 // Enger als modules/chat.js's eigene Defaults (8s/20s) — ein Kontakt soll
 // sichtbar zügig als "offline" erkannt werden, nicht erst nach bis zu 20s
 // Unschärfe. 3x Heartbeat als Stale-Schwelle lässt trotzdem genug
@@ -90,6 +91,7 @@ const searchEmptyEl = $('search-empty');
 const audioCallBtn = $('audio-call-btn');
 const videoCallBtn = $('video-call-btn');
 const muteChatBtn = $('mute-chat-btn');
+const encryptionChatBtn = $('encryption-chat-btn');
 const soundMessagesToggle = $('sound-messages-toggle');
 const soundCallsToggle = $('sound-calls-toggle');
 const callOverlay = $('call-overlay');
@@ -239,6 +241,39 @@ function isRoomMuted(roomId) { return mutedRooms.has(roomId); }
 function setRoomMuted(roomId, muted) {
   if (muted) mutedRooms.add(roomId); else mutedRooms.delete(roomId);
   localStorage.setItem(MUTED_ROOMS_KEY, JSON.stringify([...mutedRooms]));
+}
+
+// --- Verschlüsselung pro Chat (Default: AN) ---
+// core/session.js's Session#publish() verschlüsselt automatisch für
+// exakt die `readers` eines Space, SOBALD `encryptFor` beim Schreiben
+// weggelassen wird — ABER nur, wenn `readers` eine konkrete Liste ist,
+// nicht der Platzhalter `['*']` (dessen eigene Doku: "encryptFor
+// omitted... defaults to encrypting for exactly that list" bzw. bei
+// `['*']` ein bewusstes No-Op). Ein DM-Raum hier nutzt `readers: ['*']`
+// — nicht, weil er öffentlich lesbar sein SOLL, sondern weil ein Relay
+// ein QuBit nur weiterleiten darf, wenn es selbst in dessen `readers`
+// steht (siehe ensureRoom()), und `['*']` das ohne hartkodierten
+// Relay-Fingerprint löst. Deshalb übergibt der Composer unten explizit
+// `encryptFor: [eigener Fingerprint, Peer]` statt sich auf die
+// automatische Ableitung zu verlassen — genau dieser explizite Aufruf
+// ist der Schalter, den dieses Feature umlegt: `null` (siehe
+// Session#publish()s eigene Doku: "explizit `null`/`[]` ist ein
+// bewusster Opt-out") statt der Empfängerliste lässt die Nachricht
+// unverschlüsselt, GENAU dort, wo `readers: ['*']` ohnehin schon
+// erlaubt, dass sie jeder mit Lesezugriff auf den Space sieht (Relay
+// eingeschlossen) — Schreiben bleibt weiterhin auf die Chat-Mitglieder
+// beschränkt (`writers`), nur die Vertraulichkeit des INHALTS entfällt.
+// Gilt NUR für die eigenen, künftigen Nachrichten dieses Geräts — jede
+// Seite entscheidet für ihre eigenen Schreibvorgänge unabhängig, und
+// bereits gesendete Nachrichten bleiben, wie sie geschrieben wurden.
+function loadUnencryptedRooms() {
+  try { return new Set(JSON.parse(localStorage.getItem(UNENCRYPTED_ROOMS_KEY)) ?? []); } catch { return new Set(); }
+}
+const unencryptedRooms = loadUnencryptedRooms();
+function isRoomEncrypted(roomId) { return !unencryptedRooms.has(roomId); }
+function setRoomEncrypted(roomId, encrypted) {
+  if (encrypted) unencryptedRooms.delete(roomId); else unencryptedRooms.add(roomId);
+  localStorage.setItem(UNENCRYPTED_ROOMS_KEY, JSON.stringify([...unencryptedRooms]));
 }
 
 // --- Töne (Web Audio API, synthetisiert — kein externes Audio-Asset
@@ -1074,6 +1109,7 @@ async function main() {
     });
     renderPresence(fp, roomId);
     renderMuteButton(roomId);
+    renderEncryptionButton(roomId);
     upsertContact(fp, { unread: 0 });
     renderContactList();
     await renderMessageList(fp);
@@ -1101,6 +1137,31 @@ async function main() {
     if (!roomId) return;
     setRoomMuted(roomId, !isRoomMuted(roomId));
     renderMuteButton(roomId);
+  });
+
+  function renderEncryptionButton(roomId) {
+    const encrypted = isRoomEncrypted(roomId);
+    encryptionChatBtn.textContent = encrypted ? '🔒' : '🔓';
+    encryptionChatBtn.title = encrypted ? 'Verschlüsselung für diesen Chat deaktivieren' : 'Verschlüsselung für diesen Chat wieder aktivieren';
+    encryptionChatBtn.classList.toggle('active', !encrypted);
+  }
+  encryptionChatBtn.addEventListener('click', () => {
+    const roomId = ensuredRoomIds.get(activeFp);
+    if (!roomId) return;
+    const currentlyEncrypted = isRoomEncrypted(roomId);
+    // Nur beim AUSSCHALTEN warnen — wieder EINschalten ist immer die
+    // sichere Richtung, braucht keine Bestätigung.
+    if (currentlyEncrypted) {
+      const alias = contactByFp(activeFp)?.alias ?? shortFp(activeFp);
+      const confirmed = confirm(
+        `Verschlüsselung für den Chat mit ${alias} deaktivieren?\n\n` +
+        'Deine künftigen Nachrichten in diesem Chat werden dann im Klartext übertragen und gespeichert — lesbar für den Relay-Betreiber und für jeden mit Lesezugriff auf diesen Raum, nicht mehr nur für euch beide. ' +
+        'Bereits gesendete Nachrichten bleiben unverändert (weiterhin verschlüsselt). Das gilt nur für DEINE Seite — die Gegenseite entscheidet unabhängig für ihre eigenen Nachrichten.',
+      );
+      if (!confirmed) return;
+    }
+    setRoomEncrypted(roomId, !currentlyEncrypted);
+    renderEncryptionButton(roomId);
   });
 
   // --- Suche (über alle Chats hinweg) ---
@@ -1328,8 +1389,12 @@ async function main() {
       // readers ist bewusst ['*'] (siehe ensureRoom()) — Vertraulichkeit
       // kommt hier ausschließlich aus dem expliziten encryptFor, nicht aus
       // einer restriktiven Space-ACL (die Default-Auto-Verschlüsselung in
-      // core/session.js griffe nur bei eingeschränkten `readers`).
-      await qu.sendMessage(roomId, { text, attachments, encryptFor: [qu.fingerprint, activeFp] });
+      // core/session.js griffe nur bei eingeschränkten `readers`). `null`
+      // statt der Empfängerliste, wenn diese Seite für DIESEN Chat
+      // Verschlüsselung bewusst abgeschaltet hat (isRoomEncrypted() oben,
+      // per mute-chat-btn-Pendant im Header) — session.js's eigene Doku
+      // nennt genau das den vorgesehenen expliziten Opt-out.
+      await qu.sendMessage(roomId, { text, attachments, encryptFor: isRoomEncrypted(roomId) ? [qu.fingerprint, activeFp] : null });
       textInput.value = '';
       autoGrow();
       pendingFiles = [];
