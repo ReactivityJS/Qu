@@ -920,7 +920,7 @@ async function main() {
         }
         if (!complete) { showError('Anhang ist (noch) nicht vollständig verfügbar.'); return; }
 
-        const bytes = await reassembleFile(localFileStorage, manifest);
+        const bytes = await reassembleFile(localFileStorage, manifest, qu.identity);
         if (!bytes) { showError('Anhang konnte nicht zusammengesetzt werden.'); return; }
         const blob = new Blob([bytes], { type: manifest.mime });
         const url = URL.createObjectURL(blob);

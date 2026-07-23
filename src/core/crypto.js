@@ -25,22 +25,18 @@ async function deriveWrapKey(ecdhPrivateKey, ecdhPublicKey, salt, info) {
 
 /**
  * recipients: [{ fingerprint, ecdhPublicKey: CryptoKey }]
- * One ephemeral ECDH keypair per publish is used to derive a distinct
- * shared secret (and thus wrap key) per recipient via static-ephemeral ECDH
- * — a recipient not in `recipients` cannot derive any of the wrap keys, and
- * a recipient in the list can only unwrap the entry addressed to them.
+ * One ephemeral ECDH keypair per call is used to derive a distinct shared
+ * secret (and thus wrap key) per recipient via static-ephemeral ECDH — a
+ * recipient not in `recipients` cannot derive any of the wrap keys, and a
+ * recipient in the list can only unwrap the entry addressed to them.
+ * Shared by encryptFor() (JSON values) and encryptBytesFor() (raw bytes,
+ * data/files/manifest.js) — the content-key wrapping is identical either
+ * way, only what gets encrypted under that content key differs.
  */
-export async function encryptFor(recipients, plaintextValue) {
-  const contentKey = await crypto.subtle.generateKey(AESGCM, true, ['encrypt', 'decrypt']);
-  const contentIv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify(plaintextValue));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: contentIv }, contentKey, plaintext);
-  const rawContentKey = await crypto.subtle.exportKey('raw', contentKey);
-
+async function wrapContentKeyForRecipients(recipients, rawContentKey) {
   const ephemeral = await crypto.subtle.generateKey(ECDH_ALG, true, ['deriveBits']);
   const ephemeralPubJwk = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
   const salt = crypto.getRandomValues(new Uint8Array(16));
-
   const keys = {};
   for (const r of recipients) {
     const wrapKey = await deriveWrapKey(ephemeral.privateKey, r.ecdhPublicKey, salt, r.fingerprint);
@@ -48,27 +44,75 @@ export async function encryptFor(recipients, plaintextValue) {
     const wrapped = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: wrapIv }, wrapKey, rawContentKey);
     keys[r.fingerprint] = { iv: toB64(wrapIv), wrapped: toB64(wrapped) };
   }
-
-  return {
-    __qu_enc: 1,
-    alg: 'ECDH-P256+HKDF-SHA256+AES-256-GCM',
-    ephemeralPubKey: ephemeralPubJwk,
-    salt: toB64(salt),
-    iv: toB64(contentIv),
-    ciphertext: toB64(ciphertext),
-    keys,
-  };
+  return { ephemeralPubKey: ephemeralPubJwk, salt: toB64(salt), keys };
 }
 
-/** Returns `undefined` if `identity` is not among the envelope's recipients (distinct from "decryption failed", which throws). */
-export async function decryptWith(identity, envelope) {
+/** Inverse of wrapContentKeyForRecipients() for exactly one identity — `undefined` if they're not among the envelope's recipients (distinct from "decryption failed", which throws). */
+async function unwrapContentKey(identity, envelope) {
   const entry = envelope.keys[identity.fingerprint];
   if (!entry) return undefined;
   const ephemeralPub = await crypto.subtle.importKey('jwk', envelope.ephemeralPubKey, ECDH_ALG, true, []);
   const salt = fromB64(envelope.salt);
   const wrapKey = await deriveWrapKey(identity.encryptionPrivateKey, ephemeralPub, salt, identity.fingerprint);
-  const rawContentKey = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(entry.iv) }, wrapKey, fromB64(entry.wrapped));
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(entry.iv) }, wrapKey, fromB64(entry.wrapped));
+}
+
+export async function encryptFor(recipients, plaintextValue) {
+  const contentKey = await crypto.subtle.generateKey(AESGCM, true, ['encrypt', 'decrypt']);
+  const contentIv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(JSON.stringify(plaintextValue));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: contentIv }, contentKey, plaintext);
+  const rawContentKey = await crypto.subtle.exportKey('raw', contentKey);
+  const wrap = await wrapContentKeyForRecipients(recipients, rawContentKey);
+
+  return {
+    __qu_enc: 1,
+    alg: 'ECDH-P256+HKDF-SHA256+AES-256-GCM',
+    ephemeralPubKey: wrap.ephemeralPubKey,
+    salt: wrap.salt,
+    iv: toB64(contentIv),
+    ciphertext: toB64(ciphertext),
+    keys: wrap.keys,
+  };
+}
+
+/** Returns `undefined` if `identity` is not among the envelope's recipients (distinct from "decryption failed", which throws). */
+export async function decryptWith(identity, envelope) {
+  const rawContentKey = await unwrapContentKey(identity, envelope);
+  if (rawContentKey === undefined) return undefined;
   const contentKey = await crypto.subtle.importKey('raw', rawContentKey, AESGCM, false, ['decrypt']);
   const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(envelope.iv) }, contentKey, fromB64(envelope.ciphertext));
   return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+/**
+ * Byte-native sibling of encryptFor() — for large binary content (file
+ * bytes, data/files/manifest.js) where JSON.stringify()+base64 would
+ * inflate size by roughly a third and add unnecessary parse overhead for
+ * no benefit (the caller already has raw bytes, not a JSON-able value).
+ * Same multi-recipient ECDH+HKDF wrapping as encryptFor(); returns the
+ * ciphertext as a raw Uint8Array (chunked/stored directly) separate from
+ * the envelope (wrapped keys + iv/salt/alg — small, JSON-able, stored in
+ * the file manifest as `contentEncryption`).
+ */
+export async function encryptBytesFor(recipients, plaintextBytes) {
+  const contentKey = await crypto.subtle.generateKey(AESGCM, true, ['encrypt', 'decrypt']);
+  const contentIv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: contentIv }, contentKey, plaintextBytes));
+  const rawContentKey = await crypto.subtle.exportKey('raw', contentKey);
+  const wrap = await wrapContentKeyForRecipients(recipients, rawContentKey);
+
+  return {
+    envelope: { alg: 'ECDH-P256+HKDF-SHA256+AES-256-GCM', ephemeralPubKey: wrap.ephemeralPubKey, salt: wrap.salt, iv: toB64(contentIv), keys: wrap.keys },
+    ciphertext,
+  };
+}
+
+/** Inverse of encryptBytesFor() — `undefined` if `identity` is not among the envelope's recipients, same convention as decryptWith(). */
+export async function decryptBytesWith(identity, envelope, ciphertext) {
+  const rawContentKey = await unwrapContentKey(identity, envelope);
+  if (rawContentKey === undefined) return undefined;
+  const contentKey = await crypto.subtle.importKey('raw', rawContentKey, AESGCM, false, ['decrypt']);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(envelope.iv) }, contentKey, ciphertext);
+  return new Uint8Array(plaintext);
 }
