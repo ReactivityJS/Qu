@@ -112,6 +112,20 @@ export class QuSession {
     return { fingerprint, ecdhPublicKey: key };
   }
 
+  /**
+   * Public sibling of #resolveRecipientKey() for callers that need
+   * resolved `{ fingerprint, ecdhPublicKey }` pairs OUTSIDE a single
+   * publish() call — namely data/files/manifest.js, which encrypts a
+   * file's raw bytes (core/crypto.js's encryptBytesFor()) once, separate
+   * from the manifest QuBit that later gets published with the same
+   * `encryptFor` list. Same resolution publish()'s own encryptFor uses
+   * internally (self, an already-trustPeer()ed peer, or their published
+   * `~<fp>/epub`) — no separate mechanism, no duplicated trust logic.
+   */
+  async resolveEncryptionRecipients(fingerprints) {
+    return Promise.all(fingerprints.map((fp) => this.#resolveRecipientKey(fp)));
+  }
+
   async publish(id, plainValue, { ts, encryptFor: recipients, refs } = {}) {
     id = String(id); // tolerate anything with a sensible toString() (e.g. QuSpace), not just plain strings
     // A QuSpace as the ID (above) is fine — String(node) is exactly its SpaceId.

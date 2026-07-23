@@ -32,7 +32,7 @@ export async function resolveFileRef(qu, fileStorage, ref, { fileTransfer = null
     if (!fileTransfer) throw new Error(`[FileHandler] ${missing.length} chunk(s) missing locally for ${manifestId} and no fileTransfer was supplied to fetch them`);
     await fileTransfer.requestFile(manifestId);
   }
-  return reassembleFile(fileStorage, manifest);
+  return reassembleFile(fileStorage, manifest, qu.identity);
 }
 
 function isBytesLike(value) {

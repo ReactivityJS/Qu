@@ -8,7 +8,7 @@
 
 import {
   createNetworkPlugin, createSpacesPlugin, createFileHandlerPlugin,
-  createChatPlugin, createWebSocketChannel, IndexedDBFileStorageAdapter, reassembleFile,
+  createChatPlugin, createWebSocketChannel, IndexedDBFileStorageAdapter, reassembleFile, readFileMeta,
   createWebRTCPlugin, sendRoutedEvent, onRoutedEvent, enableConsoleDebug,
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
@@ -875,10 +875,17 @@ async function main() {
     const manifestQ = await qu.get(refId);
     if (!manifestQ) return el('div', 'attachment-progress', 'Anhang nicht gefunden');
     const manifest = manifestQ.value;
-    const kind = mediaKind(manifest.mime);
     const wrap = el('div', 'attachment');
     let status = el('div', 'attachment-progress', 'wird geladen …');
     wrap.appendChild(status);
+
+    // name/mime/size stehen bei einem verschlüsselten Anhang NICHT direkt
+    // im Manifest (siehe data/files/manifest.js's metaEncryption) — readFileMeta()
+    // entschlüsselt sie separat vom eigentlichen Dateiinhalt, damit Vorschau/
+    // Download-Link auch VOR dem vollständigen Herunterladen möglich sind.
+    const fileMeta = await readFileMeta(manifest, qu.identity);
+    if (!fileMeta) return el('div', 'attachment-progress', 'Anhang nicht zugänglich (nicht für dich verschlüsselt).');
+    const kind = mediaKind(fileMeta.mime);
 
     /** Zeigt einen Fehler + "Erneut versuchen"-Button statt eines kaputten Bild-/Player-Elements — z. B. wenn ein Chunk beim Absender/Relay (noch) nicht verfügbar ist. */
     function showError(message) {
@@ -920,9 +927,9 @@ async function main() {
         }
         if (!complete) { showError('Anhang ist (noch) nicht vollständig verfügbar.'); return; }
 
-        const bytes = await reassembleFile(localFileStorage, manifest);
+        const bytes = await reassembleFile(localFileStorage, manifest, qu.identity);
         if (!bytes) { showError('Anhang konnte nicht zusammengesetzt werden.'); return; }
-        const blob = new Blob([bytes], { type: manifest.mime });
+        const blob = new Blob([bytes], { type: fileMeta.mime });
         const url = URL.createObjectURL(blob);
         status.remove();
 
@@ -937,12 +944,12 @@ async function main() {
           const a = document.createElement('a');
           a.className = 'attachment-file';
           a.href = url;
-          a.download = manifest.name;
+          a.download = fileMeta.name;
           a.appendChild(el('span', 'file-ic', kind === 'video' ? '🎬' : kind === 'audio' ? '🎵' : '📄'));
-          const meta = el('div');
-          meta.appendChild(el('div', '', manifest.name));
-          meta.appendChild(el('div', 'file-meta', `${manifest.mime} · ${fmtBytes(manifest.size ?? bytes.length)}`));
-          a.appendChild(meta);
+          const metaEl = el('div');
+          metaEl.appendChild(el('div', '', fileMeta.name));
+          metaEl.appendChild(el('div', 'file-meta', `${fileMeta.mime} · ${fmtBytes(fileMeta.size ?? bytes.length)}`));
+          a.appendChild(metaEl);
           wrap.appendChild(a);
           stickToBottomIfNeeded();
         }
@@ -950,7 +957,7 @@ async function main() {
         if (kind === 'image') {
           const img = el('img', 'attachment-media');
           img.src = url;
-          img.alt = manifest.name;
+          img.alt = fileMeta.name;
           img.addEventListener('click', () => openLightbox(url));
           // `mime` mit "image/" reicht nicht, um Anzeigbarkeit zu
           // garantieren — vor allem Foto-Uploads von Smartphones sind oft

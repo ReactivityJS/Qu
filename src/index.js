@@ -80,7 +80,7 @@ export {
   isReference, parseReference, objRef, keyRef, fileRef,
   resolveReference, resolveValue, createReferenceHandlerPlugin,
 } from './data/references.js';
-export { publishFile, reassembleFile, missingChunks } from './data/files/manifest.js';
+export { publishFile, reassembleFile, missingChunks, readFileMeta } from './data/files/manifest.js';
 export { DefaultFileTransfer } from './data/files/transfer.js';
 export { assertFileStorageAdapter } from './data/files/contract.js';
 export { shareFile, resolveFileRef, createFileHandlerPlugin } from './data/files/index.js';
