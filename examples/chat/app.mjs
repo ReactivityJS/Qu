@@ -33,6 +33,13 @@ enableConsoleDebug({ filter: ['webrtc', 'webrtc-pm'] });
 const IDENTITY_KEY = 'qu-chat-identity';
 const ALIAS_KEY = 'qu-chat-alias';
 const CONTACTS_KEY = 'qu-chat-contacts';
+// Enger als modules/chat.js's eigene Defaults (8s/20s) — ein Kontakt soll
+// sichtbar zügig als "offline" erkannt werden, nicht erst nach bis zu 20s
+// Unschärfe. 3x Heartbeat als Stale-Schwelle lässt trotzdem genug
+// Spielraum für einen einzelnen verpassten Tick (Netzwerk-Ruckler), ohne
+// bei jedem kleinen Hänger fälschlich "offline" zu blinken.
+const PRESENCE_HEARTBEAT_MS = 5_000;
+const PRESENCE_STALE_MS = 15_000;
 
 const $ = (id) => document.getElementById(id);
 const appEl = $('app');
@@ -422,7 +429,21 @@ async function main() {
     } else if (!backgroundCloseTimer) {
       backgroundCloseTimer = setTimeout(() => {
         backgroundCloseTimer = null;
-        if (document.visibilityState !== 'visible' && channel?.isOpen()) channel.close().catch(() => {});
+        if (document.visibilityState !== 'visible' && channel?.isOpen()) {
+          // Explizit "offline" veröffentlichen, SOLANGE der Kanal noch
+          // offen ist — anders als beim eigentlichen close() unten kommt
+          // das dann als ganz normales, sofortiges Live-Ereignis bei
+          // jedem an, der gerade zuschaut (onPresenceChange()), statt
+          // dass Kontakte erst nach Ablauf des Stale-Fensters (getPresence()s
+          // staleAfterMs) merken, dass wir weg sind. Den Heartbeat-Timer
+          // selbst NICHT stoppen (kein stopHeartbeatByRoom-Aufruf hier) —
+          // der soll beim Wieder-Sichtbarwerden/Reconnect von selbst
+          // weiterlaufen, sobald der nächste Tick wieder einen offenen
+          // Kanal vorfindet, ganz ohne dass hier extra etwas neu gestartet
+          // werden müsste.
+          for (const roomId of ensuredRoomIds.values()) qu.setPresence(roomId, 'offline').catch(() => {});
+          channel.close().catch(() => {});
+        }
       }, BACKGROUND_DISCONNECT_MS);
     }
   });
@@ -433,6 +454,7 @@ async function main() {
   const seenIdsByRoom = new Map(); // fp -> Set<id>  (Reconnect-Redelivery-sicher)
   const receiptsByRoom = new Map(); // fp -> { [fingerprint]: upToTs }
   const stopHeartbeatByRoom = new Map(); // fp -> stop()
+  const presenceStaleTimerByFp = new Map(); // fp -> Timeout, siehe renderPresence()
   const unsubsByRoom = new Map(); // fp -> Array<() => void>, siehe ensureRoom()/deleteContact()
   const aliasCache = new Map([[qu.fingerprint, myAlias]]);
   const avatarCache = new Map(); // fp -> dataUrl | null (null = bekannt abwesend, nicht "noch nicht geprüft")
@@ -540,7 +562,7 @@ async function main() {
 
     receiptsByRoom.set(fp, await qu.getReadReceipts(roomId));
     renderPresence(fp, roomId);
-    stopHeartbeatByRoom.set(fp, qu.startHeartbeat(roomId, { intervalMs: 8000 }));
+    stopHeartbeatByRoom.set(fp, qu.startHeartbeat(roomId, { intervalMs: PRESENCE_HEARTBEAT_MS }));
 
     // In den Briefkasten (chat-lib.mjs's inboxId()) des Kontakts schreiben,
     // damit ein von UNS gestarteter Chat spätestens jetzt (nicht erst mit
@@ -611,8 +633,25 @@ async function main() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markActiveRead(); });
   window.addEventListener('focus', () => markActiveRead());
 
+  /**
+   * "online" ist eine von der VERSTREICHENDEN ZEIT abgeleitete Größe
+   * (modules/chat.js's getPresence(): frisch genug oder nicht), nicht nur
+   * vom zuletzt empfangenen Ereignis — ein Kontakt, der die App schließt,
+   * sendet schlicht NICHTS mehr, es gibt also kein weiteres Ereignis, das
+   * onPresenceChange() erneut auslösen würde, damit die Anzeige auf
+   * "offline" nachzieht. Statt das mit einem pauschalen Poll zu
+   * übertünchen, plant diese Funktion sich selbst EIN einziges Mal neu:
+   * solange der Kontakt gerade online ist, genau EIN setTimeout auf exakt
+   * den Moment, an dem sein `lastSeen` das Stale-Fenster verlässt — ein
+   * neueres Ereignis (onPresenceChange() ruft renderPresence() erneut auf)
+   * ersetzt diesen Timer einfach, statt einen zweiten parallel laufen zu
+   * lassen. Reines UI-Nachziehen einer bereits reaktiv bekannten
+   * Zeitschranke, kein Ersatz für die eigentlichen `.on()`/`.map()`-Abos.
+   */
   function renderPresence(fp, roomId) {
-    qu.getPresence(roomId).then((presence) => {
+    clearTimeout(presenceStaleTimerByFp.get(fp));
+    presenceStaleTimerByFp.delete(fp);
+    qu.getPresence(roomId, { staleAfterMs: PRESENCE_STALE_MS }).then((presence) => {
       const info = presence[fp];
       const online = !!info?.online;
       if (activeFp === fp) {
@@ -623,6 +662,11 @@ async function main() {
       }
       const listItem = contactListEl.querySelector(`[data-fp="${fp}"] .dot`);
       if (listItem) listItem.classList.toggle('online', online);
+
+      if (online && info?.lastSeen) {
+        const dueInMs = info.lastSeen + PRESENCE_STALE_MS - Date.now();
+        presenceStaleTimerByFp.set(fp, setTimeout(() => renderPresence(fp, roomId), Math.max(0, dueInMs)));
+      }
     }).catch(() => {});
   }
 
@@ -1101,6 +1145,8 @@ async function main() {
     seenIdsByRoom.delete(fp);
     receiptsByRoom.delete(fp);
     ensuredRoomIds.delete(fp);
+    clearTimeout(presenceStaleTimerByFp.get(fp));
+    presenceStaleTimerByFp.delete(fp);
     avatarCache.delete(fp);
     aliasCache.delete(fp);
     removeContact(fp);
@@ -1450,8 +1496,28 @@ async function main() {
   // zone", ein Zugriff davor wirft, anders als bei gehoisteten
   // function-Deklarationen wie dieser hier.)
 
+  // `{ facingMode: { ideal: 'user' } }`, NICHT der nackte Wert
+  // `{ facingMode: 'user' }` — ein nackter Constraint-Wert zählt laut
+  // Spec zur "basic constraint set" und muss GENAU erfüllt sein (wie
+  // `{ exact: 'user' }`); manche echten Kameras/Browser melden ihre
+  // Front-Kamera nicht exakt so, wie es dieser strikte Match erwartet,
+  // und getUserMedia() wirft dann OverconstrainedError — mit `ideal`
+  // wird daraus nur eine Präferenz, die der Browser bestmöglich erfüllt
+  // statt komplett abzulehnen. Erklärt genau das gemeldete Bild "Audio
+  // geht immer, Video stirbt beim Annehmen": nur der Video-Zweig fragt
+  // überhaupt nach facingMode, ein Audio-Anruf umgeht dieses Constraint
+  // komplett.
   async function getLocalStream(kind) {
-    return navigator.mediaDevices.getUserMedia({ audio: true, video: kind === 'video' ? { facingMode: 'user' } : false });
+    return navigator.mediaDevices.getUserMedia({ audio: true, video: kind === 'video' ? { facingMode: { ideal: 'user' } } : false });
+  }
+
+  /** Klartext statt eines rohen DOMException-Namens — unterscheidet die drei häufigsten getUserMedia()-Fehlschlagsgründe, damit z. B. "Kamera kann diese Anforderung nicht erfüllen" nicht wie "Zugriff verweigert" aussieht (zwei völlig verschiedene Ursachen, ganz unterschiedliche nächste Schritte für die Nutzerin). */
+  function mediaErrorMessage(e) {
+    if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') return 'Zugriff auf Mikrofon/Kamera verweigert.';
+    if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') return 'Keine passende Kamera/kein Mikrofon gefunden.';
+    if (e.name === 'OverconstrainedError' || e.name === 'ConstraintNotSatisfiedError') return `Kamera/Mikrofon erfüllt eine Anforderung nicht (${e.constraint ?? e.name}).`;
+    if (e.name === 'NotReadableError' || e.name === 'TrackStartError') return 'Kamera/Mikrofon wird bereits von einer anderen App verwendet.';
+    return `Mikrofon/Kamera-Fehler: ${e.message || e.name}`;
   }
   function stopStream(stream) { stream?.getTracks().forEach((t) => t.stop()); }
 
@@ -1559,12 +1625,20 @@ async function main() {
     activeCall = { peerFp, kind, direction: 'outgoing', state: 'ringing', callerAlias: myAlias, localStream: null, remoteStream: null, pc: null, channel: null, startedAt: null, timerInterval: null, ringTimeout: null };
     renderCallUI();
     activeCall.ringTimeout = setTimeout(() => { if (activeCall?.state === 'ringing') endCall('timeout'); }, RING_TIMEOUT_MS);
+    sendRoutedEvent(channel, peerFp, 'call-invite', { callType: kind, callerAlias: myAlias }).catch(() => {});
+    let stream;
     try {
-      sendRoutedEvent(channel, peerFp, 'call-invite', { callType: kind, callerAlias: myAlias }).catch(() => {});
-      const stream = await getLocalStream(kind);
-      if (!activeCall) { stopStream(stream); return; } // währenddessen schon wieder aufgelegt
-      activeCall.localStream = stream;
-      callLocalVideo.srcObject = stream;
+      stream = await getLocalStream(kind);
+    } catch (e) {
+      console.error('[chat] getUserMedia failed:', e.name, e.message);
+      statusBar.textContent = mediaErrorMessage(e);
+      endCall('media-denied');
+      return;
+    }
+    if (!activeCall) { stopStream(stream); return; } // währenddessen schon wieder aufgelegt
+    activeCall.localStream = stream;
+    callLocalVideo.srcObject = stream;
+    try {
       await webrtcManager.connectDirect(peerFp, { pushTopics: [] });
       // onCallConnected() (über onConnect() unten) übernimmt den Rest, sobald die Verbindung wirklich steht.
     } catch (e) {
@@ -1590,10 +1664,11 @@ async function main() {
       pendingCallDecisions.get(peerFp)?.({ pushTopics: [] });
       pendingCallDecisions.delete(peerFp);
     } catch (e) {
-      console.error('[chat] accepting call failed (Mikrofon/Kamera verweigert?):', e);
+      console.error('[chat] accepting call failed:', e.name, e.message);
       pendingCallDecisions.get(peerFp)?.(null);
       pendingCallDecisions.delete(peerFp);
       sendRoutedEvent(channel, peerFp, 'call-decline', { reason: 'media-denied' }).catch(() => {});
+      statusBar.textContent = mediaErrorMessage(e);
       endCall('media-denied', { notifyPeer: false });
     }
   });
@@ -1677,6 +1752,11 @@ async function main() {
       .catch((e) => console.error('[chat] ensureRoom failed:', c.fp, e));
   }
   window.addEventListener('beforeunload', () => { for (const stop of stopHeartbeatByRoom.values()) stop(); });
+  // Zusätzlich zu 'beforeunload' — das feuert auf Mobile-Browsern oft gar
+  // nicht zuverlässig (u. a. iOS Safari beim Wischen zum Schließen), 'pagehide'
+  // dagegen so gut wie immer, auch aus dem bfcache heraus.
+  window.addEventListener('pagehide', () => { for (const stop of stopHeartbeatByRoom.values()) stop(); });
+
 }
 
 main().catch((e) => {
