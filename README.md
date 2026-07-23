@@ -13,11 +13,31 @@ ist der Schnelleinstieg. Eine vernetzte App über einen echten Relay bauen
 
 ## Installation
 
-Kein Build-Schritt. Einfach importieren:
+Kein Build-Schritt nötig. Innerhalb dieses Repos (oder mit `src/` lokal
+vorliegend) einfach importieren:
 
 ```js
 import { Qu } from './src/index.js';
 ```
+
+**Als externe Abhängigkeit per `<script type="module">`**, ohne eigenen
+Bundler — z. B. für ein separates Projekt, das nur das fertige Framework
+braucht: `.github/workflows/build-cdn.yml` baut nach jedem Merge nach
+`main` ein einziges gebündeltes `qu[.min].js` (`npm run build`,
+`scripts/build.mjs`) und veröffentlicht es auf einem eigenen `dist`-Branch.
+Sobald dieses Repo öffentlich ist, ist das direkt über jsDelivrs
+GitHub-CDN erreichbar, ganz ohne npm-Veröffentlichung:
+
+```html
+<script type="module">
+  import { Qu, createNetworkPlugin } from 'https://cdn.jsdelivr.net/gh/reactivityjs/qu@dist/qu.min.js';
+  const app = await Qu.create();
+</script>
+```
+
+`@dist` zieht immer den neuesten `main`-Stand (jsDelivr cached Branches nur
+kurz) — für eine dauerhaft stabile, versionierte URL stattdessen auf einen
+Release-Tag pinnen, sobald es welche gibt (z. B. `@v0.4.0`).
 
 ## Quickstart
 

@@ -1,0 +1,88 @@
+# Baut das Framework nach jedem Merge nach main zu einer einzigen
+# script-tag-fähigen Datei (scripts/build.mjs) und veröffentlicht sie auf
+# einem eigenen `dist`-Branch — main selbst bleibt reiner Quellcode, ohne
+# generierte Dateien im Diff/History. Der `dist`-Branch ist bewusst
+# EIGENSTÄNDIG (orphan, keine main-Historie) — er ist ein reines
+# Ablage-/Auslieferungsziel, kein Entwicklungs-Branch.
+#
+# Sobald dieses Repo öffentlich ist, macht das den Build direkt per
+# jsDelivrs GitHub-CDN erreichbar, ganz ohne npm-Veröffentlichung oder
+# einen separaten CDN-Dienst:
+#   https://cdn.jsdelivr.net/gh/reactivityjs/qu@dist/qu.min.js
+#   https://cdn.jsdelivr.net/gh/reactivityjs/qu@dist/qu.js       (unminifiziert, zum Debuggen)
+# `@dist` zieht immer den neuesten main-Stand (jsDelivr cached Branches
+# nur kurz) — für eine stabile, dauerhaft cachebare URL sobald die API
+# reift stattdessen auf einen Versions-Tag pinnen, z. B. `@v0.4.0`.
+
+name: Build CDN bundle
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Verhindert überlappende Läufe (z. B. zwei schnell aufeinanderfolgende
+# Merges) — der jeweils neueste gewinnt, ein älterer, noch laufender Build
+# wird abgebrochen statt am Ende einen veralteten Stand zu pushen.
+concurrency:
+  group: build-cdn
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish dist/ to the dist branch
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Das frische Build-Ergebnis erst beiseitelegen, BEVOR der
+          # Branch gewechselt wird — sonst würde ein Checkout des
+          # dist-Branches (der eine eigene, unabhängige Historie hat)
+          # mit dem lokal (ungetrackt) liegenden dist/-Ordner aus dem
+          # Build-Schritt kollidieren.
+          BUILD_DIR="$(mktemp -d)"
+          cp -r dist/. "$BUILD_DIR/"
+
+          if git ls-remote --exit-code --heads origin dist > /dev/null 2>&1; then
+            git fetch origin dist
+            git checkout dist
+          else
+            git checkout --orphan dist
+            git rm -rf . > /dev/null 2>&1 || true
+          fi
+
+          # Alles außer .git entfernen, dann den frischen Build reinkopieren
+          # — so verschwinden auch Dateien, die ein früherer Build mal
+          # erzeugt hat, jetzt aber nicht mehr (kein Anhäufen von Leichen).
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -r "$BUILD_DIR/." .
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Kein Unterschied zum vorherigen Build — nichts zu veröffentlichen."
+          else
+            git commit -m "Build: ${GITHUB_SHA::7}"
+            git push origin dist
+          fi
