@@ -33,6 +33,21 @@ enableConsoleDebug({ filter: ['webrtc', 'webrtc-pm'] });
 const IDENTITY_KEY = 'qu-chat-identity';
 const ALIAS_KEY = 'qu-chat-alias';
 const CONTACTS_KEY = 'qu-chat-contacts';
+// Stumm-/Ton-Einstellungen sind bewusst pro CHAT (roomId), nicht pro
+// Kontakt (fp) — ein Kontakt kann in mehreren Chats vorkommen (später:
+// ein 1:1 UND mehrere Gruppen mit derselben Person drin), jeder davon
+// soll unabhängig stumm schaltbar sein. Ein "Chat" ist dabei technisch
+// nichts anderes als ein Space mit ≥ 2 Mitgliedern (siehe
+// group-encryption.test.mjs: ein Space mit mehreren `readers`
+// verschlüsselt automatisch für alle, ganz ohne Sonderfall) — 1:1
+// (dmRoomId()) ist nur der Spezialfall mit genau zwei Mitgliedern, kein
+// eigener Mechanismus. Diese Einstellungen sind also schon heute so
+// angelegt, dass ein künftiger Gruppen-Chat (ein weiterer roomId,
+// unabhängig vom 1:1-Raum mit derselben Person) sich ohne Änderung hier
+// einreiht.
+const MUTED_ROOMS_KEY = 'qu-chat-muted-rooms';
+const SOUND_MESSAGES_KEY = 'qu-chat-sound-messages';
+const SOUND_CALLS_KEY = 'qu-chat-sound-calls';
 // Enger als modules/chat.js's eigene Defaults (8s/20s) — ein Kontakt soll
 // sichtbar zügig als "offline" erkannt werden, nicht erst nach bis zu 20s
 // Unschärfe. 3x Heartbeat als Stale-Schwelle lässt trotzdem genug
@@ -74,6 +89,9 @@ const searchResultsEl = $('search-results');
 const searchEmptyEl = $('search-empty');
 const audioCallBtn = $('audio-call-btn');
 const videoCallBtn = $('video-call-btn');
+const muteChatBtn = $('mute-chat-btn');
+const soundMessagesToggle = $('sound-messages-toggle');
+const soundCallsToggle = $('sound-calls-toggle');
 const callOverlay = $('call-overlay');
 const callAvatarEl = $('call-avatar');
 const callPeerNameEl = $('call-peer-name');
@@ -210,6 +228,76 @@ function upsertContact(fp, patch) {
   if (i === -1) contacts.push({ fp, alias: shortFp(fp), lastTs: 0, unread: 0, ...patch });
   else contacts[i] = { ...contacts[i], ...patch };
   saveContacts(contacts);
+}
+
+// --- Stumm-Schaltung pro Chat (siehe MUTED_ROOMS_KEY oben) ---
+function loadMutedRooms() {
+  try { return new Set(JSON.parse(localStorage.getItem(MUTED_ROOMS_KEY)) ?? []); } catch { return new Set(); }
+}
+const mutedRooms = loadMutedRooms();
+function isRoomMuted(roomId) { return mutedRooms.has(roomId); }
+function setRoomMuted(roomId, muted) {
+  if (muted) mutedRooms.add(roomId); else mutedRooms.delete(roomId);
+  localStorage.setItem(MUTED_ROOMS_KEY, JSON.stringify([...mutedRooms]));
+}
+
+// --- Töne (Web Audio API, synthetisiert — kein externes Audio-Asset
+// nötig, funktioniert also ohne jeden zusätzlichen Download/Lizenzfrage) ---
+// Ein/Aus je Ereignistyp global (SOUND_MESSAGES_KEY/SOUND_CALLS_KEY,
+// Default "an" bei fehlendem Eintrag), zusätzlich pro Chat stumm
+// schaltbar (mutedRooms oben) — beides zusammen ergibt "Nachrichtenton
+// an, aber dieser eine Chat stumm" ODER "dieser Chat nicht stumm, aber
+// Töne insgesamt aus", unabhängig voneinander einstellbar.
+function soundEnabled(key) { return localStorage.getItem(key) !== '0'; }
+function setSoundEnabled(key, enabled) { localStorage.setItem(key, enabled ? '1' : '0'); }
+
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext ?? window.webkitAudioContext)();
+  return audioCtx;
+}
+// Browser verweigern Audio-Wiedergabe ohne vorherige Nutzer-Interaktion
+// (Autoplay-Policy) — ein einmaliger, früh registrierter Listener auf
+// IRGENDEINE Interaktion "entsperrt" den AudioContext, lange bevor die
+// erste Nachricht/der erste Anruf tatsächlich einen Ton braucht.
+function primeAudioContext() { getAudioCtx().resume().catch(() => {}); }
+document.addEventListener('pointerdown', primeAudioContext, { once: true });
+document.addEventListener('keydown', primeAudioContext, { once: true });
+
+/** Ein kurzer, weicher Zwei-Ton-Klang (Sinus, exponentiell ausklingend) — die Bausteine für sowohl den Nachrichten-Ping als auch den Klingelton unten. */
+function playTone(freqs, { duration = 0.16, gain = 0.15, startOffset = 0 } = {}) {
+  const ctx = getAudioCtx();
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  const now = ctx.currentTime + startOffset;
+  for (const [i, freq] of freqs.entries()) {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(gain, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(now + i * 0.06);
+    osc.stop(now + duration + 0.05);
+  }
+}
+
+function playMessageSound() {
+  if (!soundEnabled(SOUND_MESSAGES_KEY)) return;
+  playTone([880, 1318.5], { duration: 0.18, gain: 0.12 }); // A5 -> E6, kurzer aufsteigender "Ping"
+}
+
+let ringtoneTimer = null;
+function startRingtone() {
+  if (!soundEnabled(SOUND_CALLS_KEY) || ringtoneTimer) return;
+  const ring = () => playTone([659.25, 523.25], { duration: 0.5, gain: 0.14 }); // E5 -> C5, klassisches Zwei-Ton-Klingeln
+  ring();
+  ringtoneTimer = setInterval(ring, 1800);
+}
+function stopRingtone() {
+  clearInterval(ringtoneTimer);
+  ringtoneTimer = null;
 }
 function contactByFp(fp) {
   return contacts.find((c) => c.fp === fp) ?? null;
@@ -609,12 +697,18 @@ async function main() {
       if (document.hasFocus()) markActiveRead();
     }
 
+    // Ton bewusst schon dann, wenn nur der GERADE OFFENE Chat ein anderer
+    // ist (nicht erst ohne Fenster-Fokus wie die Desktop-Benachrichtigung
+    // unten) — man soll eine neue Nachricht in einem anderen Chat auch
+    // hören, während man aktiv in der App ist, genau wie bei Signal/Telegram.
+    if (!mine && activeFp !== fp && !isRoomMuted(roomId)) playMessageSound();
+
     // Lokale Benachrichtigung für "Tab läuft noch, ist aber nicht im
     // Fokus" (Handy gesperrt, anderer Tab aktiv, …) — der komplementäre
     // Fall zu echtem Web Push (sw.js/relay.mjs's push-Hook), das der
     // Relay bewusst NUR für getrennte Verbindungen auslöst (siehe dort);
     // beide Wege feuern also nie für dasselbe Ereignis gleichzeitig.
-    if (!mine && !document.hasFocus() && Notification.permission === 'granted') {
+    if (!mine && !document.hasFocus() && !isRoomMuted(roomId) && Notification.permission === 'granted') {
       try {
         const notif = new Notification('QU Chat', { body: `${contactByFp(fp)?.alias ?? shortFp(fp)} hat dir geschrieben`, tag: fp });
         notif.addEventListener('click', () => { window.focus(); openContact(fp); notif.close(); });
@@ -979,6 +1073,7 @@ async function main() {
       renderContactList();
     });
     renderPresence(fp, roomId);
+    renderMuteButton(roomId);
     upsertContact(fp, { unread: 0 });
     renderContactList();
     await renderMessageList(fp);
@@ -993,6 +1088,20 @@ async function main() {
     if (location.hash) location.hash = '';
   }
   backBtn.addEventListener('click', closeContact);
+
+  /** Spiegelt den Stumm-Zustand des angegebenen Chats (Glocke durchgestrichen ja/nein) im mute-chat-btn — aufgerufen beim Öffnen eines Chats UND beim Umschalten selbst. */
+  function renderMuteButton(roomId) {
+    const muted = isRoomMuted(roomId);
+    muteChatBtn.textContent = muted ? '🔕' : '🔔';
+    muteChatBtn.title = muted ? 'Stummschaltung aufheben' : 'Diesen Chat stummschalten';
+    muteChatBtn.classList.toggle('active', muted);
+  }
+  muteChatBtn.addEventListener('click', () => {
+    const roomId = ensuredRoomIds.get(activeFp);
+    if (!roomId) return;
+    setRoomMuted(roomId, !isRoomMuted(roomId));
+    renderMuteButton(roomId);
+  });
 
   // --- Suche (über alle Chats hinweg) ---
   // messagesByRoom hält bereits JEDEN Raum jedes Kontakts geladen
@@ -1250,7 +1359,11 @@ async function main() {
     setAvatar(avatarPreviewBtn, myAlias, myAvatar);
     profileModal.hidden = false;
     refreshPushUI();
+    soundMessagesToggle.checked = soundEnabled(SOUND_MESSAGES_KEY);
+    soundCallsToggle.checked = soundEnabled(SOUND_CALLS_KEY);
   });
+  soundMessagesToggle.addEventListener('change', () => setSoundEnabled(SOUND_MESSAGES_KEY, soundMessagesToggle.checked));
+  soundCallsToggle.addEventListener('change', () => setSoundEnabled(SOUND_CALLS_KEY, soundCallsToggle.checked));
   $('profile-cancel-btn').addEventListener('click', () => { profileModal.hidden = true; });
   profileModal.addEventListener('click', (ev) => { if (ev.target === profileModal) profileModal.hidden = true; });
   $('avatar-pick-btn').addEventListener('click', () => avatarInput.click());
@@ -1560,6 +1673,7 @@ async function main() {
   function endCall(reason, { notifyPeer = true } = {}) {
     if (!activeCall) return;
     console.log('[chat] call ended:', reason);
+    stopRingtone();
     if (activeCall.ringTimeout) clearTimeout(activeCall.ringTimeout);
     stopCallTimer();
     if (notifyPeer) sendRoutedEvent(channel, activeCall.peerFp, 'call-hangup', {}).catch(() => {});
@@ -1579,6 +1693,7 @@ async function main() {
     const pc = rtcChannel.peerConnection;
     activeCall.pc = pc;
     activeCall.state = 'connecting'; // muss VOR der ersten connectionstatechange-Prüfung unten stehen — siehe deren Kommentar
+    stopRingtone();
     if (activeCall.ringTimeout) { clearTimeout(activeCall.ringTimeout); activeCall.ringTimeout = null; }
 
     for (const track of activeCall.localStream.getTracks()) pc.addTrack(track, activeCall.localStream);
@@ -1624,6 +1739,7 @@ async function main() {
     if (!webrtcManager) { statusBar.textContent = 'Nicht verbunden — Anruf gerade nicht möglich.'; return; }
     activeCall = { peerFp, kind, direction: 'outgoing', state: 'ringing', callerAlias: myAlias, localStream: null, remoteStream: null, pc: null, channel: null, startedAt: null, timerInterval: null, ringTimeout: null };
     renderCallUI();
+    startRingtone(); // Ruf-Ton für die ANRUFENDE Seite — hier keine Stumm-Prüfung, man ruft ja selbst an
     activeCall.ringTimeout = setTimeout(() => { if (activeCall?.state === 'ringing') endCall('timeout'); }, RING_TIMEOUT_MS);
     sendRoutedEvent(channel, peerFp, 'call-invite', { callType: kind, callerAlias: myAlias }).catch(() => {});
     let stream;
@@ -1660,6 +1776,7 @@ async function main() {
       activeCall.localStream = stream;
       callLocalVideo.srcObject = stream;
       activeCall.state = 'connecting';
+      stopRingtone();
       renderCallUI();
       pendingCallDecisions.get(peerFp)?.({ pushTopics: [] });
       pendingCallDecisions.delete(peerFp);
@@ -1735,6 +1852,8 @@ async function main() {
         }, RING_TIMEOUT_MS),
       };
       renderCallUI();
+      const roomId = ensuredRoomIds.get(fromFp);
+      if (!roomId || !isRoomMuted(roomId)) startRingtone();
     });
     onRoutedEvent(currentChannel, 'call-decline', (msg) => {
       if (activeCall?.peerFp === msg.from) endCall(msg.payload?.reason === 'busy' ? 'busy' : 'declined', { notifyPeer: false });
