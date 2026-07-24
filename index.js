@@ -18,6 +18,7 @@ import { startServer } from './server/static-server.mjs';
 import { createTestRoutes } from './server/test-runner.mjs';
 import { createPushRoutes } from './server/push-routes.mjs';
 import { createWebRTCRoutes } from './server/webrtc-routes.mjs';
+import { createPortalRoutes } from './server/portal-routes.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
@@ -128,6 +129,7 @@ const server = startServer({
     ...createTestRoutes({ root }),
     ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null }),
     ...createWebRTCRoutes({ iceServers }),
+    ...createPortalRoutes({ root }),
   ],
 });
 

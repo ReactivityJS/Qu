@@ -29,6 +29,31 @@ p.lede { color: var(--muted); margin-top: 0; }
 
 a { color: var(--accent); }
 
+/* Kategorie-Umschalter der Startseite (index.html/portal.mjs) — #/services,
+   #/examples, #/documentation. Nur additiv, keine bestehende Regel oben
+   verändert (dieses Stylesheet wird von etlichen anderen Seiten geteilt). */
+.category-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.category-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.6rem 0.2rem;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+.category-tab:hover { color: var(--text); }
+.category-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.cards-section[hidden] { display: none; }
+
 nav.cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
