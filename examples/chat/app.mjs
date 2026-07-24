@@ -1636,44 +1636,15 @@ async function main() {
     deleteRoom(activeRoomId);
   });
 
-  /**
-   * Ein Chat wird über seinen Direktlink geöffnet (`#room=<roomId>`,
-   * siehe buildChatHashRoute()/parseChatHash()) — im Gegensatz zum
-   * Einladungslink (`#add=...`) ohne Zwischenschritt. Ein bereits
-   * bekannter Raum öffnet direkt. `legacyFp` (ein alter, blanker
-   * Fingerprint-Link von VOR diesem Umbau, als ein Chat-Link noch direkt
-   * den Kontakt statt den Raum adressierte) wird weiterhin auf den
-   * entsprechenden DM aufgelöst, samt automatischer Kontaktanlage — genau
-   * wie zuvor, damit alte Lesezeichen/geteilte Links nicht ins Leere laufen.
-   * Ein UNBEKANNTER `roomId` (z. B. ein an niemanden gerichteter Link)
-   * kann dagegen nicht blind geöffnet werden — dafür fehlt die
-   * Mitgliederliste; das passiert nur über handleInboxRequest() (jemand
-   * hat uns eingeladen) oder startDm()/createGroupRoom() (wir starten
-   * selbst einen neuen Chat).
-   */
-  async function openRoomByHash(parsed) {
-    if (parsed.legacyFp) {
-      const fp = parsed.legacyFp;
-      if (fp === qu.fingerprint) return;
-      if (!contactByFp(fp)) {
-        let alias = shortFp(fp);
-        try { alias = (await qu.getProfile(fp)).alias ?? alias; } catch { /* Profil (noch) nicht synct — Fallback bleibt der Fingerprint, aliasFor()/ensureRoom() holen es später live nach */ }
-        upsertContact(fp, { alias });
-      }
-      const roomId = await startDm(fp);
-      openRoom(roomId);
-      return;
-    }
-    if (parsed.roomId && roomById(parsed.roomId)) openRoom(parsed.roomId);
-  }
-
-  // Direktlinks/Vor-Zurück: `#room=<roomId>` öffnet den Chat, ein leerer
+  // Direktlinks/Vor-Zurück: `#/<roomId>` (siehe buildChatHashRoute()/
+  // parseChatHash()) öffnet den Chat — nur wenn der Raum lokal schon
+  // bekannt ist (Mitgliederliste nötig, um ihn zu öffnen; das entsteht nur
+  // über handleInboxRequest()/startDm()/createGroupRoom()). Ein leerer
   // Hash (z. B. über den Zurück-Button oder Browser-"Zurück") schließt ihn.
   window.addEventListener('hashchange', () => {
-    const parsed = parseChatHash(location.hash);
-    if (parsed) {
-      const roomId = parsed.roomId ?? (parsed.legacyFp ? dmRoomId(qu.fingerprint, parsed.legacyFp) : null);
-      if (roomId && activeRoomId !== roomId) openRoomByHash(parsed);
+    const roomId = parseChatHash(location.hash);
+    if (roomId) {
+      if (roomId !== activeRoomId && roomById(roomId)) openRoom(roomId);
       return;
     }
     if (!location.hash && activeRoomId) closeRoom();
@@ -2140,16 +2111,18 @@ async function main() {
   // history.replaceState() räumt den `#add=...`-Hash IMMER zuerst weg
   // (auch im Modal-Fall, in dem noch gar kein Chat-Hash gesetzt wird),
   // damit ein anschließendes openRoom() unten nicht seinen eigenen, gerade
-  // erst gesetzten Chat-Hash (`#room=...`) wieder verliert.
+  // erst gesetzten Chat-Hash (`#/<roomId>`) wieder verliert.
   const invitedFp = parseInviteHash(location.hash);
   if (invitedFp && invitedFp !== qu.fingerprint) {
     history.replaceState(null, '', location.pathname);
     if (!contactByFp(invitedFp)) openAddContactModal(invitedFp);
     else startDm(invitedFp).then(openRoom);
   } else {
-    // Direktlink zu einem Chat (#room=<roomId>, siehe buildChatHashRoute()).
-    const parsed = parseChatHash(location.hash);
-    if (parsed) openRoomByHash(parsed);
+    // Direktlink zu einem Chat (#/<roomId>, siehe buildChatHashRoute()) —
+    // nur wenn der Raum lokal schon bekannt ist (siehe hashchange-Listener
+    // oben für die identische Bedingung/Begründung).
+    const roomId = parseChatHash(location.hash);
+    if (roomId && roomById(roomId)) openRoom(roomId);
   }
 
   // --- Anruf (Audio/Video über WebRTC) ---

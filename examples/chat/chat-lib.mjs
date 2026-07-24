@@ -177,38 +177,36 @@ export function parseInviteHash(hash) {
 }
 
 /**
- * Der Direktlink zu EINEM Chat: `#room=<roomId>` — verdrahtet mit dem
- * SPACE (roomId), NICHT (mehr) mit einer Kontakt-Fingerprint: ein Chat
- * ist ein Raum mit einem ODER MEHREREN Mitgliedern (dmRoomId() ist nur
- * der Spezialfall mit genau einem anderen Mitglied), die Adressierung
- * muss also den Raum selbst benennen. Bewusst ein anderes Format als
- * buildInviteLink()s `#add=<fingerprint>` (eindeutig am `add=`-Präfix
- * unterscheidbar, siehe parseChatHash()/parseInviteHash()): eine
- * Einladung fragt erst nach ("Kontakt hinzufügen?"), ein Chat-Link öffnet
- * direkt.
+ * Der Direktlink zu EINEM Chat: ein Pfad-artiger Hash, `#/<roomId>` —
+ * verdrahtet mit dem SPACE (roomId), nicht mit einer Kontakt-
+ * Fingerprint: ein Chat ist ein Raum mit einem ODER MEHREREN Mitgliedern
+ * (dmRoomId() ist nur der Spezialfall mit genau einem anderen Mitglied),
+ * die Adressierung muss also den Raum selbst benennen. Bewusst ein
+ * "sauberer" `/`-Pfad statt einer Query-artigen `?room=`/`#room=`-Notation
+ * — die Raum-Id ist das erste Pfadsegment, weitere Segmente (künftig z. B.
+ * `#/<roomId>/thread/<msgId>`) bleiben für spätere, tiefere Deep-Links
+ * innerhalb eines Raums reserviert, auch wenn heute nur das erste
+ * Segment gelesen wird. Ein anderes Format als buildInviteLink()s
+ * `#add=<fingerprint>` (eindeutig am `add=`-Präfix unterscheidbar, siehe
+ * parseChatHash()/parseInviteHash()): eine Einladung fragt erst nach
+ * ("Kontakt hinzufügen?"), ein Chat-Link öffnet direkt.
  */
 export function buildChatHashRoute(roomId) {
   if (!roomId) throw new Error('[chat-lib] buildChatHashRoute() braucht eine Raum-Id');
-  return `#room=${encodeURIComponent(roomId)}`;
+  return `#/${encodeURIComponent(roomId)}`;
 }
 
 /**
- * Gegenstück zu buildChatHashRoute(). `{ roomId }` für das aktuelle
- * `#room=...`-Format. Ein blanker 24-Hex-Zeichen-Fingerprint (das Format
- * VOR diesem Umbau, als ein Chat-Link noch direkt den Kontakt statt den
- * Raum adressierte) wird weiterhin als `{ legacyFp }` erkannt, damit
- * alte Lesezeichen/geteilte Links nicht ins Leere laufen — app.mjs löst
- * das auf den (ggf. neu erstellten) DM-Raum mit dieser Person auf.
- * `null`, wenn der Hash leer ist oder keinem der beiden Formate
- * entspricht (u. a. `#add=...`, das bleibt parseInviteHash()s Sache).
+ * Gegenstück zu buildChatHashRoute() — liest die Raum-Id aus dem ersten
+ * Pfadsegment eines `#/...`-Hashes (weitere Segmente, falls vorhanden,
+ * werden für jetzt ignoriert — siehe buildChatHashRoute()s Doku zu
+ * künftigen tieferen Deep-Links). `null`, wenn der Hash leer ist oder
+ * kein `/`-Pfad (u. a. `#add=...`, das bleibt parseInviteHash()s Sache).
  */
 export function parseChatHash(hash) {
   const raw = String(hash ?? '').replace(/^#/, '');
-  if (!raw || raw.startsWith('add=')) return null;
-  const m = /^room=(.+)$/.exec(raw);
-  if (m) {
-    try { return { roomId: decodeURIComponent(m[1]) }; } catch { return null; }
-  }
-  const legacyFp = normalizeFingerprint(raw);
-  return legacyFp ? { legacyFp } : null;
+  if (!raw.startsWith('/')) return null;
+  const [roomId] = raw.slice(1).split('/');
+  if (!roomId) return null;
+  try { return decodeURIComponent(roomId); } catch { return null; }
 }

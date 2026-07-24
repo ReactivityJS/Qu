@@ -122,24 +122,25 @@ test('parseInviteHash() returns null for garbage/missing hash', () => {
   assert.equal(parseInviteHash('#add=not-a-fingerprint'), null);
 });
 
-test('buildChatHashRoute()/parseChatHash() round-trip (roomId-based, current format)', () => {
+test('buildChatHashRoute()/parseChatHash() round-trip (clean path-style hash, roomId as the first segment)', () => {
   const hash = buildChatHashRoute('dm-abc-def');
-  assert.equal(hash, '#room=dm-abc-def');
-  assert.deepEqual(parseChatHash(hash), { roomId: 'dm-abc-def' });
-  assert.deepEqual(parseChatHash('room=dm-abc-def'), { roomId: 'dm-abc-def' }); // auch ohne führendes '#' (z. B. schon von location.hash getrennt)
+  assert.equal(hash, '#/dm-abc-def');
+  assert.equal(parseChatHash(hash), 'dm-abc-def');
+  assert.equal(parseChatHash('/dm-abc-def'), 'dm-abc-def'); // auch ohne führendes '#' (z. B. schon von location.hash getrennt)
 });
 
-test('buildChatHashRoute() encodes/decodes special characters in a roomId round-trip', () => {
-  const hash = buildChatHashRoute('grp-a b/c');
-  assert.deepEqual(parseChatHash(hash), { roomId: 'grp-a b/c' });
+test('buildChatHashRoute() encodes/decodes a special character in a roomId round-trip', () => {
+  const hash = buildChatHashRoute('grp-a b');
+  assert.equal(parseChatHash(hash), 'grp-a b');
 });
 
-test('parseChatHash() still understands a pre-refactor bare-fingerprint link as legacyFp', () => {
-  assert.deepEqual(parseChatHash(`#${FP_A}`), { legacyFp: FP_A });
+test('parseChatHash() only reads the FIRST path segment — later segments are reserved for future deep-links, not part of the roomId', () => {
+  assert.equal(parseChatHash('#/dm-abc-def/thread/xyz'), 'dm-abc-def');
 });
 
-test('parseChatHash() never matches an invite hash or garbage', () => {
+test('parseChatHash() never matches an invite hash, a bare (non-path) hash, or garbage', () => {
   assert.equal(parseChatHash(`#add=${FP_A}`), null);
   assert.equal(parseChatHash(''), null);
-  assert.equal(parseChatHash('#not-a-fingerprint'), null);
+  assert.equal(parseChatHash(`#${FP_A}`), null); // kein "/"-Pfad — kein Chat-Link (mehr)
+  assert.equal(parseChatHash('#/'), null); // Pfad ohne Segment
 });
