@@ -126,7 +126,7 @@ qu-profile-card { display: block; }
 .modal h2 { margin: 0 0 0.8rem; font-size: 1.2rem; }
 .modal h3 { margin: 1.2rem 0 0.5rem; font-size: 0.95rem; color: var(--muted); }
 .modal label { display: block; font-size: 0.82rem; color: var(--muted); margin: 0.8rem 0 0.3rem; }
-.modal input[type="text"], .modal input[type="search"] {
+.modal input[type="text"], .modal input[type="search"], .modal input[type="password"], .modal textarea {
   width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -134,7 +134,9 @@ qu-profile-card { display: block; }
   border-radius: 0.5rem;
   padding: 0.55rem 0.7rem;
   font-size: 0.95rem;
+  box-sizing: border-box;
 }
+.modal textarea { font-family: ui-monospace, monospace; font-size: 0.8rem; resize: vertical; }
 .toggle-row { display: flex !important; align-items: center; gap: 0.5rem; margin: 0.9rem 0 !important; }
 .toggle-row input { width: auto; }
 .fp-display { font-family: ui-monospace, monospace; font-size: 0.85rem; word-break: break-all; background: var(--panel-2); border-radius: 0.5rem; padding: 0.5rem 0.7rem; }
@@ -158,3 +160,7 @@ qu-profile-card { display: block; }
 .attr-remove-btn { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 1.1rem; padding: 0 0.3rem; }
 .attr-form { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.7rem; align-items: center; }
 .attr-form input[type="text"] { flex: 1; min-width: 8rem; }
+
+.transfer-export, .transfer-import { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
+.transfer-export .btn, .transfer-import .btn { align-self: flex-start; }
+.transfer-textarea { width: 100%; }

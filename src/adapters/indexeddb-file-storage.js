@@ -46,6 +46,35 @@ export class IndexedDBFileStorageAdapter {
 
   async putChunk(hash, bytes) { await wrap((await this.#store('readwrite')).put(bytes, hash)); }
 
+  /**
+   * Writes many chunks in ONE transaction instead of one per chunk — an
+   * optional extension beyond FileStorageAdapter's required four methods
+   * (contract.js), detected/used by data/files/manifest.js's publishFile()
+   * when present, silently unused (per-chunk putChunk() stays correct,
+   * just slower) by any adapter that doesn't implement it. Matters a lot
+   * here specifically: EVERY IndexedDB transaction has real commit
+   * overhead (the browser flushes it before resolving), so publishing a
+   * large file (a video: thousands of 64 KiB chunks at the default
+   * DEFAULT_CHUNK_SIZE) one `putChunk()` at a time paid that overhead
+   * thousands of times — measured as minutes for a file that should take
+   * seconds, which looked exactly like "video upload just hangs, no
+   * visible progress" from the UI (each chunk's progress tick was real,
+   * just each one was agonizingly slow to land). Batching drops the
+   * transaction count by `entries.length`, typically 32-64x fewer commits
+   * for the same file.
+   */
+  async putChunks(entries) {
+    if (!entries.length) return;
+    const store = await this.#store('readwrite');
+    await new Promise((resolve, reject) => {
+      const tx = store.transaction;
+      for (const { hash, bytes } of entries) store.put(bytes, hash);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('[IndexedDBFileStorageAdapter] putChunks() transaction aborted'));
+    });
+  }
+
   async getChunk(hash) {
     const result = await wrap((await this.#store('readonly')).get(hash));
     return result ?? null;
