@@ -171,10 +171,40 @@ button { font-family: inherit; }
   flex-shrink: 0; /* angeheftet — nie vom wachsenden message-list-Inhalt verdrängt, siehe .chat-panel's min-height:0 */
 }
 .back-btn { display: none; background: none; border: none; color: var(--text); font-size: 1.4rem; cursor: pointer; padding: 0 0.2rem; }
-.chat-peer-info { flex: 1; min-width: 0; }
+
+/* renderRoomHeader() (app.mjs) füllt #chat-peer-identity: bei einer Gruppe
+   manuell (.avatar + .chat-peer-name), bei einem DM ein <qu-profile-card>
+   (src/ui/profile-components.js, unstyled per default — Aussehen kommt
+   komplett von hier). #peer-status bleibt in JEDEM Fall derselbe, stabile
+   Knoten (renderPresence() schreibt immer in dasselbe Element), darunter
+   eingerückt, damit er optisch unter dem Namen sitzt, egal welcher der
+   beiden Fälle gerade den Avatar+Namen liefert. */
+.chat-peer-block { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.chat-peer-identity { display: flex; align-items: center; gap: 0.6rem; min-width: 0; position: relative; }
 .chat-peer-name { font-weight: 600; font-size: 0.98rem; }
-.chat-peer-status { font-size: 0.76rem; color: var(--muted); }
+.chat-peer-status { font-size: 0.76rem; color: var(--muted); padding-left: calc(2.5rem + 0.6rem); }
 .chat-peer-status.online { color: var(--online); }
+
+/* Online-Punkt: renderPresence() (app.mjs) hängt ihn IMMER direkt an
+   #chat-peer-identity selbst an (nicht in den Avatar hinein — bei einem DM
+   ist der Avatar Teil des internen Markups von <qu-profile-card>, das von
+   außen bewusst nicht umgebaut wird) und positioniert ihn hier absolut auf
+   die untere rechte Ecke des Avatars (2.5rem, egal ob Gruppe oder DM). */
+.chat-peer-identity .dot {
+  position: absolute;
+  left: 1.85rem;
+  top: 1.85rem;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--muted);
+  border: 2px solid var(--panel);
+}
+.chat-peer-identity .dot.online { background: var(--online); }
+
+.chat-peer-identity .qu-profile-card { display: flex; align-items: center; gap: 0.6rem; text-decoration: none; color: inherit; min-width: 0; }
+.chat-peer-identity .qu-profile-avatar { width: 2.5rem; height: 2.5rem; border-radius: 50%; object-fit: cover; background: linear-gradient(135deg, var(--accent), #6366f1); flex-shrink: 0; }
+.chat-peer-identity .qu-profile-alias { font-weight: 600; font-size: 0.98rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .message-list {
   list-style: none;
@@ -390,6 +420,23 @@ button { font-family: inherit; }
 .btn-secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .modal-error { color: var(--danger); font-size: 0.8rem; margin-top: 0.5rem; min-height: 1em; }
+
+/* <qu-people-search> (src/ui/people-search-components.js), im "Neuer Chat"-Formular — unstyled per default. */
+.modal .qu-people-search-input {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  color: var(--text);
+  font-size: 16px;
+}
+.modal .qu-people-search-results { list-style: none; margin: 0.4rem 0 0; padding: 0; max-height: 9rem; overflow-y: auto; }
+.modal .qu-people-search-results li { list-style: none; }
+.modal .qu-people-search-results .qu-profile-card { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0.3rem; border-radius: 8px; text-decoration: none; color: inherit; cursor: pointer; }
+.modal .qu-people-search-results .qu-profile-card:hover { background: var(--panel-2); }
+.modal .qu-people-search-results .qu-profile-avatar { width: 2rem; height: 2rem; border-radius: 50%; object-fit: cover; background: linear-gradient(135deg, var(--accent), #6366f1); flex-shrink: 0; }
+.modal .qu-people-search-results .qu-profile-alias { font-size: 0.88rem; }
 .push-row { justify-content: flex-start; align-items: center; }
 .push-status { margin: 0; }
 .modal-hint { color: var(--muted); font-size: 0.78rem; margin: 0.4rem 0 0; }
@@ -418,6 +465,10 @@ button { font-family: inherit; }
 .group-member-picker label { display: flex !important; align-items: center; gap: 0.6rem; margin: 0 !important; flex: 1; cursor: pointer; color: var(--text) !important; font-size: 0.88rem !important; }
 .group-member-picker input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent-strong); cursor: pointer; flex: none; }
 .group-member-list .member-name { flex: 1; font-size: 0.88rem; }
+.group-member-list qu-profile-card { flex: 1; min-width: 0; }
+.group-member-list .qu-profile-card { display: flex; align-items: center; gap: 0.6rem; text-decoration: none; color: inherit; min-width: 0; }
+.group-member-list .qu-profile-avatar { width: 2rem; height: 2rem; border-radius: 50%; object-fit: cover; background: linear-gradient(135deg, var(--accent), #6366f1); flex-shrink: 0; }
+.group-member-list .qu-profile-alias { font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-member-list .member-remove-btn {
   background: none; border: none; color: var(--danger); cursor: pointer; font-size: 1rem; padding: 0.2rem 0.4rem;
 }

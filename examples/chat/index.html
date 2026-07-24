@@ -42,9 +42,12 @@
     <section id="chat-panel" class="chat-panel hidden-empty">
       <header class="chat-header">
         <button id="back-btn" class="back-btn" type="button">&larr;</button>
-        <button id="peer-avatar" class="avatar" type="button"></button>
-        <div class="chat-peer-info">
-          <div class="chat-peer-name" id="peer-name">…</div>
+        <!-- Bei einer Gruppe (kein Einzel-Identität) rendert renderRoomHeader() hier den
+             klassischen Avatar+Name manuell; bei einem DM stattdessen ein <qu-profile-card>
+             (src/ui/profile-components.js) — reaktiv über das globale Profil des einen
+             anderen Mitglieds, mit Link auf dessen volles Profil in examples/people. -->
+        <div class="chat-peer-block">
+          <div id="chat-peer-identity" class="chat-peer-identity"></div>
           <div class="chat-peer-status" id="peer-status">…</div>
         </div>
         <button id="audio-call-btn" class="icon-btn" type="button" title="Anrufen">📞</button>
@@ -123,11 +126,16 @@
     </div>
   </div>
 
-  <!-- Neuer 1:1-Chat (per Fingerprint) -->
+  <!-- Neuer 1:1-Chat (per Fingerprint, oder per Suche im globalen Verzeichnis) -->
   <div id="add-contact-modal" class="modal-backdrop" hidden>
     <div class="modal">
       <h2>Neuer Chat</h2>
-      <label for="contact-fp-input">Fingerprint des Kontakts</label>
+      <label>Im Verzeichnis suchen (Alias oder Fingerprint)</label>
+      <!-- <qu-people-search mode="search"> (src/ui/people-search-components.js) wird von
+           app.mjs HIER hinein erzeugt, siehe dessen Doku zu #directory-search-slot in
+           examples/people für den Grund (Timing: `.qu` muss vor dem Einfügen gesetzt sein). -->
+      <div id="add-contact-search-slot"></div>
+      <label for="contact-fp-input">…oder direkt per Fingerprint (z. B. aus einem Einladungslink)</label>
       <input type="text" id="contact-fp-input" placeholder="24 Hex-Zeichen" autocomplete="off" autocapitalize="off" spellcheck="false" />
       <label for="contact-alias-input">Anzeigename (optional — sonst der Alias des Kontakts)</label>
       <input type="text" id="contact-alias-input" maxlength="40" />

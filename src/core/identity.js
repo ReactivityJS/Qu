@@ -22,6 +22,22 @@ export async function fingerprintOfPublicKey(pubKey) {
   return fingerprintOfSpki(spki);
 }
 
+const FINGERPRINT_RE = /^[0-9a-f]{24}$/i;
+
+/**
+ * Is `value` a plausible QU fingerprint — 24 hex characters, matching
+ * `fingerprintOfSpki()`'s own `toHex(hash).slice(0, 24)` above? A shape
+ * check only (no cryptographic verification, no lookup) — the same check
+ * examples/chat/chat-lib.mjs's and examples/people/people-lib.mjs's own
+ * copies already did before this existed; canonicalized here now that a
+ * third caller (ui/people-search-components.js) needs it too, so every
+ * caller stays in sync with the one place that actually derives the
+ * format.
+ */
+export function isValidFingerprint(value) {
+  return typeof value === 'string' && FINGERPRINT_RE.test(value.trim());
+}
+
 export class QuIdentity {
   #signKP;
   #encKP;
