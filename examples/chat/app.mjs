@@ -563,16 +563,29 @@ async function main() {
    * waitUntilReplicated() (für die Nachricht selbst) und die schon
    * bestehende DefaultFileTransfer#waitUntilReady() (für jeden Anhang:
    * "hat der Relay wirklich ALLE Chunks", nicht nur das Manifest). Beide
-   * pollen mit Backoff über das Netzwerk — kein blindes UI-Polling, nur
-   * EIN Aufruf pro (Wieder-)Verbindung (siehe connectToRelay()) oder
-   * direkt nach dem Senden. Läuft die Wartezeit ab, OHNE dass
-   * connectToRelay() zwischenzeitlich fehlschlug, bleibt der Eintrag
-   * einfach in pendingDeliveries stehen — der nächste Reconnect versucht
-   * es erneut, unbegrenzt, bis es klappt oder der Nutzer den Chat löscht.
+   * pollen mit Backoff über das Netzwerk (bis zu 20s pro Aufruf). Läuft
+   * diese Wartezeit ab, bleibt der Eintrag einfach in pendingDeliveries
+   * stehen — sowohl jeder (Wieder-)Verbindungsaufbau (siehe
+   * connectToRelay()) als auch der periodische Sweep direkt unter dieser
+   * Funktion rufen ihn dann erneut auf, unbegrenzt, bis es klappt oder
+   * der Nutzer den Chat löscht. Der Sweep ist der wichtigere der beiden
+   * Fälle für einen großen Anhang: eine KONSTANT offene, nur langsame
+   * Verbindung erzeugt nie einen Reconnect, aber "der Relay braucht
+   * länger als 20s, um alles zu spiegeln" ist für ein echtes Video über
+   * eine schwache Verbindung eher die Regel als die Ausnahme.
    */
+  // Welche Einträge GERADE geprüft werden — mit mehreren Anhängen kann ein
+  // einzelner confirmDelivery()-Aufruf (sequenziell bis zu 20s PRO Ref)
+  // länger dauern als der periodische Sweep unten (alle 15s) auseinander
+  // liegt. Ohne diese Sperre würde der Sweep für denselben Eintrag einen
+  // zweiten, redundanten Aufruf parallel lostreten, statt auf den schon
+  // laufenden zu warten.
+  const confirmInFlight = new Set();
+
   async function confirmDelivery(entry) {
-    if (deliveredMsgIds.has(entry.id)) return;
-    if (!channel?.isOpen()) return; // nichts zu prüfen gerade — nächster Reconnect versucht es erneut
+    if (deliveredMsgIds.has(entry.id) || confirmInFlight.has(entry.id)) return;
+    if (!channel?.isOpen()) return; // nichts zu prüfen gerade — nächster Reconnect/Sweep versucht es erneut
+    confirmInFlight.add(entry.id);
     try {
       const msgOk = await repl.waitUntilReplicated(entry.id, { ts: entry.ts, maxWaitMs: 20000 });
       if (!msgOk) return;
@@ -583,12 +596,28 @@ async function main() {
     } catch (e) {
       console.error('[chat] confirmDelivery fehlgeschlagen:', entry.id, e);
       return;
+    } finally {
+      confirmInFlight.delete(entry.id);
     }
     deliveredMsgIds.add(entry.id);
     pendingDeliveries = pendingDeliveries.filter((p) => p.id !== entry.id);
     savePendingDeliveries(pendingDeliveries);
     if (activeRoomId === entry.roomId) renderTicks(entry.roomId);
   }
+
+  // Periodischer Sicherheitsnetz-Sweep: confirmDelivery() selbst gibt nach
+  // 20s Polling pro Prüfung auf (siehe dessen eigene Doku) — bei einer
+  // KONSTANT offenen, aber langsamen Verbindung (großer Videoanhang über
+  // eine schwache Mobilfunkverbindung, der länger als 20s braucht, um
+  // vollständig zum Relay gespiegelt zu werden) fällt dann NIE ein echter
+  // Reconnect an, der laut derselben Doku "es beim nächsten Mal erneut
+  // versucht" — der Eintrag blieb dadurch für immer in pendingDeliveries
+  // hängen und das Sync-Badge (renderTicks()) verschwand nie, obwohl der
+  // Upload am Ende wirklich fertig war. Dieses Intervall schließt genau
+  // diese Lücke, unabhängig davon, ob die Verbindung je abreißt.
+  setInterval(() => {
+    for (const entry of pendingDeliveries) confirmDelivery(entry).catch(() => {});
+  }, 15000);
 
   // Service Worker: unabhängig von Push registriert (s. registerServiceWorker()
   // unten) — er ist zusammen mit manifest.webmanifest die eigentliche
