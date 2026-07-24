@@ -1,19 +1,27 @@
-// Beispiel 7: ein 1:1-Privat-Chat ("Kontakt = Fingerprint") auf Basis der
-// bereits im Core vorhandenen Chat-Primitive (src/modules/chat.js:
-// sendMessage/onMessage, markRead/getReadReceipts, setPresence/getPresence).
-// Diese Datei enthält nur, was OHNE `window`/`localStorage` testbar ist:
-// Raum-Adressierung, Formatierung, Link-Erkennung, Einladungslinks. Der
-// Browser-Teil (Identität, Kontaktliste in localStorage, Lightbox, Emoji-
-// Picker, DOM-Rendering) liegt in app.mjs — derselbe Schnitt wie überall
-// sonst im Repo (space-app-lib.mjs vs. space-app-browser.js).
+// Beispiel 7: ein privater Chat (1:1 UND Gruppe — ein "Chat" ist ein Raum
+// mit einem ODER MEHREREN Mitgliedern, kein Sonderfall pro Mitgliederzahl)
+// auf Basis der bereits im Core vorhandenen Chat-Primitive
+// (src/modules/chat.js: sendMessage/onMessage, markRead/getReadReceipts,
+// setPresence/getPresence). Diese Datei enthält nur, was OHNE `window`/
+// `localStorage` testbar ist: Raum-Adressierung, Formatierung,
+// Link-Erkennung, Einladungslinks. Der Browser-Teil (Identität,
+// Kontakt-/Raumliste in localStorage, Lightbox, Emoji-Picker,
+// DOM-Rendering) liegt in app.mjs — derselbe Schnitt wie überall sonst im
+// Repo (space-app-lib.mjs vs. space-app-browser.js).
 //
-// Kernidee: ein 1:1-Raum ist derselbe generische Space wie ein Forum-Board
-// (Whitepaper §8), nur mit EINER aus beiden Fingerprints deterministisch
-// abgeleiteten Id statt einer zufälligen (modules/spaces.js's
-// `createSpaceAt(id, opts)`) — so finden zwei Kontakte denselben Raum,
-// ohne vorher einen Link austauschen zu müssen; nur der jeweils andere
-// Fingerprint (ohnehin Voraussetzung, um überhaupt schreiben zu dürfen)
-// wird gebraucht.
+// Kernidee: EIN Raum ist derselbe generische Space wie ein Forum-Board
+// (Whitepaper §8), egal ob 1:1 oder Gruppe — nur die Art, wie seine Id
+// entsteht, unterscheidet sich: ein 1:1 (dmRoomId()) leitet sie
+// deterministisch aus den zwei beteiligten Fingerprints ab (so finden
+// zwei Kontakte denselben Raum, ohne vorher einen Link austauschen zu
+// müssen), eine Gruppe (groupRoomId()) bekommt eine zufällige Id wie
+// jeder andere neu erstellte Space (modules/spaces.js's
+// `createSpaceAt(id, opts)`), weil ihre Mitgliederliste sich über die
+// Zeit ändern kann und es daher keine feste "Ableitung" gäbe. Die
+// Discovery/Mitgliederschaft selbst (Briefkasten, inboxId()) ist NICHT
+// chat-spezifisch und lebt daher in src/modules/space-membership.js —
+// derselbe Mechanismus, den jede andere Space-basierte App (ToDo, Forum,
+// CMS) genauso braucht.
 
 const FINGERPRINT_RE = /^[0-9a-f]{24}$/i;
 
@@ -44,19 +52,15 @@ export function dmRoomId(fingerprintA, fingerprintB) {
 }
 
 /**
- * Der "Briefkasten"-Space eines Fingerprints — bewusst OHNE eigenes
- * Manifest angelegt (bleibt dauerhaft im Bootstrap-Zustand von
- * modules/spaces.js: "kein Manifest = jeder darf schreiben"), damit JEDE
- * andere Identität dorthin einen Hinweis ablegen kann, ohne vorher vom
- * Empfänger als Schreiber autorisiert worden zu sein — das ist genau der
- * Mechanismus, der einen remote gestarteten Chat beim Empfänger auftauchen
- * lässt, ohne dass der zuerst selbst denselben Kontakt hinzufügen müsste
- * (siehe app.mjs's ensureRoom()/Inbox-Abo).
+ * Zufällige Gruppen-Raum-Id. Anders als dmRoomId() gibt es hier keine aus
+ * den Mitgliedern ABLEITBARE Id — eine Gruppe hat keine feste
+ * Mitgliederzahl (die ändert sich ja gerade durch Hinzufügen/Entfernen),
+ * es gibt also kein "die zwei/drei Fingerprints sortiert" wie bei einem
+ * DM. Ein zufälliger, eindeutiger Bezeichner wie bei jedem anderen neu
+ * erstellten Space (modules/spaces.js's createSpace()).
  */
-export function inboxId(fingerprint) {
-  const fp = normalizeFingerprint(fingerprint);
-  if (!fp) throw new Error('[chat-lib] inboxId() braucht einen gültigen Fingerprint');
-  return `inbox-${fp}`;
+export function groupRoomId() {
+  return `grp-${crypto.randomUUID()}`;
 }
 
 /** Die ersten `n` Zeichen eines Fingerprints, für kompakte Anzeige (Avatar-Fallback, Kontaktliste). */
@@ -135,42 +139,43 @@ export function mediaKind(mime) {
   return 'file';
 }
 
-/** Kontakte nach letzter Aktivität absteigend (zuletzt geschrieben zuerst) — `lastTs` fehlend/0 landet ans Ende, stabil nach Alias sortiert. */
-export function sortContactsByActivity(contacts) {
-  return contacts.slice().sort((a, b) => (b.lastTs ?? 0) - (a.lastTs ?? 0) || (a.alias ?? '').localeCompare(b.alias ?? ''));
-}
-
-/** Baut einen teilbaren Einladungslink (`<baseUrl>#add=<fingerprint>`) — die "Kontakt per Fingerprint hinzufügen"-Bequemlichkeit oben drauf: Fingerprint bleibt die eigentliche Identität, der Link ist nur Transportmittel. */
-export function buildInviteLink(baseUrl, fingerprint) {
-  const fp = normalizeFingerprint(fingerprint);
-  if (!fp) throw new Error('[chat-lib] buildInviteLink() braucht einen gültigen Fingerprint');
-  return `${baseUrl}#add=${fp}`;
-}
-
-/** Gegenstück zu buildInviteLink() — liest `#add=<fingerprint>` aus einem Hash, `null` falls keiner/kein gültiger vorhanden ist. */
-export function parseInviteHash(hash) {
-  const raw = String(hash ?? '').replace(/^#/, '');
-  const match = /^add=(.+)$/.exec(raw);
-  return match ? normalizeFingerprint(decodeURIComponent(match[1])) : null;
+/**
+ * Chats (Räume — 1:1 UND Gruppen, siehe app.mjs's `rooms`) nach letzter
+ * Aktivität absteigend (zuletzt geschrieben zuerst) — `lastTs` fehlend/0
+ * landet ans Ende, stabil nach `alias` sortiert (bei einem Raum: sein
+ * Anzeigename, von app.mjs vor dem Aufruf berechnet — ein DM zeigt den
+ * Namen des einen anderen Mitglieds, eine Gruppe ihren eigenen Namen).
+ */
+export function sortByActivity(list) {
+  return list.slice().sort((a, b) => (b.lastTs ?? 0) - (a.lastTs ?? 0) || (a.alias ?? '').localeCompare(b.alias ?? ''));
 }
 
 /**
- * Der Direktlink zu EINEM Chat: `#<fingerprint>` — bewusst ein anderes
- * Format als buildInviteLink()s `#add=<fingerprint>` (eindeutig am
- * `add=`-Präfix unterscheidbar, siehe parseChatHash()/parseInviteHash()):
- * eine Einladung fragt erst nach ("Kontakt hinzufügen?"), ein Chat-Link
- * öffnet direkt — dieselbe Unterscheidung wie überall sonst im Repo
- * zwischen "ansehen" und "einer Aktion zustimmen".
+ * EIN Pfadschema für die gesamte App — jeder Screen (Chatliste, ein Chat,
+ * dessen Einstellungen, das eigene Profil, App-Einstellungen, Suche,
+ * "Kontakt hinzufügen", "Neue Gruppe", …) ist ein `#/a/b/c`-Pfad, nie eine
+ * Query-artige `#key=value`-Notation und nie ein reines `hidden`-Flag ohne
+ * URL-Entsprechung. app.mjs's Router baut jede Navigation über buildPath()
+ * und liest jeden `hashchange` über parsePathSegments() — der Hash IST der
+ * Zustand ("welcher Screen ist offen"), nichts pflegt das getrennt davon.
+ * Feste erste Segmente (`profile`, `settings`, `search`, `add-contact`,
+ * `new-group`) kollidieren nie mit einer echten Raum-Id — die beginnt
+ * immer mit `dm-` oder `grp-` (dmRoomId()/groupRoomId() oben).
+ *
+ * Ein geteilter Einladungslink ist kein Sonderformat mehr, sondern
+ * einfach `buildPath('add-contact', fingerprint)` — dieselbe Route wie
+ * der "+"-Button in der App, nur mit dem Fingerprint als zweitem Segment
+ * vorausgefüllt.
  */
-export function buildChatHashRoute(fingerprint) {
-  const fp = normalizeFingerprint(fingerprint);
-  if (!fp) throw new Error('[chat-lib] buildChatHashRoute() braucht einen gültigen Fingerprint');
-  return `#${fp}`;
+export function buildPath(...segments) {
+  return `#/${segments.map((s) => encodeURIComponent(s)).join('/')}`;
 }
 
-/** Gegenstück zu buildChatHashRoute() — liest einen blanken Fingerprint-Hash (NICHT `#add=...`, das bleibt parseInviteHash()s Sache), `null` falls leer/kein gültiger Fingerprint. */
-export function parseChatHash(hash) {
+/** Gegenstück zu buildPath() — liest die Pfadsegmente eines `#/a/b/c`-Hashes, dekodiert. `[]` für einen leeren/nicht-Pfad-Hash (die Chatliste, das Wurzel-"Verzeichnis"). */
+export function parsePathSegments(hash) {
   const raw = String(hash ?? '').replace(/^#/, '');
-  if (!raw || raw.startsWith('add=')) return null;
-  return normalizeFingerprint(raw);
+  if (!raw.startsWith('/')) return [];
+  return raw.slice(1).split('/').filter(Boolean).map((s) => {
+    try { return decodeURIComponent(s); } catch { return s; }
+  });
 }

@@ -68,8 +68,18 @@ function yieldToEventLoop() {
  * as their OWN separate fields (metaEncryption/contentEncryption) inside
  * an otherwise-plaintext manifest sidesteps that without touching the
  * transfer protocol at all.
+ *
+ * `onProgress`, if given, is called synchronously-ish during the
+ * (potentially slow — think a phone video, hundreds of MB) local
+ * encrypt+chunk+hash+store work below, purely so a UI can show something
+ * better than a frozen spinner: once with `{ phase: 'encrypting' }` right
+ * before the (single, not itself progress-reportable) content encryption
+ * call, then with `{ phase: 'chunking', done, total }` after each chunk is
+ * hashed and stored. This is LOCAL progress only — nothing here reports
+ * on whether the relay/recipient has received anything yet; see
+ * DefaultFileTransfer's `waitUntilReady()` for that.
  */
-export async function publishFile(session, id, bytes, { name, mime = 'application/octet-stream', chunkSize = DEFAULT_CHUNK_SIZE, fileStorage, refs, encryptFor } = {}) {
+export async function publishFile(session, id, bytes, { name, mime = 'application/octet-stream', chunkSize = DEFAULT_CHUNK_SIZE, fileStorage, refs, encryptFor, onProgress } = {}) {
   if (!fileStorage) throw new Error('[publishFile] fileStorage (a FileStorageAdapter) is required');
   assertFileStorageAdapter(fileStorage);
   let data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -78,6 +88,7 @@ export async function publishFile(session, id, bytes, { name, mime = 'applicatio
   let contentEncryption;
   let metaEncryption;
   if (encryptFor && encryptFor.length) {
+    onProgress?.({ phase: 'encrypting' });
     const recipients = await session.resolveEncryptionRecipients(encryptFor);
     const { envelope, ciphertext } = await encryptBytesFor(recipients, data);
     contentEncryption = envelope;
@@ -91,11 +102,13 @@ export async function publishFile(session, id, bytes, { name, mime = 'applicatio
 
   const chunks = splitChunks(data, chunkSize);
   debug('files', 'chunking-start', { id, size: data.length, chunkCount: chunks.length, encrypted: !!contentEncryption });
+  onProgress?.({ phase: 'chunking', done: 0, total: chunks.length });
   const hashes = [];
   for (let i = 0; i < chunks.length; i++) {
     const hash = await sha256Hex(chunks[i]);
     await fileStorage.putChunk(hash, chunks[i]);
     hashes.push(hash);
+    onProgress?.({ phase: 'chunking', done: i + 1, total: chunks.length });
     if (i % YIELD_EVERY_N_CHUNKS === 0) await yieldToEventLoop();
   }
   const manifest = { chunkSize, chunks: hashes };

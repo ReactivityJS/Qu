@@ -91,6 +91,9 @@ export { shareFile, resolveFileRef, createFileHandlerPlugin } from './data/files
 // (core/identity-acl.js) only ever grants `~<your fingerprint>`.
 export { createSpaceACLResolver, createSpace, createSpaceAt, createSpacesPlugin, addToRole, removeFromRole } from './modules/spaces.js';
 export {
+  inboxId, ensureSpace, notifyMembers, onSpaceInvite, addSpaceMember, removeSpaceMember, createSpaceMembershipPlugin,
+} from './modules/space-membership.js';
+export {
   sendMessage, listMessages, onMessage, createChatRoom,
   markRead, getReadReceipts, onReadReceipt,
   setPresence, getPresence, onPresenceChange, startHeartbeat,

@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isValidFingerprint, normalizeFingerprint, dmRoomId, inboxId, shortFp, fmtBytes,
-  fmtTime, fmtDayLabel, fmtCallDuration, linkify, mediaKind, sortContactsByActivity,
-  buildInviteLink, parseInviteHash, buildChatHashRoute, parseChatHash,
+  isValidFingerprint, normalizeFingerprint, dmRoomId, groupRoomId, shortFp, fmtBytes,
+  fmtTime, fmtDayLabel, fmtCallDuration, linkify, mediaKind, sortByActivity,
+  buildPath, parsePathSegments,
 } from './chat-lib.mjs';
 
 const FP_A = 'a1b2c3d4e5f60718293a4b5c';
@@ -30,10 +30,11 @@ test('dmRoomId() rejects invalid fingerprints', () => {
   assert.throws(() => dmRoomId(FP_A, 'not-a-fingerprint'));
 });
 
-test('inboxId()', () => {
-  assert.equal(inboxId(FP_A), `inbox-${FP_A}`);
-  assert.equal(inboxId(FP_A.toUpperCase()), `inbox-${FP_A}`);
-  assert.throws(() => inboxId('not-a-fingerprint'));
+test('groupRoomId() returns unique, differently-prefixed ids', () => {
+  const a = groupRoomId();
+  const b = groupRoomId();
+  assert.match(a, /^grp-/);
+  assert.notEqual(a, b);
 });
 
 test('shortFp()', () => {
@@ -92,8 +93,8 @@ test('mediaKind()', () => {
   assert.equal(mediaKind(undefined), 'file');
 });
 
-test('sortContactsByActivity() sorts by lastTs desc, missing lastTs last, tie-break by alias', () => {
-  const sorted = sortContactsByActivity([
+test('sortByActivity() sorts by lastTs desc, missing lastTs last, tie-break by alias', () => {
+  const sorted = sortByActivity([
     { alias: 'Bea', lastTs: 100 },
     { alias: 'Zoe' },
     { alias: 'Amy' },
@@ -102,28 +103,28 @@ test('sortContactsByActivity() sorts by lastTs desc, missing lastTs last, tie-br
   assert.deepEqual(sorted.map((c) => c.alias), ['Cid', 'Bea', 'Amy', 'Zoe']);
 });
 
-test('buildInviteLink()/parseInviteHash() round-trip', () => {
-  const link = buildInviteLink('https://chat.example/app.html', FP_A);
-  assert.equal(link, `https://chat.example/app.html#add=${FP_A}`);
-  const hash = link.slice(link.indexOf('#'));
-  assert.equal(parseInviteHash(hash), FP_A);
+test('buildPath()/parsePathSegments() round-trip for a single segment', () => {
+  const hash = buildPath('dm-abc-def');
+  assert.equal(hash, '#/dm-abc-def');
+  assert.deepEqual(parsePathSegments(hash), ['dm-abc-def']);
+  assert.deepEqual(parsePathSegments('/dm-abc-def'), ['dm-abc-def']); // auch ohne führendes '#' (z. B. schon von location.hash getrennt)
 });
 
-test('parseInviteHash() returns null for garbage/missing hash', () => {
-  assert.equal(parseInviteHash('#foo=bar'), null);
-  assert.equal(parseInviteHash(''), null);
-  assert.equal(parseInviteHash('#add=not-a-fingerprint'), null);
+test('buildPath()/parsePathSegments() round-trip for multiple segments — the same route scheme every screen (chat, chat settings, profile, app settings, search, add-contact, new-group) is built from', () => {
+  const hash = buildPath('add-contact', 'a1b2c3d4e5f60718293a4b5c');
+  assert.equal(hash, '#/add-contact/a1b2c3d4e5f60718293a4b5c');
+  assert.deepEqual(parsePathSegments(hash), ['add-contact', 'a1b2c3d4e5f60718293a4b5c']);
+
+  assert.deepEqual(parsePathSegments(buildPath('dm-abc-def', 'settings')), ['dm-abc-def', 'settings']);
 });
 
-test('buildChatHashRoute()/parseChatHash() round-trip', () => {
-  const hash = buildChatHashRoute(FP_A);
-  assert.equal(hash, `#${FP_A}`);
-  assert.equal(parseChatHash(hash), FP_A);
-  assert.equal(parseChatHash(FP_A), FP_A); // auch ohne führendes '#' (z. B. schon von location.hash getrennt)
+test('buildPath() encodes/decodes a special character in a segment round-trip', () => {
+  const hash = buildPath('grp-a b');
+  assert.deepEqual(parsePathSegments(hash), ['grp-a b']);
 });
 
-test('parseChatHash() never matches an invite hash or garbage', () => {
-  assert.equal(parseChatHash(`#add=${FP_A}`), null);
-  assert.equal(parseChatHash(''), null);
-  assert.equal(parseChatHash('#not-a-fingerprint'), null);
+test('parsePathSegments() returns [] for the root/empty/non-path hash — the chat list', () => {
+  assert.deepEqual(parsePathSegments(''), []);
+  assert.deepEqual(parsePathSegments('#/'), []);
+  assert.deepEqual(parsePathSegments(`#${FP_A}`), []); // kein "/"-Pfad
 });

@@ -269,7 +269,73 @@ export class DefaultReplication {
     if (msg.type === 'qu.sync.response') {
       const resolver = this.#pending.get(msg.reqId);
       if (resolver) { this.#pending.delete(msg.reqId); resolver(msg.qubits); }
+      return;
     }
+
+    if (msg.type === 'qu.has') {
+      // "Do you already have qubit `id`?" — see hasRemote()'s doc below for
+      // why this exists. Gated by the same read-ACL as everything else this
+      // class serves (#isVisible == filterForReader), so this can't be used
+      // as a free existence-oracle for ids the requester has no read access
+      // to — same principle as #maybePush/#handleMessage's other branches.
+      const q = await this.#runtime.get(msg.id);
+      const has = !!q && (msg.ts == null || q.ts === msg.ts) && (await this.#isVisible(q));
+      await this.#channel.send({ type: 'qu.has.response', reqId: msg.reqId, has });
+      return;
+    }
+
+    if (msg.type === 'qu.has.response') {
+      const resolver = this.#pending.get(msg.reqId);
+      if (resolver) { this.#pending.delete(msg.reqId); resolver(msg.has); }
+    }
+  }
+
+  async #genericRequest(message, timeoutMs) {
+    const reqId = ++this.#reqId;
+    const p = new Promise((resolve, reject) => {
+      this.#pending.set(reqId, resolve);
+      setTimeout(() => { if (this.#pending.has(reqId)) { this.#pending.delete(reqId); reject(new Error('[DefaultReplication] request timed out')); } }, timeoutMs);
+    });
+    await this.#channel.send({ ...message, reqId });
+    return p;
+  }
+
+  /**
+   * Asks the peer on the other end of this channel "do you already have
+   * qubit `id`?" (optionally verifying the exact `ts` too, for the rare
+   * case an id could legitimately be rewritten). A lightweight existence
+   * probe, NOT a substitute for sync()'s bulk reconciliation — meant for
+   * "was this one write I'm actively watching actually delivered to the
+   * relay yet" UI feedback (e.g. a sent-message tick that's stuck on
+   * "pending" forever is worse than no feedback at all), not for checking
+   * a whole room's history in a loop. See DefaultFileTransfer's
+   * `waitUntilReady()` for the same idea applied to file chunks.
+   */
+  async hasRemote(id, { ts = null, timeoutMs = 8000 } = {}) {
+    return this.#genericRequest({ type: 'qu.has', id, ts }, timeoutMs);
+  }
+
+  /**
+   * Polls hasRemote() until it reports `true` or `maxWaitMs` elapses —
+   * covers both "the relay just hasn't gotten around to it yet" (retry a
+   * few times) and "we were offline when we wrote this, only just
+   * reconnected" (the caller decides when to (re)call this — e.g. once
+   * per reconnect, see the chat example app — it isn't itself reconnect-
+   * aware). Returns `false`, not a thrown error, on timeout — same
+   * "unconfirmed, try again later" convention as DefaultFileTransfer's
+   * waitUntilReady().
+   */
+  async waitUntilReplicated(id, { ts = null, intervalMs = 1000, maxWaitMs = 30000 } = {}) {
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+      try {
+        if (await this.hasRemote(id, { ts, timeoutMs: Math.min(8000, maxWaitMs) })) return true;
+      } catch (e) {
+        debug('replication', 'has-check-failed', { id, error: e.message });
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return false;
   }
 
   async #request(topic, since, { reciprocal = true } = {}) {

@@ -17,28 +17,39 @@ function randomId() {
  * collision-safe way as messages, and referenced from the message QuBit via
  * `refs` — a photo, a video, and an arbitrary file are handled identically;
  * only `mime` differs.
+ *
+ * `onAttachmentProgress`, if given, is called as `(index, progress)` for
+ * every `publishFile()` progress tick of `attachments[index]` — see that
+ * function's own `onProgress` doc (data/files/manifest.js) for the shape of
+ * `progress`. Purely a pass-through so a UI can show upload progress for
+ * a large attachment (e.g. a video) instead of an unexplained pause; has
+ * no effect on what gets written or how.
  */
-export async function sendMessage(space, { text, attachments = [], encryptFor } = {}) {
+export async function sendMessage(space, { text, attachments = [], encryptFor, onAttachmentProgress } = {}) {
   const fp = space.session.fingerprint;
   const refs = [];
-  for (const att of attachments) {
+  for (let i = 0; i < attachments.length; i++) {
+    const att = attachments[i];
     const fileId = `files/${fp}/${space.runtime.nextTs()}-${randomId()}`;
     // `encryptFor` durchreichen wie beim Nachrichtentext — sonst würde
     // dieselbe Nachricht am Ende inkonsistent verschlüsselt: Text
-    // geschützt, aber Dateiname/MIME-Typ/Größe des Anhangs im Klartext,
-    // egal was der Aufrufer für die Nachricht selbst gewählt hat. WICHTIG:
-    // das verschlüsselt nur das MANIFEST (Metadaten) — die eigentlichen
-    // Datei-BYTES bleiben unverschlüsselt (data/files/manifest.js's
-    // publishFile(): Chunks werden inhaltsadressiert über den Klartext-
-    // Hash gespeichert, absichtlich, für kostenloses Dedup über mehrere
-    // Sender hinweg — Verschlüsselung würde pro Empfänger einen anderen
-    // Hash für denselben Inhalt erzeugen und dieses Dedup strukturell
-    // zerstören). Ein 1:1-Chat ist heute also für TEXT Ende-zu-Ende
-    // verschlüsselbar, für ANHANG-INHALTE (noch) nicht.
-    const { manifestId } = await space.get(fileId).put(att.bytes, { name: att.name, mime: att.mime, fileStorage: att.fileStorage, encryptFor });
+    // geschützt, aber Dateiname/MIME-Typ/Größe/INHALT des Anhangs im
+    // Klartext, egal was der Aufrufer für die Nachricht selbst gewählt hat.
+    // data/files/manifest.js's publishFile() verschlüsselt bei gesetztem
+    // encryptFor sowohl die Datei-BYTES (contentEncryption) als auch
+    // Name/Typ/Größe (metaEncryption) — ein 1:1-Chat ist damit für Text
+    // UND Anhänge Ende-zu-Ende verschlüsselbar. Trade-off: verschlüsselte
+    // Anhänge nutzen pro Upload einen frischen Schlüssel, wodurch das
+    // sonst kostenlose Dedup über mehrere Sender hinweg (identische Bytes
+    // → identischer Klartext-Hash) für sie entfällt.
+    const { manifestId } = await space.get(fileId).put(att.bytes, {
+      name: att.name, mime: att.mime, fileStorage: att.fileStorage, encryptFor,
+      onProgress: onAttachmentProgress ? (p) => onAttachmentProgress(i, p) : undefined,
+    });
     refs.push(manifestId);
   }
-  return space.get('msgs').set({ text }, { refs: refs.length ? refs : undefined, encryptFor });
+  const result = await space.get('msgs').set({ text }, { refs: refs.length ? refs : undefined, encryptFor });
+  return { ...result, refs };
 }
 
 /** All messages in a room, oldest first. Each still carries its verified `writer` — a UI must display that, never parse authorship out of the id. */
