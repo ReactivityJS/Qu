@@ -18,6 +18,11 @@ const IDENTITY_KEY = 'qu-identity'; // siehe examples/chat/app.mjs's IDENTITY_KE
 function $(id) { return document.getElementById(id); }
 const appEl = $('app');
 const meAvatarBtn = $('me-avatar');
+// Bis main() verbunden UND das eigene Profil gelesen hat, ist showProfileScreen()
+// (das genau das noch einmal abfragt) selbst wenn man draufklickt effektiv im
+// Leerlauf — sichtbar ausgegraut statt eines stillen No-Ops (examples/chat/
+// app.mjs's TOP_NAV_BUTTONS-Doku, dasselbe Muster).
+meAvatarBtn.disabled = true;
 const directorySearchSlot = $('directory-search-slot');
 const emptyStateEl = $('empty-state');
 
@@ -121,6 +126,7 @@ async function main() {
   await qu.publishProfile({ alias: myProfile.alias });
   let myAvatarQ = await qu.get(`~${qu.fingerprint}/avatar`);
   setAvatar(meAvatarBtn, myProfile.alias, myAvatarQ?.value ?? null);
+  meAvatarBtn.disabled = false; // ab hier liest showProfileScreen() tatsächlich aktuelle Daten, siehe Doku bei der Deklaration oben
 
   // --- Verzeichnis: <qu-people-search mode="browse"> (src/ui/
   // people-search-components.js) übernimmt Laden, Live-Aktualisierung UND

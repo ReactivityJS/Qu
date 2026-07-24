@@ -31,6 +31,17 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, sans-serif;
   overscroll-behavior: none;
+  /* `.app` selbst füllt bereits exakt die sichtbare Höhe (--app-height,
+     siehe app.mjs's syncViewportHeight()) — die Seite DRUM HERUM soll nie
+     eigenständig scrollen. `position: fixed` macht das strukturell
+     erzwungen, nicht nur "meistens richtig": ohne das kann ein mobiler
+     Browser beim Fokussieren eines Eingabefelds die ganze Seite ein Stück
+     hochscrollen (natives "scroll focused element into view"), wodurch
+     Header/Eingabeleiste sichtbar "mit rausscrollen" — genau das
+     gemeldete Symptom. */
+  position: fixed;
+  inset: 0;
+  width: 100%;
 }
 
 button { font-family: inherit; }
@@ -38,15 +49,26 @@ button { font-family: inherit; }
 .app {
   display: grid;
   grid-template-columns: 340px 1fr;
-  /* `vh` first, `dvh` second — NOT the other order: the cascade takes the
-     LAST valid declaration, so if `dvh` came first, the `vh` fallback
-     below it would win even in browsers that support `dvh`, permanently
-     shadowing it. `vh` doesn't shrink for the on-screen keyboard on most
-     mobile browsers, so with that (wrong) order the layout never
-     adjusted when the keyboard opened — header/composer ended up below
-     the fold, needing a scroll to reach either one. */
+  /* Drei Fallback-Stufen, jede folgende überschreibt die vorherige NUR,
+     wenn der Browser sie versteht (die Kaskade nimmt die letzte GÜLTIGE
+     Deklaration — eine, die der Browser nicht kennt, wird komplett
+     ignoriert, nicht als 0 oder invalid gewertet):
+       1) 100vh   — Basis-Fallback, überall unterstützt, ändert sich aber
+                    NICHT, wenn die Bildschirmtastatur aufklappt (das
+                    eigentliche Problem: Header/Eingabeleiste landen dann
+                    unterhalb des sichtbaren Bereichs).
+       2) 100dvh  — reagiert live auf Tastatur/Adressleiste, aber nicht in
+                    jedem Browser zuverlässig unterstützt/korrekt (u. a.
+                    ältere WebViews, manche Android-Browser).
+       3) var(--app-height, 100dvh) — von app.mjs's syncViewportHeight()
+                    per `window.visualViewport` in Echtzeit gepflegt, wo
+                    verfügbar; deckt genau die Fälle ab, in denen Schritt 2
+                    allein nicht zuverlässig ist. Ohne verfügbares
+                    visualViewport bleibt der `100dvh`-Fallback aktiv (die
+                    CSS-Variable selbst ist dann einfach nie gesetzt). */
   height: 100vh;
   height: 100dvh;
+  height: var(--app-height, 100dvh);
 }
 
 /* --- Sidebar / Kontaktliste --- */
@@ -121,6 +143,8 @@ button { font-family: inherit; }
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 .icon-btn:active { transform: scale(0.94); }
 .icon-btn.active { background: var(--danger); border-color: var(--danger); color: #fff; }
+/* Während der Verbindungsaufbau noch läuft (app.mjs's TOP_NAV_BUTTONS/enableTopNav()-Doku) — sichtbar statt eines stillen No-Ops beim Klicken. */
+.icon-btn:disabled, .avatar:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
 .contact-list { list-style: none; margin: 0; padding: 0.4rem; overflow-y: auto; flex: 1; min-height: 0; }
 .contact {

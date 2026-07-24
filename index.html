@@ -11,40 +11,78 @@
     <h1>QU Framework</h1>
     <p class="lede">Ein kleines, ereignisgetriebenes, Zero-Trust-Framework für lokale und verteilte Anwendungen. Vanilla JavaScript, keine Laufzeit-Abhängigkeiten.</p>
 
-    <nav class="cards">
-      <a class="card" href="/docs/lab/index.html">
-        <h2>Interaktives Lab</h2>
-        <p>Core, Storage, Spaces/ACL, Netzwerk/Relay/Mirror — Schritt für Schritt im Browser, mit echten Objekten in der Konsole zum Weiterprobieren.</p>
-      </a>
-      <a class="card" href="/docs/playground.html">
-        <h2>Playground</h2>
-        <p>Eine fertig initialisierte <code>qu</code>-Instanz in der Konsole, dazu Copy-Paste-Beispiele für get/put/set/on/map, Spaces, Referenzen, Dateien und eine echte Relay-Verbindung.</p>
-      </a>
-      <a class="card" href="/docs/examples.html">
-        <h2>Beispiele</h2>
-        <p>Sechs kurze, fokussierte Module (ToDo-Liste, Forum, App-Space, Sub-Space-Index, Space-App-Basis, CMS-Erweiterung) — Logik getrennt von jeder Oberfläche, mit <code>node --test</code> nachvollziehbar.</p>
-      </a>
-      <a class="card" href="/test/index.html">
-        <h2>Tests</h2>
-        <p>Dieselbe Testsuite wie <code>npm test</code>, hier im Browser ausgeführt.</p>
-      </a>
-      <a class="card" href="/docs/view.html?file=/API.md">
-        <h2>API-Referenz</h2>
-        <p>Jede öffentliche Funktion/Klasse — Parameter, Rückgabewerte, Beispiele.</p>
-      </a>
-      <a class="card" href="/docs/view.html?file=/qu-whitepaper-v0.6.md">
-        <h2>Whitepaper</h2>
-        <p>Architektur-Spezifikation v0.5 — Contracts, Sicherheitsmodell, Spaces, Facade.</p>
-      </a>
-      <a class="card" href="/docs/view.html?file=/README.md">
-        <h2>README</h2>
-        <p>Schnelleinstieg, Projektstruktur, Kernprinzipien.</p>
-      </a>
-      <a class="card" href="/docs/view.html?file=/APP-GUIDE.md">
-        <h2>App-Guide</h2>
-        <p>Eine vernetzte App bauen: mehrere Instanzen tauschen Daten über einen echten Relay und einen gemeinsamen App-Space aus.</p>
-      </a>
+    <!-- Client-seitiger Hash-Router über drei Kategorien (portal.mjs) —
+         #/services, #/examples, #/documentation, dieselbe Pfad-Konvention
+         wie jede App in diesem Repo (src/ui/hash-router.js). Auch OHNE
+         Hash direkt per Pfad erreichbar (/services, /examples,
+         /documentation — server/portal-routes.mjs liefert dafür einfach
+         diese Seite aus, portal.mjs wählt dann anhand von
+         location.pathname dieselbe Kategorie als Startansicht). -->
+    <nav class="category-tabs" id="category-tabs">
+      <button class="category-tab" data-category="services" type="button">🚀 Services</button>
+      <button class="category-tab" data-category="examples" type="button">🧪 Examples</button>
+      <button class="category-tab" data-category="documentation" type="button">📖 Dokumentation</button>
     </nav>
+
+    <!-- Services: eigenständige, tatsächlich nutzbare Apps — nicht nur zum
+         Ansehen des Codes gedacht, sondern zum echten Verwenden. -->
+    <section class="cards-section" data-category="services">
+      <nav class="cards">
+        <a class="card" href="/examples/chat/index.html">
+          <h2>💬 Messenger</h2>
+          <p>Verschlüsselter 1:1- und Gruppen-Chat, Anrufe, Dateiübertragung — installierbar als PWA.</p>
+        </a>
+        <a class="card" href="/examples/people/index.html">
+          <h2>👥 People</h2>
+          <p>Globales, opt-in Identitäten-Verzeichnis — ein Profil (Alias, Avatar, Zusatz-Attribute), wiederverwendbar über jede Qu-App hinweg.</p>
+        </a>
+      </nav>
+    </section>
+
+    <!-- Examples: kurze, fokussierte Code-Module zum Lernen/Nachbauen. -->
+    <section class="cards-section" data-category="examples">
+      <nav class="cards">
+        <a class="card" href="/docs/examples.html">
+          <h2>Beispiel-Module</h2>
+          <p>Sechs kurze, fokussierte Module (ToDo-Liste, Forum, App-Space, Sub-Space-Index, Space-App-Basis, CMS-Erweiterung) — Logik getrennt von jeder Oberfläche, mit <code>node --test</code> nachvollziehbar.</p>
+        </a>
+        <a class="card" href="/docs/lab/index.html">
+          <h2>Interaktives Lab</h2>
+          <p>Core, Storage, Spaces/ACL, Netzwerk/Relay/Mirror — Schritt für Schritt im Browser, mit echten Objekten in der Konsole zum Weiterprobieren.</p>
+        </a>
+        <a class="card" href="/docs/playground.html">
+          <h2>Playground</h2>
+          <p>Eine fertig initialisierte <code>qu</code>-Instanz in der Konsole, dazu Copy-Paste-Beispiele für get/put/set/on/map, Spaces, Referenzen, Dateien und eine echte Relay-Verbindung.</p>
+        </a>
+      </nav>
+    </section>
+
+    <!-- Documentation: alles zum Nachlesen statt Ausprobieren. -->
+    <section class="cards-section" data-category="documentation">
+      <nav class="cards">
+        <a class="card" href="/docs/view.html?file=/README.md">
+          <h2>README</h2>
+          <p>Schnelleinstieg, Projektstruktur, Kernprinzipien.</p>
+        </a>
+        <a class="card" href="/docs/view.html?file=/API.md">
+          <h2>API-Referenz</h2>
+          <p>Jede öffentliche Funktion/Klasse — Parameter, Rückgabewerte, Beispiele.</p>
+        </a>
+        <a class="card" href="/docs/view.html?file=/APP-GUIDE.md">
+          <h2>App-Guide</h2>
+          <p>Eine vernetzte App bauen: mehrere Instanzen tauschen Daten über einen echten Relay und einen gemeinsamen App-Space aus.</p>
+        </a>
+        <a class="card" href="/docs/view.html?file=/qu-whitepaper-v0.6.md">
+          <h2>Whitepaper</h2>
+          <p>Architektur-Spezifikation v0.5 — Contracts, Sicherheitsmodell, Spaces, Facade.</p>
+        </a>
+        <a class="card" href="/test/index.html">
+          <h2>Tests</h2>
+          <p>Dieselbe Testsuite wie <code>npm test</code>, hier im Browser ausgeführt.</p>
+        </a>
+      </nav>
+    </section>
   </main>
+  <script type="module" src="/portal.mjs"></script>
 </body>
 </html>

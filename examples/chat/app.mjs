@@ -31,6 +31,36 @@ import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert 
 // fehlgeschlagener Anruf tatsächlich hängt.
 enableConsoleDebug({ filter: ['webrtc', 'webrtc-pm'] });
 
+/**
+ * Hält `--app-height` (style.css's .app) in Echtzeit auf der tatsächlich
+ * sichtbaren Höhe — der robustere Nachschlag zu CSS' eigenem `100dvh`
+ * (siehe dessen Kommentar dort), für Browser, bei denen `dvh` allein die
+ * Bildschirmtastatur nicht zuverlässig einrechnet: ohne das kann Header/
+ * Eingabeleiste unterhalb des sichtbaren Bereichs landen, sobald die
+ * Tastatur aufklappt. `visualViewport` ist genau dafür da (reagiert live
+ * auf Tastatur UND Adressleisten-Ein-/Ausblenden) — wo nicht verfügbar
+ * (sehr alte Browser), bleibt einfach der CSS-`100dvh`-Fallback aktiv,
+ * diese Funktion setzt dann schlicht nichts.
+ * Setzt zusätzlich `window.scrollTo(0, 0)` bei jedem Aufruf — manche
+ * mobilen Browser scrollen beim Fokussieren eines Eingabefelds nicht nur
+ * die Tastatur rein, sondern die GESAMTE Seite ein Stück nach oben (natives
+ * "scroll focused element into view"), obwohl `.app` selbst exakt
+ * `--app-height` hoch ist und gar keinen eigenen Seiten-Scroll vorsieht —
+ * genau das lässt Header/Eingabeleiste "mit rausscrollen". Ohne Gegenteil
+ * bliebe dieser Seiten-Scroll-Versatz auch nach dem Fokussieren bestehen.
+ */
+function syncViewportHeight() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  document.documentElement.style.setProperty('--app-height', `${vv.height}px`);
+  window.scrollTo(0, 0);
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', syncViewportHeight);
+  window.visualViewport.addEventListener('scroll', syncViewportHeight);
+  syncViewportHeight();
+}
+
 // Bewusst NICHT chat-eigen — dieselbe Identität soll über jede App auf
 // diesem Ursprung (Origin, `localStorage` ist origin- nicht pfadgebunden)
 // hinweg wiederverwendet werden, allen voran examples/people (globales
@@ -97,6 +127,24 @@ const newGroupBtn = $('new-group-btn');
 const settingsBtn = $('settings-btn');
 const chatSettingsBtn = $('chat-settings-btn');
 const searchBtn = $('search-btn');
+
+/**
+ * Bis `main()` seine Verbindung zum Relay hergestellt UND das eigene
+ * Profil geladen hat (mehrere sequenzielle `await`s — WebSocket-Verbinden,
+ * Profil-Sync, …), sind die Klick-Handler dieser Buttons noch gar nicht
+ * registriert (jeder `addEventListener()` dafür steht erst NACH diesen
+ * `await`s im Code). Ein Klick in genau diesem Fenster war bisher ein
+ * stiller No-Op — sah aus wie "die Suche/der Button funktioniert nicht",
+ * war aber schlicht zu früh. `disabled` macht dieses Fenster jetzt SICHTBAR
+ * (ausgegraut, siehe style.css's `:disabled`-Regeln) statt es unsichtbar
+ * bleiben zu lassen — enableTopNav() unten schaltet sie frei, sobald
+ * main() tatsächlich so weit ist.
+ */
+const TOP_NAV_BUTTONS = [meAvatarBtn, addContactBtn, newGroupBtn, settingsBtn, searchBtn];
+for (const btn of TOP_NAV_BUTTONS) btn.disabled = true;
+function enableTopNav() {
+  for (const btn of TOP_NAV_BUTTONS) btn.disabled = false;
+}
 const searchOverlay = $('search-overlay');
 const searchBackBtn = $('search-back-btn');
 const searchInput = $('search-input');
@@ -235,6 +283,10 @@ function autoGrow() {
   textInput.style.overflowY = overflows ? 'auto' : 'hidden';
 }
 textInput.addEventListener('input', autoGrow);
+// Sofort beim Fokussieren gegen den nativen "Seite scrollt mit hoch"-Effekt
+// mobiler Browser gegensteuern (syncViewportHeight()s Doku oben) — nicht
+// erst auf das (etwas später feuernde) visualViewport-'resize' warten.
+textInput.addEventListener('focus', () => window.scrollTo(0, 0));
 
 emojiBtn.addEventListener('click', () => { emojiPicker.hidden = !emojiPicker.hidden; });
 document.addEventListener('click', (ev) => {
@@ -679,6 +731,7 @@ async function main() {
   setAvatar(meAvatarBtn, myAlias);
   myAvatar = (await qu.get(`~${qu.fingerprint}/avatar`))?.value ?? null;
   if (myAvatar) setAvatar(meAvatarBtn, myAlias, myAvatar);
+  enableTopNav(); // siehe dessen Doku oben — ab hier existieren `repl`/`myAlias` wirklich, jeder Klick-Handler unten funktioniert jetzt tatsächlich
 
   // Eigenen Briefkasten abonnieren (siehe ensureRoom()s Ping unten) — ein
   // von einem Kontakt remote gestarteter Chat taucht dadurch von selbst
@@ -827,11 +880,19 @@ async function main() {
     const segments = parsePathSegments(location.hash);
     hideAllScreens();
     if (!segments.length) { showChatListScreen(); return; }
-    const [first, second] = segments;
+    const [first, second, third] = segments;
     if (ROOT_ROUTES[first]) { await ROOT_ROUTES[first](second); return; }
     const room = roomById(first);
     if (!room) { await redirectTo(); return; } // unbekannte/fremde Raum-Id -> zurück zur Chatliste, kein Verlaufseintrag dafür
     if (second === 'settings') { showChatSettingsScreen(room); return; }
+    // `/<roomId>/msg/<messageId>` — Direktlink auf eine einzelne Nachricht
+    // (z. B. geteilt aus der Suche, siehe openSearchResult()): öffnet den
+    // Chat wie sonst auch (der startet regulär ganz unten, siehe
+    // renderMessageList()s Doku), springt DANACH zu genau dieser Nachricht
+    // und hebt sie kurz hervor — derselbe Sprung-Mechanismus wie ein
+    // Klick auf ein Suchergebnis, nur jetzt auch direkt über die URL
+    // erreichbar/teilbar.
+    if (second === 'msg' && third) { await showChatScreen(room); scrollToMessage(third); return; }
     await showChatScreen(room);
   }
   window.addEventListener('hashchange', renderRoute);
@@ -1718,9 +1779,23 @@ async function main() {
     }
   }
 
-  function scrollToMessage(id) {
+  /**
+   * `retry`: EIN erneuter Versuch nach kurzer Verzögerung, falls die
+   * Nachricht noch nicht lokal geladen ist — relevant für einen frischen
+   * Direktlink (`/<roomId>/msg/<id>`, siehe renderRoute()): der Chat wurde
+   * gerade erst geöffnet, die Ziel-Nachricht kann (bei einem noch nicht
+   * synchronisierten Gerät) einen Moment später ankommen als der Rest der
+   * bereits bekannten Historie. Ein Klick auf ein Suchergebnis dagegen
+   * trifft die Nachricht praktisch immer sofort (sie steht ja schon in
+   * den durchsuchten, längst geladenen Daten) — der Retry schadet dort
+   * nicht, greift nur nie.
+   */
+  function scrollToMessage(id, retry = true) {
     const li = messageListEl.querySelector(`[data-id="${CSS.escape(id)}"]`);
-    if (!li) return;
+    if (!li) {
+      if (retry) setTimeout(() => scrollToMessage(id, false), 800);
+      return;
+    }
     li.scrollIntoView({ block: 'center' });
     const bubble = li.querySelector('.msg-bubble');
     // Klasse erst entfernen+reflow+wieder setzen, sonst startet die
@@ -1730,9 +1805,12 @@ async function main() {
     bubble?.classList.add('jump-highlight');
   }
 
+  // Navigiert auf den teilbaren Direktlink dieser Nachricht (`/<roomId>/msg/<id>`,
+  // siehe renderRoute()) statt nur intern zu scrollen — der Router selbst
+  // übernimmt danach das eigentliche Öffnen+Springen, dieselbe Route wie
+  // ein von außen eingefügter/geteilter Link.
   async function openSearchResult(roomId, messageId) {
-    await navigate(roomId);
-    scrollToMessage(messageId);
+    await navigate(roomId, 'msg', messageId);
   }
 
   /** Suche über alle Chats — `/search` (Router). */
