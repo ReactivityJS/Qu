@@ -90,11 +90,16 @@
       <input type="text" id="alias-input" maxlength="40" />
       <label>Mein Fingerprint (den geben Kontakte ein, um dich hinzuzufügen)</label>
       <div class="fp-display" id="my-fp-full">…</div>
-      <p class="modal-hint">Diese Adresse ist deine gesamte Identität — sie wird lokal auf diesem Gerät erzeugt, niemals irgendwohin hochgeladen.</p>
+      <p class="modal-hint">Diese Adresse ist deine gesamte Identität — sie wird lokal auf diesem Gerät erzeugt, niemals irgendwohin hochgeladen. Dieselbe Identität gilt über jede Qu-App hinweg (siehe examples/people).</p>
       <div class="modal-actions">
         <button id="copy-fp-btn" class="btn btn-secondary" type="button">Fingerprint kopieren</button>
         <button id="share-link-btn" class="btn btn-secondary" type="button">Einladungslink teilen</button>
       </div>
+
+      <label class="toggle-row"><input type="checkbox" id="chat-directory-visible-toggle" /> Im globalen Verzeichnis sichtbar (auffindbar per Alias/Fingerprint in examples/people)</label>
+      <p class="modal-hint">Standardmäßig aus. Betrifft nur, ob dich FREMDE finden können — Kontakte, die deinen Fingerprint bereits kennen, können dich unabhängig davon jederzeit hinzufügen.</p>
+      <p class="modal-hint"><a id="full-profile-link" href="../people/index.html#/profile" target="_blank" rel="noopener">Vollständiges Profil verwalten (Zusatz-Attribute, …) →</a></p>
+
       <div class="modal-actions">
         <button id="profile-cancel-btn" class="btn btn-secondary" type="button">Schließen</button>
         <button id="profile-save-btn" class="btn btn-primary" type="button">Speichern</button>

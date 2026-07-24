@@ -10,7 +10,7 @@ import {
   createNetworkPlugin, createSpacesPlugin, createFileHandlerPlugin,
   createChatPlugin, createWebSocketChannel, IndexedDBFileStorageAdapter, reassembleFile, readFileMeta,
   createWebRTCPlugin, sendRoutedEvent, onRoutedEvent, enableConsoleDebug,
-  createSpaceMembershipPlugin, inboxId, createProfilesPlugin,
+  createSpaceMembershipPlugin, inboxId, createProfilesPlugin, DIRECTORY_ID,
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
@@ -1878,11 +1878,17 @@ async function main() {
 
   // --- Eigenes Profil — `/profile` (Router) ---
   let pendingAvatar; // undefined = unverändert, null = "entfernen", dataUrl = neu gewählt
-  function showProfileScreen() {
+  async function showProfileScreen() {
     $('alias-input').value = myAlias;
     $('my-fp-full').textContent = qu.fingerprint;
     pendingAvatar = undefined;
     setAvatar(avatarPreviewBtn, myAlias, myAvatar);
+    // Aktuellen Sichtbarkeits-Stand direkt lesen (nicht aus qu.listDirectory()
+    // — das liefert NUR sichtbare Einträge, hier muss aber auch der
+    // "aktuell unsichtbar"-Fall unterscheidbar sein von "noch nie gesetzt").
+    let ownEntry = null;
+    try { ownEntry = await qu.get(`${DIRECTORY_ID}/entries/${qu.fingerprint}`); } catch { /* noch nie veröffentlicht */ }
+    $('chat-directory-visible-toggle').checked = !!ownEntry?.value?.visible;
     profileModal.hidden = false;
   }
   meAvatarBtn.addEventListener('click', () => navigate('profile'));
@@ -1914,6 +1920,7 @@ async function main() {
       await qu.own.get('avatar').put(myAvatar); // `null` löscht (LWW-Register, wie jeder andere put())
     }
     setAvatar(meAvatarBtn, alias, myAvatar);
+    await qu.setDirectoryVisible($('chat-directory-visible-toggle').checked);
     await repl.sync({ topic: qu.userSpaceId }).catch((e) => console.error('[chat] self-profile sync failed:', e));
     closeScreen();
   });
