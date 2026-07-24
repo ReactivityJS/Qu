@@ -40,7 +40,16 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Muss >= 22 sein — der Test-Suite (relay.test.mjs & Co.) nutzt
+          # das native `WebSocket`-Global (src/network/transports/
+          # websocket-browser.js), das erst ab Node 22 existiert. Auf Node
+          # 20 wirft das sofort `ReferenceError: WebSocket is not defined`
+          # UND lässt dabei den jeweils schon geöffneten Test-Relay-Server
+          # offen (server.close() steht am Testkörper-Ende, das bei einem
+          # frühen Fehler nie erreicht wird) — genug offene Listener halten
+          # die Event-Loop am Leben, `node --test` beendet sich dann nie
+          # von selbst und der Job hängt bis zum Standard-Timeout (6h).
+          node-version: 22
 
       - name: Install dependencies
         run: npm ci

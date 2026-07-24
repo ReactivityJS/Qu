@@ -66,7 +66,7 @@ function closeQuietly(server, socket) {
   server.close();
 }
 
-test('a message split across an initial frame (fin=0) and a continuation frame (fin=1) is reassembled correctly, not truncated', async () => {
+test('a message split across an initial frame (fin=0) and a continuation frame (fin=1) is reassembled correctly, not truncated', async (t) => {
   const received = [];
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
   server.on('upgrade', (req, socket, head) => {
@@ -75,6 +75,7 @@ test('a message split across an initial frame (fin=0) and a continuation frame (
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.unref()); // belt-and-suspenders: an assertion below could throw before this test's own closeQuietly() call — unref() alone (no close() needed here, see closeQuietly()'s doc) is enough to stop this listening server from keeping `node --test` alive forever
 
   const socket = await rawWebSocketHandshake(server);
 
@@ -95,7 +96,7 @@ test('a message split across an initial frame (fin=0) and a continuation frame (
   closeQuietly(server, socket);
 });
 
-test('three fragments (fin=0, fin=0, fin=1) reassemble correctly', async () => {
+test('three fragments (fin=0, fin=0, fin=1) reassemble correctly', async (t) => {
   const received = [];
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
   server.on('upgrade', (req, socket, head) => {
@@ -104,6 +105,7 @@ test('three fragments (fin=0, fin=0, fin=1) reassemble correctly', async () => {
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.unref());
   const socket = await rawWebSocketHandshake(server);
 
   const fullText = JSON.stringify({ type: 'test.three', a: 'y'.repeat(300) });
@@ -121,7 +123,7 @@ test('three fragments (fin=0, fin=0, fin=1) reassemble correctly', async () => {
   closeQuietly(server, socket);
 });
 
-test('an unfragmented message still works exactly as before (regression guard)', async () => {
+test('an unfragmented message still works exactly as before (regression guard)', async (t) => {
   const received = [];
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
   server.on('upgrade', (req, socket, head) => {
@@ -130,6 +132,7 @@ test('an unfragmented message still works exactly as before (regression guard)',
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.unref());
   const socket = await rawWebSocketHandshake(server);
 
   socket.write(maskedFrame({ opcode: 0x1, fin: true, payload: JSON.stringify({ type: 'plain', ok: true }) }));
