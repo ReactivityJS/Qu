@@ -830,15 +830,36 @@ async function main() {
   }
   window.addEventListener('hashchange', renderRoute);
 
+  /**
+   * `true`, wenn `alias` noch nicht aus dem Netzwerk aufgelöst wurde —
+   * `upsertContact()`s eigener Platzhalter-Default beim Anlegen eines
+   * Kontakts IST `shortFp(fp)` (siehe dort), genau deshalb taugt der
+   * Vergleich als "noch unbekannt"-Marker, ganz ohne ein separates Flag.
+   */
+  function isAliasUnresolved(fp, alias) {
+    return !alias || alias === shortFp(fp);
+  }
+
+  /**
+   * Der Alias eines Mitglieds — reaktiv per Live-Abo in ensureRoom()
+   * gehalten, sobald ein Chat mit ihm einmal geöffnet wurde/ist; diese
+   * Funktion ist der Nachlade-Weg für den Moment DAVOR (Kontakt gerade
+   * erst hinzugefügt, `rooms`-Liste noch vor dem ersten Öffnen gerendert),
+   * exakt dasselbe Muster wie avatarFor() für den Avatar. Ein explizit vom
+   * User gesetzter Alias (`contact.aliasCustom`, siehe add-contact-Formular
+   * unten) gewinnt immer und wird nie durch einen Netzwerk-Wert überschrieben.
+   */
   async function aliasFor(fp) {
     if (fp === qu.fingerprint) return myAlias;
     const contact = contactByFp(fp);
-    if (contact?.alias) return contact.alias;
+    if (contact?.aliasCustom) return contact.alias;
+    if (contact?.alias && !isAliasUnresolved(fp, contact.alias)) return contact.alias;
     if (aliasCache.has(fp)) return aliasCache.get(fp);
     try {
-      const profile = await qu.getProfile(fp);
+      const profile = await qu.readProfile(fp);
       const name = profile.alias ?? shortFp(fp);
       aliasCache.set(fp, name);
+      if (contact) upsertContact(fp, { alias: name });
       return name;
     } catch { return shortFp(fp); }
   }
@@ -917,16 +938,31 @@ async function main() {
     // einem DM ist das genau EIN Mitglied, bei einer Gruppe mehrere.
     for (const memberFp of room.members) {
       await repl.sync({ topic: `~${memberFp}` }).catch((e) => console.error('[chat] peer profile sync failed:', memberFp, e));
-      // Live-Abo auf den Avatar (nicht nur der einmalige Sync oben) —
-      // ändert ein Mitglied sein Profilbild, während der Chat schon offen
-      // ist, muss das sofort ankommen, genau wie Alias/Presence bereits
-      // live sind. `.on()` liefert per Default nur ZUKÜNFTIGE Änderungen
-      // (kein initial: true wie map(), core/space-handle.js's on()-Doku).
+      // Live-Abo auf Avatar UND Alias (nicht nur der einmalige Sync oben) —
+      // ändert ein Mitglied sein Profilbild oder seinen Anzeigenamen,
+      // während der Chat schon offen ist, muss das sofort ankommen, genau
+      // wie Presence bereits live ist. `.on()` liefert per Default nur
+      // ZUKÜNFTIGE Änderungen (kein initial: true wie map(),
+      // core/space-handle.js's on()-Doku) — der aktuelle Stand kommt beim
+      // ersten Öffnen stattdessen über aliasFor()/avatarFor()s Nachladeweg.
       unsubs.push(qu.get(`~${memberFp}`).get('avatar').on((q) => {
         const url = q?.value ?? null;
         avatarCache.set(memberFp, url);
         upsertContact(memberFp, { avatar: url });
         if (activeRoomId === roomId) renderRoomHeader(room);
+        renderRoomList();
+      }));
+      // Ein explizit vom User gesetzter Alias (aliasCustom, siehe
+      // add-contact-Formular) ist ein bewusstes lokales Override und wird
+      // NIE durch einen entfernten Alias-Wert überschrieben — sonst gäbe
+      // es genau den Sonderfall, den ein einheitliches "immer reaktiv den
+      // Alias nehmen" vermeiden soll.
+      unsubs.push(qu.get(`~${memberFp}`).get('alias').on((q) => {
+        if (contactByFp(memberFp)?.aliasCustom) return;
+        const name = q?.value ?? shortFp(memberFp);
+        aliasCache.set(memberFp, name);
+        upsertContact(memberFp, { alias: name });
+        if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
         renderRoomList();
       }));
     }
@@ -1013,17 +1049,25 @@ async function main() {
     const updatedMembers = await qu.addSpaceMember(roomId, room.members, newFp, { alias: myAlias, name: room.name ?? null });
     upsertRoom(roomId, { members: updatedMembers });
 
+    await repl.sync({ topic: `~${newFp}` }).catch((e) => console.error('[chat] peer profile sync failed:', newFp, e));
     if (!contactByFp(newFp)) {
       let alias = shortFp(newFp);
-      try { alias = (await qu.getProfile(newFp)).alias ?? alias; } catch { /* aliasFor() holt es später live nach */ }
+      try { alias = (await qu.readProfile(newFp)).alias ?? alias; } catch { /* aliasFor() holt es später live nach */ }
       upsertContact(newFp, { alias });
     }
-    await repl.sync({ topic: `~${newFp}` }).catch((e) => console.error('[chat] peer profile sync failed:', newFp, e));
     const unsubs = unsubsByRoom.get(roomId) ?? [];
     unsubs.push(qu.get(`~${newFp}`).get('avatar').on((q) => {
       const url = q?.value ?? null;
       avatarCache.set(newFp, url);
       upsertContact(newFp, { avatar: url });
+      if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
+      renderRoomList();
+    }));
+    unsubs.push(qu.get(`~${newFp}`).get('alias').on((q) => {
+      if (contactByFp(newFp)?.aliasCustom) return;
+      const name = q?.value ?? shortFp(newFp);
+      aliasCache.set(newFp, name);
+      upsertContact(newFp, { alias: name });
       if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
       renderRoomList();
     }));
@@ -1227,9 +1271,21 @@ async function main() {
 
       const body = el('div', 'contact-body');
       const top = el('div', 'contact-top');
-      top.appendChild(el('div', 'contact-name', r.alias));
+      const nameEl = el('div', 'contact-name', r.alias);
+      top.appendChild(nameEl);
       top.appendChild(el('div', 'contact-time', r.lastTs ? fmtTime(r.lastTs) : ''));
       body.appendChild(top);
+      // Derselbe Nachladeweg wie für den Avatar direkt darüber — der Alias
+      // ist beim allerersten Rendern (Kontakt gerade erst hinzugefügt, vor
+      // dem ersten Öffnen des Chats) evtl. noch nicht aus dem Netzwerk
+      // aufgelöst (isAliasUnresolved()); danach übernimmt ensureRoom()s
+      // Live-Abo. Aktualisiert gezielt nur dieses Element statt eines
+      // vollen renderRoomList()-Neurenderns (vermeidet Rekursion).
+      if (!isGroupRoom(r) && isAliasUnresolved(r.members[0], r.alias)) {
+        aliasFor(r.members[0]).then((name) => {
+          if (name && !isAliasUnresolved(r.members[0], name)) { nameEl.textContent = name; setAvatar(avatar, name, roomDisplayAvatar(r)); }
+        });
+      }
       const previewRow = el('div', 'contact-preview');
       const previewText = r.lastTs ? `${r.lastMine ? 'Du: ' : ''}${r.lastPreview ?? ''}` : 'Noch keine Nachrichten';
       previewRow.appendChild(el('div', 'contact-last', previewText));
@@ -1510,6 +1566,13 @@ async function main() {
       avatarFor(room.members[0]).then((url) => {
         if (!url) return;
         if (activeRoomId === roomId) renderRoomHeader(room);
+        renderRoomList();
+      });
+    }
+    if (!isGroupRoom(room) && isAliasUnresolved(room.members[0], roomDisplayName(room))) {
+      aliasFor(room.members[0]).then((name) => {
+        if (!name || isAliasUnresolved(room.members[0], name)) return;
+        if (activeRoomId === roomId) renderRoomHeader(roomById(roomId) ?? room);
         renderRoomList();
       });
     }
@@ -1995,11 +2058,20 @@ async function main() {
     if (!fp) { addContactError.textContent = 'Ungültiger Fingerprint (24 Hex-Zeichen erwartet).'; return; }
     if (fp === qu.fingerprint) { addContactError.textContent = 'Das ist dein eigener Fingerprint.'; return; }
     if (!contactByFp(fp)) {
-      let alias = contactAliasInput.value.trim();
+      const customAlias = contactAliasInput.value.trim();
+      let alias = customAlias;
       if (!alias) {
-        try { alias = (await qu.getProfile(fp)).alias ?? shortFp(fp); } catch { alias = shortFp(fp); }
+        // Erst syncen, DANN lesen — readProfile() liest nur den lokalen
+        // Store (core/session.js's get()), der für einen soeben erst
+        // eingetippten Fingerprint noch leer ist, ohne diesen expliziten
+        // Sync (dasselbe Muster wie ensureRoom()s Mitglieder-Sync).
+        await repl.sync({ topic: `~${fp}` }).catch((e) => console.error('[chat] peer profile sync failed:', fp, e));
+        try { alias = (await qu.readProfile(fp)).alias ?? shortFp(fp); } catch { alias = shortFp(fp); }
       }
-      upsertContact(fp, { alias });
+      // aliasCustom: ein explizit hier eingetippter Alias ist ein
+      // bewusstes lokales Override (siehe ensureRoom()s Alias-Live-Abo) —
+      // wird NIE durch einen entfernten Alias-Wert überschrieben.
+      upsertContact(fp, { alias, aliasCustom: !!customAlias });
     }
     const roomId = await startDm(fp);
     // redirectTo() statt navigate(): das ausgefüllte Formular soll nicht

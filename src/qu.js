@@ -215,11 +215,11 @@ export class Qu {
   async trustPeer(fingerprint, encPubKeyJwk) { return this.#session.trustPeer(fingerprint, encPubKeyJwk); }
 
   /**
-   * Publishes this identity's public keys (and optionally a display
-   * `alias`) under the three reserved leaves every User-Space structurally
-   * supports (`~<fp>/pub`, `~<fp>/epub`, `~<fp>/alias` — core/space.js).
-   * Needs no plugin: these are plain writes into your own always-writable
-   * Space (core/identity-acl.js). This is what makes `encryptFor`'s default
+   * Publishes this identity's public keys and a display `alias` under the
+   * three reserved leaves every User-Space structurally supports
+   * (`~<fp>/pub`, `~<fp>/epub`, `~<fp>/alias` — core/space.js). Needs no
+   * plugin: these are plain writes into your own always-writable Space
+   * (core/identity-acl.js). This is what makes `encryptFor`'s default
    * (core/session.js) usable without every sender first having to
    * `trustPeer()` every recipient by hand — a sender who doesn't already
    * know a recipient's key falls back to reading it here. `pub`/`epub` are
@@ -227,6 +227,13 @@ export class Qu {
    * you set on your own Space (modules/spaces.js) — encrypting your own
    * public key would make it undiscoverable to exactly the peers who need
    * it to decrypt anything from you at all.
+   *
+   * `alias` is ALWAYS written, defaulting to the fingerprint itself when
+   * omitted — deliberately, so `alias` is never a special case for a
+   * reader: it is never "missing", only ever "still the fingerprint,
+   * because nobody chose a custom one yet". A caller reads `alias` and
+   * only `alias`, with no separate null-check and no
+   * fingerprint-vs-display-name branch anywhere downstream.
    */
   async publishProfile({ alias } = {}) {
     if (this.#guest) throw new Error('[Qu] Guest-Sessions haben kein Schreibrecht (versucht: publishProfile).');
@@ -234,19 +241,22 @@ export class Qu {
       this.identity.exportPublicSigningKey(),
       crypto.subtle.exportKey('jwk', this.identity.encryptionKey),
     ]);
-    const writes = [this.own.get('pub').put(pub), this.own.get('epub').put(epub)];
-    if (alias !== undefined) writes.push(this.own.get('alias').put(alias));
-    await Promise.all(writes);
+    await Promise.all([
+      this.own.get('pub').put(pub),
+      this.own.get('epub').put(epub),
+      this.own.get('alias').put(alias ?? this.fingerprint),
+    ]);
     return this;
   }
 
   /**
    * Reads another identity's (or your own) published profile — the read
    * side of `publishProfile()`. `alias` falls back to the fingerprint
-   * itself when nobody ever published one, so a caller can always show
-   * *something* without a separate null-check. Requires no plugin, same as
-   * `publishProfile()` — `pub`/`epub`/`alias` are always readable
-   * (core/space.js, modules/spaces.js).
+   * itself if it somehow was never published (e.g. read before the first
+   * publishProfile() call ever landed) — publishProfile() itself always
+   * writes it, so this is a defensive fallback, not the normal path.
+   * Requires no plugin, same as `publishProfile()` — `pub`/`epub`/`alias`
+   * are always readable (core/space.js, modules/spaces.js).
    */
   async readProfile(fingerprint) {
     const space = this.get(userSpaceId(fingerprint));
