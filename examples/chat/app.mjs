@@ -31,6 +31,28 @@ import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert 
 // fehlgeschlagener Anruf tatsächlich hängt.
 enableConsoleDebug({ filter: ['webrtc', 'webrtc-pm'] });
 
+/**
+ * Hält `--app-height` (style.css's .app) in Echtzeit auf der tatsächlich
+ * sichtbaren Höhe — der robustere Nachschlag zu CSS' eigenem `100dvh`
+ * (siehe dessen Kommentar dort), für Browser, bei denen `dvh` allein die
+ * Bildschirmtastatur nicht zuverlässig einrechnet: ohne das kann Header/
+ * Eingabeleiste unterhalb des sichtbaren Bereichs landen, sobald die
+ * Tastatur aufklappt. `visualViewport` ist genau dafür da (reagiert live
+ * auf Tastatur UND Adressleisten-Ein-/Ausblenden) — wo nicht verfügbar
+ * (sehr alte Browser), bleibt einfach der CSS-`100dvh`-Fallback aktiv,
+ * diese Funktion setzt dann schlicht nichts.
+ */
+function syncViewportHeight() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  document.documentElement.style.setProperty('--app-height', `${vv.height}px`);
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', syncViewportHeight);
+  window.visualViewport.addEventListener('scroll', syncViewportHeight);
+  syncViewportHeight();
+}
+
 // Bewusst NICHT chat-eigen — dieselbe Identität soll über jede App auf
 // diesem Ursprung (Origin, `localStorage` ist origin- nicht pfadgebunden)
 // hinweg wiederverwendet werden, allen voran examples/people (globales
@@ -97,6 +119,24 @@ const newGroupBtn = $('new-group-btn');
 const settingsBtn = $('settings-btn');
 const chatSettingsBtn = $('chat-settings-btn');
 const searchBtn = $('search-btn');
+
+/**
+ * Bis `main()` seine Verbindung zum Relay hergestellt UND das eigene
+ * Profil geladen hat (mehrere sequenzielle `await`s — WebSocket-Verbinden,
+ * Profil-Sync, …), sind die Klick-Handler dieser Buttons noch gar nicht
+ * registriert (jeder `addEventListener()` dafür steht erst NACH diesen
+ * `await`s im Code). Ein Klick in genau diesem Fenster war bisher ein
+ * stiller No-Op — sah aus wie "die Suche/der Button funktioniert nicht",
+ * war aber schlicht zu früh. `disabled` macht dieses Fenster jetzt SICHTBAR
+ * (ausgegraut, siehe style.css's `:disabled`-Regeln) statt es unsichtbar
+ * bleiben zu lassen — enableTopNav() unten schaltet sie frei, sobald
+ * main() tatsächlich so weit ist.
+ */
+const TOP_NAV_BUTTONS = [meAvatarBtn, addContactBtn, newGroupBtn, settingsBtn, searchBtn];
+for (const btn of TOP_NAV_BUTTONS) btn.disabled = true;
+function enableTopNav() {
+  for (const btn of TOP_NAV_BUTTONS) btn.disabled = false;
+}
 const searchOverlay = $('search-overlay');
 const searchBackBtn = $('search-back-btn');
 const searchInput = $('search-input');
@@ -679,6 +719,7 @@ async function main() {
   setAvatar(meAvatarBtn, myAlias);
   myAvatar = (await qu.get(`~${qu.fingerprint}/avatar`))?.value ?? null;
   if (myAvatar) setAvatar(meAvatarBtn, myAlias, myAvatar);
+  enableTopNav(); // siehe dessen Doku oben — ab hier existieren `repl`/`myAlias` wirklich, jeder Klick-Handler unten funktioniert jetzt tatsächlich
 
   // Eigenen Briefkasten abonnieren (siehe ensureRoom()s Ping unten) — ein
   // von einem Kontakt remote gestarteter Chat taucht dadurch von selbst

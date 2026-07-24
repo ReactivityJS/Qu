@@ -78,6 +78,8 @@ qu-people-search { display: flex; flex-direction: column; flex: 1; min-height: 0
   padding: 0;
 }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
+/* Während der Verbindungsaufbau noch läuft (app.mjs's meAvatarBtn-Doku) — sichtbar statt eines stillen No-Ops beim Klicken. */
+.avatar:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 .avatar.lg { width: 4.5rem; height: 4.5rem; font-size: 1.5rem; }
 
 /* <qu-profile-card> wird unstyled ausgeliefert (siehe src/ui/profile-components.js) — das komplette Aussehen kommt von hier. */
