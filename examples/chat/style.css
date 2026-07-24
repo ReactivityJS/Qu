@@ -31,6 +31,17 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, sans-serif;
   overscroll-behavior: none;
+  /* `.app` selbst füllt bereits exakt die sichtbare Höhe (--app-height,
+     siehe app.mjs's syncViewportHeight()) — die Seite DRUM HERUM soll nie
+     eigenständig scrollen. `position: fixed` macht das strukturell
+     erzwungen, nicht nur "meistens richtig": ohne das kann ein mobiler
+     Browser beim Fokussieren eines Eingabefelds die ganze Seite ein Stück
+     hochscrollen (natives "scroll focused element into view"), wodurch
+     Header/Eingabeleiste sichtbar "mit rausscrollen" — genau das
+     gemeldete Symptom. */
+  position: fixed;
+  inset: 0;
+  width: 100%;
 }
 
 button { font-family: inherit; }
