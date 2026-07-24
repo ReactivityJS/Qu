@@ -10,7 +10,21 @@ import { sendRoutedEvent, onRoutedEvent } from '../routed-events.js';
 // weil es hinter demselben Channel-Contract steht — ein echter Test in
 // einem echten Browser bleibt hier der letzte Schritt.
 
-const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+// Mehr als ein STUN-Server — ein einzelner Anbieter kann aus Gründen
+// unerreichbar sein, die nichts mit diesem Deployment zu tun haben (eigener
+// Ausfall, eine Route/DNS-Eigenheit im Netz genau eines Peers, IPv6-
+// Bindungsfehler wie sie konkret gegen diesen Server beobachtet wurden) —
+// mehrere aufzulisten kostet nichts (EIN erfolgreicher Server reicht, um
+// die eigene reflexive Adresse zu erfahren) und macht daraus "funktioniert
+// trotzdem, nur über einen anderen Server" statt eines harten Anruf-
+// Fehlschlags. Nur der Fallback, falls index.js's `/webrtc/ice-servers`
+// (server/webrtc-routes.mjs) nicht erreichbar war — normalerweise liefert
+// der Server dieselbe erweiterte Liste (plus optional TURN, QU_TURN_URLS).
+const DEFAULT_ICE_SERVERS = [
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
 
 /**
  * Zwei Fingerprints, ein deterministisches Ergebnis auf beiden Seiten,

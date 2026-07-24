@@ -114,9 +114,19 @@ const sendPush = pushEnabled
 // QU_TURN_USERNAME, QU_TURN_CREDENTIAL. Unset by default — calls between
 // peers that can't reach each other directly will fail to connect, same
 // as before this existed.
+// More than one STUN server, not just Cloudflare's — a single provider's
+// STUN server can be unreachable for reasons that have nothing to do with
+// this deployment (its own outage, a route/DNS issue specific to one
+// peer's network, IPv6 binding failures seen in the wild against exactly
+// this server). Listing several public ones costs nothing (a peer only
+// ever needs ONE to succeed to learn its own reflexive address) and turns
+// "one provider having a bad day" from a hard call failure into "still
+// works, just gathers candidates from a different server".
 const turnUrls = (process.env.QU_TURN_URLS || '').split(',').map((s) => s.trim()).filter(Boolean);
 const iceServers = [
   { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
   ...(turnUrls.length ? [{ urls: turnUrls, username: process.env.QU_TURN_USERNAME || '', credential: process.env.QU_TURN_CREDENTIAL || '' }] : []),
 ];
 

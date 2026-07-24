@@ -5,6 +5,7 @@ import { encryptFor as encryptValueFor, decryptWith, encryptBytesFor, decryptByt
 
 const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64 KiB
 const YIELD_EVERY_N_CHUNKS = 8; // give the event loop (and the WebSocket connection's own housekeeping) room to breathe on a long file
+const WRITE_BATCH_SIZE = 32; // see adapters/indexeddb-file-storage.js's putChunks() doc — this is how many chunks share one storage transaction
 
 function splitChunks(bytes, chunkSize) {
   const chunks = [];
@@ -104,10 +105,40 @@ export async function publishFile(session, id, bytes, { name, mime = 'applicatio
   debug('files', 'chunking-start', { id, size: data.length, chunkCount: chunks.length, encrypted: !!contentEncryption });
   onProgress?.({ phase: 'chunking', done: 0, total: chunks.length });
   const hashes = [];
+  // Storage writes go through putChunks() (a batch of WRITE_BATCH_SIZE) if
+  // the adapter offers it, else fall back to one putChunk() per chunk —
+  // see adapters/indexeddb-file-storage.js's putChunks() doc for why this
+  // matters a lot for a large file specifically (every IndexedDB
+  // transaction has real commit overhead, paid once per chunk otherwise).
+  // Progress still reports per CHUNK (`done: i + 1`), not per batch — a
+  // batch's chunks are already hashed by the time they're queued for
+  // writing, so per-chunk progress stays accurate/smooth either way.
+  const supportsBatch = typeof fileStorage.putChunks === 'function';
+  let writeBatch = [];
   for (let i = 0; i < chunks.length; i++) {
     const hash = await sha256Hex(chunks[i]);
-    await fileStorage.putChunk(hash, chunks[i]);
     hashes.push(hash);
+    // `.slice()`, NOT the `chunks[i]` view itself — splitChunks() gives
+    // every chunk a `subarray()` view sharing ONE backing ArrayBuffer (the
+    // whole file). Reading that shared view for hashing is fine (digest()
+    // never persists anything) but STORING it is not: batching several
+    // such views into one IndexedDB transaction (putChunks() above)
+    // measurably confused Chromium's storage/quota accounting — a 40 MiB
+    // file failed with a QuotaExceededError on the very FIRST batch, with
+    // real usage still near zero, even though the actual quota (~1 GiB)
+    // was nowhere close to exhausted. `.slice()` gives each stored chunk
+    // its own independent, correctly-sized backing buffer — confirmed to
+    // fix it (same file, same batching, only this line different).
+    const stored = chunks[i].slice();
+    if (supportsBatch) {
+      writeBatch.push({ hash, bytes: stored });
+      if (writeBatch.length >= WRITE_BATCH_SIZE || i === chunks.length - 1) {
+        await fileStorage.putChunks(writeBatch);
+        writeBatch = [];
+      }
+    } else {
+      await fileStorage.putChunk(hash, stored);
+    }
     onProgress?.({ phase: 'chunking', done: i + 1, total: chunks.length });
     if (i % YIELD_EVERY_N_CHUNKS === 0) await yieldToEventLoop();
   }
