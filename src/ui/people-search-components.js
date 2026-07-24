@@ -22,17 +22,29 @@
 //                  add-contact screen), where preloading/rendering the
 //                  entire directory would be noise, not help.
 //
-// Either mode: typing something that is itself a valid fingerprint
-// (core/identity.js's isValidFingerprint()) always additionally shows a
-// result for exactly that fingerprint, even if it isn't (or isn't yet)
-// visible in the opt-in directory — a fingerprint is an address, not a
-// secret (see modules/profiles.js's directory doc): whoever already knows
-// it may address it directly, the same "paste a known fingerprint" path
-// every app that predates this component already had, just folded into
-// the same search box instead of a separate raw-fp input field. Set the
-// `fields` attribute without `fingerprint` to turn this off (alias-only
-// search, e.g. a "browse people I might know" screen that shouldn't also
-// double as a raw-fingerprint lookup tool).
+// Fingerprint matching is a PREFIX match (`startsWith`), not a substring
+// search — a fingerprint is an ID, not free text; typing its first few
+// characters (like a shortened git hash) is the expected, non-secret way
+// to address someone directly (see modules/profiles.js's directory doc:
+// the fingerprint itself is never the secret, only whether the identity
+// chose to be visible/listed at all). This ALREADY covers a full 24-
+// character fingerprint as a special case of "prefix of itself" — plus,
+// either mode additionally shows a result for a query that is itself a
+// COMPLETE valid fingerprint (core/identity.js's isValidFingerprint()),
+// even if that identity isn't (or isn't yet) visible in the opt-in
+// directory at all: whoever already knows the full fingerprint may
+// address it directly, the same "paste a known fingerprint" path every
+// app that predates this component already had, just folded into the
+// same search box instead of a separate raw-fp input field. A mere
+// PREFIX of an identity that isn't in the directory still won't resolve
+// anything — there is no reverse index from a partial id to a full one
+// without a directory entry to match against, by design (no centralized
+// registry). Alias matching stays a substring search (`includes`) — free
+// text, a mid-string hit ("lice" finding "Alice") is expected there. Set
+// the `fields` attribute without `fingerprint` to turn fingerprint
+// matching off entirely (alias-only search, e.g. a "browse people I might
+// know" screen that shouldn't also double as a raw-fingerprint lookup
+// tool).
 //
 // Attributes:
 //   mode         "browse" | "search" (default "browse", see above).
@@ -110,8 +122,16 @@ export class QuPeopleSearchElement extends HTMLElement {
     const aliasCache = new Map(); // fp -> alias
     const aliasUnsubs = new Map(); // fp -> unsub, nur solange der Eintrag noch im Verzeichnis ist
 
+    // Fingerprint: `startsWith`, nicht `includes` — ein Fingerprint ist
+    // eine ID, kein Fließtext; die ersten paar Zeichen einzutippen (wie
+    // ein gekürzter Git-Hash) ist der erwartete, nicht-geheime Weg, jemand
+    // Bestimmten zu adressieren (siehe modules/profiles.js's Verzeichnis-
+    // Doku: der Fingerprint selbst ist nie das Geheimnis, nur ob die
+    // Identität überhaupt sichtbar/im Verzeichnis ist). Alias bleibt
+    // `includes` — freier Text, ein Treffer irgendwo in der Mitte ist dort
+    // sinnvoll ("lice" soll "Alice" finden).
     const defaultMatch = (entry, query) => fields.some((f) => {
-      if (f === 'fingerprint') return entry.fingerprint.toLowerCase().includes(query);
+      if (f === 'fingerprint') return entry.fingerprint.toLowerCase().startsWith(query);
       if (f === 'alias') return (entry.alias ?? '').toLowerCase().includes(query);
       return false;
     });
