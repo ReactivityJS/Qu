@@ -101,7 +101,8 @@
 
 import { viewKey, bindKey, viewObject, DEFAULT_ELEMENT_IO } from './bindings.js';
 
-function findQu(el) {
+/** Exported so other browser-only Qu-Components (e.g. ui/profile-components.js) can reuse the exact same "walk up for `.qu`" resolution instead of reimplementing it. */
+export function findQu(el) {
   let node = el;
   while (node) {
     if (node.qu) return node.qu;

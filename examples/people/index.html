@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d12" />
+  <meta name="description" content="Globales Identitäten-Verzeichnis auf Basis von QU — ein Profil, wiederverwendbar über jede Qu-App hinweg." />
+  <title>QU — People</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="topbar">
+      <div class="brand">👥 People</div>
+      <input id="search-input" type="search" placeholder="Suche nach Alias oder Fingerprint …" autocomplete="off" />
+      <button id="me-avatar" class="avatar" type="button" title="Mein Profil"></button>
+    </header>
+
+    <ul id="directory-list" class="directory-list"></ul>
+    <div id="empty-state" class="empty-state">
+      <p>Noch niemand sichtbar im Verzeichnis.</p>
+      <p class="hint">Öffne dein eigenes Profil und aktiviere „Im Verzeichnis sichtbar“, um selbst auffindbar zu werden.</p>
+    </div>
+  </div>
+
+  <!-- Eigenes Profil — #/profile -->
+  <div id="profile-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <button id="profile-back-btn" class="back-btn" type="button">&larr;</button>
+      <h2>Mein Profil</h2>
+      <div class="profile-avatar-row">
+        <button id="avatar-preview-btn" class="avatar lg" type="button" title="Avatar ändern"></button>
+        <div>
+          <button id="avatar-pick-btn" class="btn btn-secondary" type="button">Bild wählen</button>
+          <button id="avatar-clear-btn" class="btn btn-secondary" type="button">Entfernen</button>
+        </div>
+        <input type="file" id="avatar-input" accept="image/*" hidden />
+      </div>
+      <label for="alias-input">Anzeigename</label>
+      <input type="text" id="alias-input" maxlength="40" />
+      <label>Mein Fingerprint</label>
+      <div class="fp-display" id="my-fp-full">…</div>
+      <p class="modal-hint">Diese Adresse ist deine gesamte Identität — lokal auf diesem Gerät erzeugt, dieselbe über jede Qu-App hinweg (Chat, People, …).</p>
+      <label class="toggle-row"><input type="checkbox" id="visible-toggle" /> Im Verzeichnis sichtbar (per Alias/Fingerprint auffindbar)</label>
+      <p class="modal-hint">Standardmäßig aus — solange du das nicht aktivierst, taucht dein Profil in keiner Suche/Liste auf, auch wenn andere deinen Fingerprint bereits kennen.</p>
+      <div class="modal-actions">
+        <button id="profile-save-btn" class="btn btn-primary" type="button">Speichern</button>
+      </div>
+
+      <h3>Zusätzliche Attribute</h3>
+      <ul id="attr-list" class="attr-list"></ul>
+      <div id="attr-empty" class="modal-hint">Noch keine zusätzlichen Attribute.</div>
+      <div class="attr-form">
+        <input type="text" id="attr-key-input" placeholder="Feldname (z. B. Bio, Website)" maxlength="40" />
+        <input type="text" id="attr-value-input" placeholder="Wert" maxlength="500" />
+        <label class="toggle-row"><input type="checkbox" id="attr-private-toggle" /> Privat (nur ich kann es lesen)</label>
+        <button id="attr-add-btn" class="btn btn-secondary" type="button">Hinzufügen</button>
+      </div>
+      <div class="modal-error" id="attr-error"></div>
+    </div>
+  </div>
+
+  <!-- Fremdes Profil — #/<fp> -->
+  <div id="view-profile-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <button id="view-profile-back-btn" class="back-btn" type="button">&larr;</button>
+      <div class="profile-avatar-row">
+        <div id="view-avatar" class="avatar lg"></div>
+        <div>
+          <h2 id="view-alias">…</h2>
+          <div class="fp-display" id="view-fp">…</div>
+        </div>
+      </div>
+      <h3>Attribute</h3>
+      <ul id="view-attr-list" class="attr-list"></ul>
+      <div id="view-attr-empty" class="modal-hint">Keine öffentlichen Attribute.</div>
+    </div>
+  </div>
+
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>

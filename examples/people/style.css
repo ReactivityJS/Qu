@@ -1,0 +1,156 @@
+/* Eigenständiges Stylesheet, Farbpalette bewusst identisch zu
+   examples/chat/style.css (--bg/--panel/--accent/...) — optisch dasselbe
+   Ökosystem, auch wenn beide Apps ihr CSS nicht teilen (siehe deren
+   Kommentar: jede Demo bleibt für sich eigenständig lauffähig). Layout
+   selbst ist viel einfacher als der Chat: eine Liste + Profil-Overlays,
+   kein Zwei-Spalten-Split. */
+
+:root {
+  --bg: #0b0d12;
+  --panel: #12151d;
+  --panel-2: #171b26;
+  --text: #e9ebf1;
+  --muted: #8b93a7;
+  --accent: #7dd3fc;
+  --accent-strong: #38bdf8;
+  --border: #232838;
+  --danger: #f87171;
+  color-scheme: dark;
+  font-size: 16px;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, sans-serif;
+  overscroll-behavior: none;
+}
+button { font-family: inherit; }
+
+.app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.9rem 1rem;
+  padding-top: max(0.9rem, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.brand { font-weight: 700; white-space: nowrap; }
+#search-input {
+  flex: 1;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.5rem 1rem;
+  font-size: 0.95rem;
+}
+#search-input:focus { outline: 1px solid var(--accent); }
+
+.avatar {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #6366f1);
+  color: #0b0d12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+  user-select: none;
+  border: none;
+  cursor: pointer;
+  overflow: hidden;
+  padding: 0;
+}
+.avatar img { width: 100%; height: 100%; object-fit: cover; }
+.avatar.lg { width: 4.5rem; height: 4.5rem; font-size: 1.5rem; }
+
+.directory-list { list-style: none; margin: 0; padding: 0.5rem; overflow-y: auto; flex: 1; }
+.directory-list li { list-style: none; }
+
+/* <qu-profile-card> wird unstyled ausgeliefert (siehe src/ui/profile-components.js) — das komplette Aussehen kommt von hier. */
+qu-profile-card { display: block; }
+.qu-profile-card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.7rem;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+.qu-profile-card:hover { background: var(--panel-2); }
+.qu-profile-avatar { width: 2.6rem; height: 2.6rem; border-radius: 50%; object-fit: cover; background: var(--panel-2); }
+.qu-profile-alias { font-size: 0.98rem; }
+
+.empty-state { display: none; flex: 1; align-items: center; justify-content: center; flex-direction: column; gap: 0.4rem; color: var(--muted); text-align: center; padding: 2rem; }
+.empty-state.show { display: flex; }
+.empty-state .hint { font-size: 0.85rem; max-width: 24rem; }
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 20;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.4rem;
+  width: 100%;
+  max-width: 30rem;
+  max-height: 90vh;
+  overflow-y: auto;
+  position: relative;
+}
+.modal h2 { margin: 0 0 0.8rem; font-size: 1.2rem; }
+.modal h3 { margin: 1.2rem 0 0.5rem; font-size: 0.95rem; color: var(--muted); }
+.modal label { display: block; font-size: 0.82rem; color: var(--muted); margin: 0.8rem 0 0.3rem; }
+.modal input[type="text"], .modal input[type="search"] {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.95rem;
+}
+.toggle-row { display: flex !important; align-items: center; gap: 0.5rem; margin: 0.9rem 0 !important; }
+.toggle-row input { width: auto; }
+.fp-display { font-family: ui-monospace, monospace; font-size: 0.85rem; word-break: break-all; background: var(--panel-2); border-radius: 0.5rem; padding: 0.5rem 0.7rem; }
+.modal-hint { font-size: 0.8rem; color: var(--muted); margin: 0.4rem 0; }
+.modal-error { color: var(--danger); font-size: 0.85rem; min-height: 1.1em; }
+.modal-actions { display: flex; gap: 0.6rem; margin-top: 0.9rem; }
+.back-btn { background: none; border: none; color: var(--text); font-size: 1.3rem; cursor: pointer; padding: 0.2rem 0.4rem; margin-bottom: 0.4rem; }
+
+.btn { border: none; border-radius: 0.5rem; padding: 0.5rem 1rem; font-size: 0.9rem; cursor: pointer; }
+.btn-primary { background: var(--accent-strong); color: #05131a; font-weight: 600; }
+.btn-secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+
+.profile-avatar-row { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 0.5rem; }
+.profile-avatar-row .btn { display: block; margin-bottom: 0.4rem; font-size: 0.78rem; padding: 0.35rem 0.7rem; }
+
+.attr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.attr-row { display: flex; align-items: center; gap: 0.5rem; background: var(--panel-2); border-radius: 0.5rem; padding: 0.5rem 0.7rem; }
+.attr-key { color: var(--muted); font-size: 0.8rem; min-width: 5rem; }
+.attr-value { flex: 1; word-break: break-word; font-size: 0.9rem; }
+.attr-lock { font-size: 0.85rem; }
+.attr-remove-btn { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 1.1rem; padding: 0 0.3rem; }
+.attr-form { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.7rem; align-items: center; }
+.attr-form input[type="text"] { flex: 1; min-width: 8rem; }

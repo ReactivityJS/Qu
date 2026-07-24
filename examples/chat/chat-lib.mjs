@@ -151,7 +151,7 @@ export function sortByActivity(list) {
 }
 
 /**
- * EIN Pfadschema für die gesamte App — jeder Screen (Chatliste, ein Chat,
+ * Pfadschema für die gesamte App — jeder Screen (Chatliste, ein Chat,
  * dessen Einstellungen, das eigene Profil, App-Einstellungen, Suche,
  * "Kontakt hinzufügen", "Neue Gruppe", …) ist ein `#/a/b/c`-Pfad, nie eine
  * Query-artige `#key=value`-Notation und nie ein reines `hidden`-Flag ohne
@@ -166,16 +166,9 @@ export function sortByActivity(list) {
  * einfach `buildPath('add-contact', fingerprint)` — dieselbe Route wie
  * der "+"-Button in der App, nur mit dem Fingerprint als zweitem Segment
  * vorausgefüllt.
+ *
+ * Nicht (mehr) hier definiert — dieselbe generische Pfad-Logik wird auch
+ * von examples/people gebraucht, daher jetzt in src/ui/hash-router.js,
+ * hier nur re-exportiert (kein Bruch für bestehende Imports aus dieser Datei).
  */
-export function buildPath(...segments) {
-  return `#/${segments.map((s) => encodeURIComponent(s)).join('/')}`;
-}
-
-/** Gegenstück zu buildPath() — liest die Pfadsegmente eines `#/a/b/c`-Hashes, dekodiert. `[]` für einen leeren/nicht-Pfad-Hash (die Chatliste, das Wurzel-"Verzeichnis"). */
-export function parsePathSegments(hash) {
-  const raw = String(hash ?? '').replace(/^#/, '');
-  if (!raw.startsWith('/')) return [];
-  return raw.slice(1).split('/').filter(Boolean).map((s) => {
-    try { return decodeURIComponent(s); } catch { return s; }
-  });
-}
+export { buildPath, parsePathSegments } from '../../src/ui/hash-router.js';

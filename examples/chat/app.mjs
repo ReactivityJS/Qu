@@ -30,7 +30,13 @@ import {
 // fehlgeschlagener Anruf tatsächlich hängt.
 enableConsoleDebug({ filter: ['webrtc', 'webrtc-pm'] });
 
-const IDENTITY_KEY = 'qu-chat-identity';
+// Bewusst NICHT chat-eigen — dieselbe Identität soll über jede App auf
+// diesem Ursprung (Origin, `localStorage` ist origin- nicht pfadgebunden)
+// hinweg wiederverwendet werden, allen voran examples/people (globales
+// Profil/Verzeichnis) — siehe dessen app.mjs, das denselben Key benutzt.
+// Ein Fingerprint ist die eine zentrale Identität im gesamten Qu-Ökosystem,
+// kein pro-App-Konto.
+const IDENTITY_KEY = 'qu-identity';
 const ALIAS_KEY = 'qu-chat-alias';
 // CONTACTS: das Adressbuch (fp -> alias/avatar) — WER man kennt, nicht
 // WELCHE Chats man hat. Ein Kontakt kann in mehreren Räumen vorkommen

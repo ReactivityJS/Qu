@@ -94,6 +94,10 @@ export {
   inboxId, ensureSpace, notifyMembers, onSpaceInvite, addSpaceMember, removeSpaceMember, createSpaceMembershipPlugin,
 } from './modules/space-membership.js';
 export {
+  setProfileAttr, getProfileAttr, deleteProfileAttr, listProfileAttrs, onProfileAttrsChange,
+  DIRECTORY_ID, ensureDirectory, setDirectoryVisible, listDirectory, onDirectoryChange, createProfilesPlugin,
+} from './modules/profiles.js';
+export {
   sendMessage, listMessages, onMessage, createChatRoom,
   markRead, getReadReceipts, onReadReceipt,
   setPresence, getPresence, onPresenceChange, startHeartbeat,
@@ -106,3 +110,4 @@ export {
 // everything else that only *references* browser APIs inside function
 // bodies (see note at the top of this file).
 export { viewKey, viewObject, bindKey, bindObject } from './ui/bindings.js';
+export { buildPath, parsePathSegments } from './ui/hash-router.js';
