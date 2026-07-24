@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isValidFingerprint, normalizeFingerprint, dmRoomId, inboxId, shortFp, fmtBytes,
-  fmtTime, fmtDayLabel, fmtCallDuration, linkify, mediaKind, sortContactsByActivity,
+  isValidFingerprint, normalizeFingerprint, dmRoomId, groupRoomId, inboxId, shortFp, fmtBytes,
+  fmtTime, fmtDayLabel, fmtCallDuration, linkify, mediaKind, sortByActivity,
   buildInviteLink, parseInviteHash, buildChatHashRoute, parseChatHash,
 } from './chat-lib.mjs';
 
@@ -28,6 +28,13 @@ test('dmRoomId() is order-independent and deterministic', () => {
 
 test('dmRoomId() rejects invalid fingerprints', () => {
   assert.throws(() => dmRoomId(FP_A, 'not-a-fingerprint'));
+});
+
+test('groupRoomId() returns unique, differently-prefixed ids', () => {
+  const a = groupRoomId();
+  const b = groupRoomId();
+  assert.match(a, /^grp-/);
+  assert.notEqual(a, b);
 });
 
 test('inboxId()', () => {
@@ -92,8 +99,8 @@ test('mediaKind()', () => {
   assert.equal(mediaKind(undefined), 'file');
 });
 
-test('sortContactsByActivity() sorts by lastTs desc, missing lastTs last, tie-break by alias', () => {
-  const sorted = sortContactsByActivity([
+test('sortByActivity() sorts by lastTs desc, missing lastTs last, tie-break by alias', () => {
+  const sorted = sortByActivity([
     { alias: 'Bea', lastTs: 100 },
     { alias: 'Zoe' },
     { alias: 'Amy' },
@@ -115,11 +122,20 @@ test('parseInviteHash() returns null for garbage/missing hash', () => {
   assert.equal(parseInviteHash('#add=not-a-fingerprint'), null);
 });
 
-test('buildChatHashRoute()/parseChatHash() round-trip', () => {
-  const hash = buildChatHashRoute(FP_A);
-  assert.equal(hash, `#${FP_A}`);
-  assert.equal(parseChatHash(hash), FP_A);
-  assert.equal(parseChatHash(FP_A), FP_A); // auch ohne führendes '#' (z. B. schon von location.hash getrennt)
+test('buildChatHashRoute()/parseChatHash() round-trip (roomId-based, current format)', () => {
+  const hash = buildChatHashRoute('dm-abc-def');
+  assert.equal(hash, '#room=dm-abc-def');
+  assert.deepEqual(parseChatHash(hash), { roomId: 'dm-abc-def' });
+  assert.deepEqual(parseChatHash('room=dm-abc-def'), { roomId: 'dm-abc-def' }); // auch ohne führendes '#' (z. B. schon von location.hash getrennt)
+});
+
+test('buildChatHashRoute() encodes/decodes special characters in a roomId round-trip', () => {
+  const hash = buildChatHashRoute('grp-a b/c');
+  assert.deepEqual(parseChatHash(hash), { roomId: 'grp-a b/c' });
+});
+
+test('parseChatHash() still understands a pre-refactor bare-fingerprint link as legacyFp', () => {
+  assert.deepEqual(parseChatHash(`#${FP_A}`), { legacyFp: FP_A });
 });
 
 test('parseChatHash() never matches an invite hash or garbage', () => {

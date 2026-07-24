@@ -13,8 +13,8 @@ import {
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
-  dmRoomId, inboxId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
-  linkify, mediaKind, sortContactsByActivity, buildInviteLink, parseInviteHash,
+  dmRoomId, groupRoomId, inboxId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
+  linkify, mediaKind, sortByActivity, buildInviteLink, parseInviteHash,
   buildChatHashRoute, parseChatHash, fmtCallDuration,
 } from './chat-lib.mjs';
 
@@ -32,19 +32,25 @@ enableConsoleDebug({ filter: ['webrtc', 'webrtc-pm'] });
 
 const IDENTITY_KEY = 'qu-chat-identity';
 const ALIAS_KEY = 'qu-chat-alias';
+// CONTACTS: das Adressbuch (fp -> alias/avatar) — WER man kennt, nicht
+// WELCHE Chats man hat. Ein Kontakt kann in mehreren Räumen vorkommen
+// (ein 1:1 UND mehreren Gruppen mit derselben Person drin); die eigentliche
+// Chat-Liste ist ROOMS (siehe ROOMS_KEY unten), nicht diese hier.
 const CONTACTS_KEY = 'qu-chat-contacts';
-// Stumm-/Ton-Einstellungen sind bewusst pro CHAT (roomId), nicht pro
-// Kontakt (fp) — ein Kontakt kann in mehreren Chats vorkommen (später:
-// ein 1:1 UND mehrere Gruppen mit derselben Person drin), jeder davon
-// soll unabhängig stumm schaltbar sein. Ein "Chat" ist dabei technisch
-// nichts anderes als ein Space mit ≥ 2 Mitgliedern (siehe
+// ROOMS: die eigentliche Chat-Liste — ein Eintrag pro Space, an dem dieses
+// Gerät teilnimmt. Ein "Chat" ist technisch nichts anderes als ein Space
+// mit einem ODER MEHREREN anderen Mitgliedern (siehe
 // group-encryption.test.mjs: ein Space mit mehreren `readers`
 // verschlüsselt automatisch für alle, ganz ohne Sonderfall) — 1:1
-// (dmRoomId()) ist nur der Spezialfall mit genau zwei Mitgliedern, kein
-// eigener Mechanismus. Diese Einstellungen sind also schon heute so
-// angelegt, dass ein künftiger Gruppen-Chat (ein weiterer roomId,
-// unabhängig vom 1:1-Raum mit derselben Person) sich ohne Änderung hier
-// einreiht.
+// (dmRoomId()) ist nur der Spezialfall mit genau einem anderen Mitglied,
+// eine Gruppe (groupRoomId()) der allgemeine Fall mit einem eigenen Namen.
+// Jeder Eintrag: `{ id (roomId), name (nur Gruppen — bei einem DM kommt
+// der Anzeigename aus dem einzigen anderen Mitglieds-Kontakt), members
+// (Fingerprints AUSSER einem selbst), lastTs, unread, lastPreview, lastMine }`.
+const ROOMS_KEY = 'qu-chat-rooms';
+// Stumm-/Verschlüsselungs-Einstellungen sind bewusst pro CHAT (roomId),
+// nicht pro Kontakt (fp) — ein Kontakt kann in mehreren Räumen vorkommen,
+// jeder davon soll unabhängig einstellbar sein.
 const MUTED_ROOMS_KEY = 'qu-chat-muted-rooms';
 const SOUND_MESSAGES_KEY = 'qu-chat-sound-messages';
 const SOUND_CALLS_KEY = 'qu-chat-sound-calls';
@@ -81,6 +87,8 @@ const meAvatarBtn = $('me-avatar');
 const meNameEl = $('me-name');
 const meFpShortEl = $('me-fp-short');
 const addContactBtn = $('add-contact-btn');
+const newGroupBtn = $('new-group-btn');
+const groupMembersBtn = $('group-members-btn');
 const searchBtn = $('search-btn');
 const searchOverlay = $('search-overlay');
 const searchBackBtn = $('search-back-btn');
@@ -218,7 +226,7 @@ function closeLightbox() {
   lightboxImg.src = '';
 }
 
-// --- Kontaktliste (localStorage, per Fingerprint gepflegt) ---
+// --- Adressbuch (localStorage, per Fingerprint gepflegt — WER man kennt) ---
 function loadContacts() {
   try { return JSON.parse(localStorage.getItem(CONTACTS_KEY)) ?? []; } catch { return []; }
 }
@@ -228,9 +236,52 @@ function saveContacts(contacts) {
 let contacts = loadContacts();
 function upsertContact(fp, patch) {
   const i = contacts.findIndex((c) => c.fp === fp);
-  if (i === -1) contacts.push({ fp, alias: shortFp(fp), lastTs: 0, unread: 0, ...patch });
+  if (i === -1) contacts.push({ fp, alias: shortFp(fp), ...patch });
   else contacts[i] = { ...contacts[i], ...patch };
   saveContacts(contacts);
+}
+function contactByFp(fp) {
+  return contacts.find((c) => c.fp === fp) ?? null;
+}
+
+// --- Chat-/Raumliste (localStorage, siehe ROOMS_KEY oben — die eigentliche
+// Chat-Liste, unabhängig vom Adressbuch) ---
+function loadRooms() {
+  try { return JSON.parse(localStorage.getItem(ROOMS_KEY)) ?? []; } catch { return []; }
+}
+function saveRooms(rooms) {
+  localStorage.setItem(ROOMS_KEY, JSON.stringify(rooms));
+}
+let rooms = loadRooms();
+function roomById(id) {
+  return rooms.find((r) => r.id === id) ?? null;
+}
+function upsertRoom(id, patch) {
+  const i = rooms.findIndex((r) => r.id === id);
+  if (i === -1) rooms.push({ id, name: null, members: [], lastTs: 0, unread: 0, ...patch });
+  else rooms[i] = { ...rooms[i], ...patch };
+  saveRooms(rooms);
+}
+function removeRoomEntry(id) {
+  rooms = rooms.filter((r) => r.id !== id);
+  saveRooms(rooms);
+}
+/** Ein DM (genau ein anderes Mitglied) oder eine Gruppe (mehrere)? */
+function isGroupRoom(room) {
+  return (room?.members?.length ?? 0) > 1;
+}
+/** Anzeigename: bei einer Gruppe ihr eigener Name, bei einem DM der Alias des einzigen anderen Mitglieds — nie leer, fällt am Ende auf eine gekürzte Fingerprint-Anzeige zurück. */
+function roomDisplayName(room) {
+  if (!room) return '';
+  if (isGroupRoom(room)) return room.name || 'Gruppe';
+  const peerFp = room.members[0];
+  return contactByFp(peerFp)?.alias ?? shortFp(peerFp);
+}
+/** Avatar-Bild-URL fürs Rendern: bei einer Gruppe ihr eigenes (optionales) Bild, bei einem DM das des einzigen anderen Mitglieds. */
+function roomDisplayAvatar(room) {
+  if (!room) return null;
+  if (isGroupRoom(room)) return room.avatar ?? null;
+  return contactByFp(room.members[0])?.avatar ?? null;
 }
 
 // --- Stumm-Schaltung pro Chat (siehe MUTED_ROOMS_KEY oben) ---
@@ -350,13 +401,6 @@ function stopRingtone() {
   clearInterval(ringtoneTimer);
   ringtoneTimer = null;
 }
-function contactByFp(fp) {
-  return contacts.find((c) => c.fp === fp) ?? null;
-}
-function removeContact(fp) {
-  contacts = contacts.filter((c) => c.fp !== fp);
-  saveContacts(contacts);
-}
 
 async function main() {
   const qu = await loadOrCreateIdentity(IDENTITY_KEY);
@@ -457,7 +501,7 @@ async function main() {
     deliveredMsgIds.add(entry.id);
     pendingDeliveries = pendingDeliveries.filter((p) => p.id !== entry.id);
     savePendingDeliveries(pendingDeliveries);
-    if (activeFp === entry.fp) renderTicks(entry.fp);
+    if (activeRoomId === entry.roomId) renderTicks(entry.roomId);
   }
 
   // Service Worker: unabhängig von Push registriert (s. registerServiceWorker()
@@ -498,7 +542,7 @@ async function main() {
   const pendingCallDecisions = new Map(); // fp -> resolve(opts|null), ein Eintrag pro gerade klingelndem eingehendem Anruf
   const RING_TIMEOUT_MS = 45_000;
   const CALL_CONNECT_FAILED_MSG = 'Anruf fehlgeschlagen — keine Verbindung zustande gekommen (evtl. Netzwerk-/NAT-Problem; falls das öfter passiert, braucht dieser Server einen TURN-Server, siehe QU_TURN_URLS).';
-  const ensuredRoomIds = new Map(); // fp -> roomId, schon abonniert/erstellt
+  const ensuredRooms = new Set(); // roomId, schon abonniert/erstellt (siehe ensureRoom())
 
   function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
@@ -552,9 +596,11 @@ async function main() {
     // eigenen Briefkasten (chat-lib.mjs's inboxId()) erneut abonnieren —
     // eine neue repl-Instanz kennt keine vorherigen Topics.
     repl.ensureSynced(`${inboxId(qu.fingerprint)}/requests`).catch((e) => console.error('[chat] inbox re-watch failed:', e));
-    for (const [fp, roomId] of ensuredRoomIds) {
-      repl.ensureSynced(roomId).catch((e) => console.error('[chat] re-watch failed:', fp, e));
-      repl.ensureSynced(`~${fp}/avatar`).catch((e) => console.error('[chat] avatar re-watch failed:', fp, e));
+    for (const roomId of ensuredRooms) {
+      repl.ensureSynced(roomId).catch((e) => console.error('[chat] re-watch failed:', roomId, e));
+      for (const fp of roomById(roomId)?.members ?? []) {
+        repl.ensureSynced(`~${fp}/avatar`).catch((e) => console.error('[chat] avatar re-watch failed:', fp, e));
+      }
     }
     setupCallSignaling(channel); // siehe Anruf-Abschnitt weiter unten — an JEDEN (neuen) Channel neu gebunden
 
@@ -637,7 +683,7 @@ async function main() {
           // weiterlaufen, sobald der nächste Tick wieder einen offenen
           // Kanal vorfindet, ganz ohne dass hier extra etwas neu gestartet
           // werden müsste.
-          for (const roomId of ensuredRoomIds.values()) qu.setPresence(roomId, 'offline').catch(() => {});
+          for (const roomId of ensuredRooms) qu.setPresence(roomId, 'offline').catch(() => {});
           channel.close().catch(() => {});
         }
       }, BACKGROUND_DISCONNECT_MS);
@@ -645,16 +691,20 @@ async function main() {
   });
   window.addEventListener('online', () => { if (!reconnecting && !channel.isOpen()) scheduleReconnect(); });
 
-  // --- Pro-Kontakt-Zustand ---
-  const messagesByRoom = new Map(); // fp -> QuBit[]
-  const seenIdsByRoom = new Map(); // fp -> Set<id>  (Reconnect-Redelivery-sicher)
-  const receiptsByRoom = new Map(); // fp -> { [fingerprint]: upToTs }
-  const stopHeartbeatByRoom = new Map(); // fp -> stop()
-  const presenceStaleTimerByFp = new Map(); // fp -> Timeout, siehe renderPresence()
-  const unsubsByRoom = new Map(); // fp -> Array<() => void>, siehe ensureRoom()/deleteContact()
+  // --- Pro-Raum-Zustand (alle Maps roomId-geschlüsselt — EIN Raum kann
+  // 1:1 ODER Gruppe sein, siehe ROOMS_KEY oben; der Code hier unterscheidet
+  // beide nicht mehr) ---
+  const messagesByRoom = new Map(); // roomId -> QuBit[]
+  const seenIdsByRoom = new Map(); // roomId -> Set<id>  (Reconnect-Redelivery-sicher)
+  const receiptsByRoom = new Map(); // roomId -> { [fingerprint]: upToTs }
+  const stopHeartbeatByRoom = new Map(); // roomId -> stop()
+  const presenceStaleTimerByRoom = new Map(); // roomId -> Timeout, siehe renderPresence()
+  const unsubsByRoom = new Map(); // roomId -> Array<() => void>, siehe ensureRoom()/deleteRoom()
+  // Pro-IDENTITÄT (nicht pro Raum) — bleibt fp-geschlüsselt, ein Alias/
+  // Avatar gehört zur Person, nicht zu einem bestimmten Chat mit ihr.
   const aliasCache = new Map([[qu.fingerprint, myAlias]]);
   const avatarCache = new Map(); // fp -> dataUrl | null (null = bekannt abwesend, nicht "noch nicht geprüft")
-  let activeFp = null;
+  let activeRoomId = null;
 
   async function aliasFor(fp) {
     if (fp === qu.fingerprint) return myAlias;
@@ -697,51 +747,71 @@ async function main() {
     } catch { return null; }
   }
 
-  async function ensureRoom(fp) {
-    if (ensuredRoomIds.has(fp)) return ensuredRoomIds.get(fp);
-    const roomId = dmRoomId(qu.fingerprint, fp);
-    ensuredRoomIds.set(fp, roomId);
-    messagesByRoom.set(fp, []);
-    seenIdsByRoom.set(fp, new Set());
+  /**
+   * Stellt sicher, dass ein bereits in `rooms` (localStorage, ROOMS_KEY
+   * oben) bekannter Raum lokal abonniert/gebootstrapt ist — ein DM (ein
+   * anderes Mitglied) UND eine Gruppe (mehrere) laufen durch exakt
+   * denselben Code, kein Sonderfall pro Mitgliederzahl. `roomId` muss
+   * vorher per upsertRoom() (über startDm()/createGroupRoom()/
+   * handleInboxRequest() unten) eingetragen worden sein.
+   */
+  async function ensureRoom(roomId) {
+    if (ensuredRooms.has(roomId)) return roomId;
+    const room = roomById(roomId);
+    if (!room) throw new Error(`[chat] ensureRoom(): unbekannter Raum ${roomId}`);
+    ensuredRooms.add(roomId);
+    messagesByRoom.set(roomId, []);
+    seenIdsByRoom.set(roomId, new Set());
 
     const unsubs = [];
-    unsubsByRoom.set(fp, unsubs);
-    unsubs.push(qu.onMessage(roomId, (q) => handleIncomingMessage(fp, roomId, q)));
-    unsubs.push(qu.onPresenceChange(roomId, async () => renderPresence(fp, roomId)));
+    unsubsByRoom.set(roomId, unsubs);
+    unsubs.push(qu.onMessage(roomId, (q) => handleIncomingMessage(roomId, q)));
+    unsubs.push(qu.onPresenceChange(roomId, async () => renderPresence(roomId)));
     unsubs.push(qu.onReadReceipt(roomId, async () => {
-      receiptsByRoom.set(fp, await qu.getReadReceipts(roomId));
-      if (activeFp === fp) renderTicks(fp);
+      receiptsByRoom.set(roomId, await qu.getReadReceipts(roomId));
+      if (activeRoomId === roomId) renderTicks(roomId);
+    }));
+    // Gruppenname: ein normaler LWW-Wert AM Raum selbst (`${roomId}/meta`),
+    // nicht nur lokal in `rooms` — jede Umbenennung (renameGroupRoom()
+    // unten) synct so automatisch zu jedem Mitglied, genau wie Alias/
+    // Presence. Bei einem DM bleibt dieser Knoten schlicht ungenutzt
+    // (roomDisplayName() liest den Namen dort ohnehin nie für einen DM).
+    unsubs.push(qu.get(roomId).get('meta').on((q) => {
+      if (typeof q?.value?.name !== 'string') return;
+      upsertRoom(roomId, { name: q.value.name });
+      if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
+      renderRoomList();
     }));
 
-    // Den Kontakt-Userspace (pub/epub/alias, immer öffentlich lesbar —
-    // core/space.js's RESERVED_PROFILE_PATHS) VOR dem Raum selbst syncen:
-    // sendMessage() unten verschlüsselt explizit für beide Mitglieder
-    // (encryptFor) und braucht dafür den ECDH-Public-Key jedes Empfängers
-    // bereits lokal bekannt (core/session.js's #resolveRecipientKey()) —
-    // sonst schlägt das allererste Senden fehl, falls das lokale Store
-    // frisch ist (z. B. nach einem Reload).
-    await repl.sync({ topic: `~${fp}` }).catch((e) => console.error('[chat] peer profile sync failed:', fp, e));
+    // JEDES andere Mitglieds Userspace (pub/epub/alias, immer öffentlich
+    // lesbar — core/space.js's RESERVED_PROFILE_PATHS) VOR dem Raum selbst
+    // syncen: sendMessage() unten verschlüsselt explizit für ALLE
+    // Mitglieder (encryptFor) und braucht dafür den ECDH-Public-Key jedes
+    // Empfängers bereits lokal bekannt (core/session.js's
+    // #resolveRecipientKey()) — sonst schlägt das allererste Senden fehl,
+    // falls das lokale Store frisch ist (z. B. nach einem Reload). Bei
+    // einem DM ist das genau EIN Mitglied, bei einer Gruppe mehrere.
+    for (const memberFp of room.members) {
+      await repl.sync({ topic: `~${memberFp}` }).catch((e) => console.error('[chat] peer profile sync failed:', memberFp, e));
+      // Live-Abo auf den Avatar (nicht nur der einmalige Sync oben) —
+      // ändert ein Mitglied sein Profilbild, während der Chat schon offen
+      // ist, muss das sofort ankommen, genau wie Alias/Presence bereits
+      // live sind. `.on()` liefert per Default nur ZUKÜNFTIGE Änderungen
+      // (kein initial: true wie map(), core/space-handle.js's on()-Doku).
+      unsubs.push(qu.get(`~${memberFp}`).get('avatar').on((q) => {
+        const url = q?.value ?? null;
+        avatarCache.set(memberFp, url);
+        upsertContact(memberFp, { avatar: url });
+        if (activeRoomId === roomId) renderRoomHeader(room);
+        renderRoomList();
+      }));
+    }
     await repl.ensureSynced(roomId);
-
-    // Live-Abo auf den Avatar (nicht nur der einmalige Sync oben) — ändert
-    // ein Kontakt sein Profilbild, während der Chat schon offen ist, muss
-    // das sofort ankommen, genau wie Alias/Presence bereits live sind.
-    // `.on()` liefert per Default nur ZUKÜNFTIGE Änderungen (kein initial:
-    // true wie map(), core/space-handle.js's on()-Doku) — die aktuelle
-    // Anzeige oben (peer-avatar/Kontaktliste) speist sich weiterhin aus
-    // avatarFor()s einmaligem Abruf, dieses Abo hält sie danach aktuell.
-    unsubs.push(qu.get(`~${fp}`).get('avatar').on((q) => {
-      const url = q?.value ?? null;
-      avatarCache.set(fp, url);
-      upsertContact(fp, { avatar: url });
-      if (activeFp === fp) setAvatar(peerAvatarEl, contactByFp(fp)?.alias ?? fp, url);
-      renderContactList();
-    }));
 
     const manifest = await qu.get(roomId);
     if (!manifest) {
-      const members = [qu.fingerprint, fp].sort();
-      // `readers: ['*']` ist bewusst OFFEN, nicht auf die zwei Mitglieder
+      const allMembers = [...new Set([qu.fingerprint, ...room.members])].sort();
+      // `readers: ['*']` ist bewusst OFFEN, nicht auf die Mitglieder
       // beschränkt: ein Relay darf ein QuBit nur dann überhaupt
       // weiterleiten, wenn es selbst in dessen `readers` steht
       // (core/acl.js's filterForReader() — ein Relay ist sonst einfach ein
@@ -750,57 +820,164 @@ async function main() {
       // blockieren, nicht nur "verstecken". Die eigentliche Privatsphäre
       // kommt stattdessen aus Verschlüsselung (sendMessage()s
       // `encryptFor` unten) — derselbe Aufbau wie Signal: der Server sieht
-      // Chiffretext, keinen Klartext. `writers` bleibt eng (nur die zwei
+      // Chiffretext, keinen Klartext. `writers` bleibt eng (nur die
       // Mitglieder dürfen in diesen Raum schreiben).
-      const space = qu.createSpaceAt(roomId, { writers: members, readers: ['*'], admins: members });
+      const space = qu.createSpaceAt(roomId, { writers: allMembers, readers: ['*'], admins: allMembers });
       await space.ready.catch((e) => console.error('[chat] room bootstrap failed:', roomId, e));
     }
 
-    receiptsByRoom.set(fp, await qu.getReadReceipts(roomId));
-    renderPresence(fp, roomId);
-    stopHeartbeatByRoom.set(fp, qu.startHeartbeat(roomId, { intervalMs: PRESENCE_HEARTBEAT_MS }));
+    receiptsByRoom.set(roomId, await qu.getReadReceipts(roomId));
+    renderPresence(roomId);
+    stopHeartbeatByRoom.set(roomId, qu.startHeartbeat(roomId, { intervalMs: PRESENCE_HEARTBEAT_MS }));
 
-    // In den Briefkasten (chat-lib.mjs's inboxId()) des Kontakts schreiben,
-    // damit ein von UNS gestarteter Chat spätestens jetzt (nicht erst mit
-    // der ersten Nachricht) beim Kontakt auftaucht, ohne dass der uns
-    // zuerst selbst hätte hinzufügen müssen — der Briefkasten-Space bleibt
-    // bewusst manifestlos (siehe inboxId()s Doku: "kein Manifest = jeder
-    // darf schreiben"). `.get(qu.fingerprint)` als fester Schlüssel: ein
-    // erneuter Ping (z. B. beim nächsten App-Start) überschreibt den alten
-    // statt eine wachsende Liste zu bilden.
-    qu.get(inboxId(fp)).get('requests').get(qu.fingerprint).put({ fromFp: qu.fingerprint, alias: myAlias, roomId })
-      .catch((e) => console.error('[chat] inbox ping failed:', fp, e));
+    // In den Briefkasten (chat-lib.mjs's inboxId()) JEDES anderen
+    // Mitglieds schreiben, damit ein von UNS gestarteter Chat spätestens
+    // jetzt (nicht erst mit der ersten Nachricht) bei jedem auftaucht,
+    // ohne dass irgendwer ihn zuerst selbst hätte hinzufügen müssen — der
+    // Briefkasten-Space bleibt bewusst manifestlos (siehe inboxId()s
+    // Doku: "kein Manifest = jeder darf schreiben"). `.get(qu.fingerprint)`
+    // als fester Schlüssel: ein erneuter Ping überschreibt den alten statt
+    // eine wachsende Liste zu bilden. Jedes Mitglied bekommt seine EIGENE
+    // Mitgliederliste (alle AUSSER sich selbst) mitgeschickt, damit sein
+    // handleInboxRequest()/ensureRoom() denselben Raum mit denselben
+    // Mitgliedern anlegt.
+    for (const memberFp of room.members) {
+      const membersForThem = [qu.fingerprint, ...room.members].filter((fp) => fp !== memberFp);
+      qu.get(inboxId(memberFp)).get('requests').get(qu.fingerprint).put({
+        fromFp: qu.fingerprint, alias: myAlias, roomId, members: membersForThem, name: room.name ?? null,
+      }).catch((e) => console.error('[chat] inbox ping failed:', memberFp, e));
+    }
 
     return roomId;
   }
 
-  /** Reagiert auf einen eingehenden Briefkasten-Eintrag (siehe oben) — legt den Absender bei Bedarf als Kontakt an und stellt sicher, dass der Raum lokal existiert, ganz ohne dass die Nutzerin ihn vorher selbst hinzugefügt haben muss. */
-  function handleInboxRequest(q) {
-    const fromFp = q?.value?.fromFp;
-    if (!fromFp || fromFp === qu.fingerprint) return;
-    if (!contactByFp(fromFp)) {
-      upsertContact(fromFp, { alias: q.value.alias || shortFp(fromFp), lastTs: 0, unread: 0 });
-      renderContactList();
-    }
-    ensureRoom(fromFp).catch((e) => console.error('[chat] ensureRoom (inbox) failed:', fromFp, e));
+  /**
+   * Startet (oder öffnet, falls schon vorhanden) einen 1:1-Chat mit
+   * `peerFp` — der vereinfachte Spezialfall von createGroupRoom() mit
+   * genau einem Mitglied UND einer deterministischen statt zufälligen
+   * Raum-Id (dmRoomId()), damit beide Seiten unabhängig auf demselben
+   * Raum landen, ohne vorher einen Link austauschen zu müssen.
+   */
+  async function startDm(peerFp) {
+    const roomId = dmRoomId(qu.fingerprint, peerFp);
+    if (!roomById(roomId)) upsertRoom(roomId, { name: null, members: [peerFp] });
+    await ensureRoom(roomId);
+    return roomId;
   }
 
-  function handleIncomingMessage(fp, roomId, q) {
-    const seen = seenIdsByRoom.get(fp);
+  /** Legt einen neuen Gruppen-Chat mit `memberFps` unter dem Namen `name` an — der allgemeine Fall, dessen Spezialfall (genau ein Mitglied) startDm() oben ist. */
+  async function createGroupRoom(name, memberFps) {
+    const roomId = groupRoomId();
+    upsertRoom(roomId, { name, members: [...memberFps] });
+    await ensureRoom(roomId);
+    // Name kanonisch im Raum selbst hinterlegen (siehe ensureRoom()s
+    // `meta`-Abo oben) — die eigene `rooms`-Kopie oben ist bereits gesetzt
+    // (optimistisch, für die eigene sofortige Anzeige), das hier ist, was
+    // JEDES ANDERE Mitglied beim Sync tatsächlich sieht.
+    await qu.get(roomId).get('meta').put({ name }).catch((e) => console.error('[chat] group name publish failed:', roomId, e));
+    return roomId;
+  }
+
+  /**
+   * Benennt eine bestehende Gruppe um — schreibt nur den `meta`-Knoten
+   * (siehe ensureRoom()s Abo darauf); die lokale `rooms`-Kopie zieht über
+   * genau dieses Abo nach, auch bei UNS selbst, kein doppelter Code-Pfad
+   * für "eigene Umbenennung" vs. "von jemand anderem umbenannt bekommen".
+   */
+  async function renameGroupRoom(roomId, name) {
+    await qu.get(roomId).get('meta').put({ name });
+  }
+
+  /**
+   * Fügt `newFp` zu einer bestehenden Gruppe hinzu — Schreib-/Admin-Rolle
+   * im Space-Manifest (readers bleibt `['*']`, siehe ensureRoom()s Doku)
+   * UND die lokale Mitgliederliste. Kein separater ensureRoom()-Aufruf
+   * hier (der wäre wegen `ensuredRooms`s Guard sofort ein No-Op) — dieselbe
+   * Profil-Sync-/Avatar-Abo-/Briefkasten-Ping-Arbeit wie dort, nur für
+   * GENAU das neue Mitglied statt der gesamten Liste.
+   */
+  async function addRoomMember(roomId, newFp) {
+    const room = roomById(roomId);
+    if (!room || room.members.includes(newFp) || newFp === qu.fingerprint) return;
+    await qu.addToRole(roomId, 'writers', newFp);
+    await qu.addToRole(roomId, 'admins', newFp);
+    const updatedMembers = [...room.members, newFp];
+    upsertRoom(roomId, { members: updatedMembers });
+
+    if (!contactByFp(newFp)) {
+      let alias = shortFp(newFp);
+      try { alias = (await qu.getProfile(newFp)).alias ?? alias; } catch { /* aliasFor() holt es später live nach */ }
+      upsertContact(newFp, { alias });
+    }
+    await repl.sync({ topic: `~${newFp}` }).catch((e) => console.error('[chat] peer profile sync failed:', newFp, e));
+    const unsubs = unsubsByRoom.get(roomId) ?? [];
+    unsubs.push(qu.get(`~${newFp}`).get('avatar').on((q) => {
+      const url = q?.value ?? null;
+      avatarCache.set(newFp, url);
+      upsertContact(newFp, { avatar: url });
+      if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
+      renderRoomList();
+    }));
+    const membersForThem = [qu.fingerprint, ...updatedMembers].filter((fp) => fp !== newFp);
+    qu.get(inboxId(newFp)).get('requests').get(qu.fingerprint).put({
+      fromFp: qu.fingerprint, alias: myAlias, roomId, members: membersForThem, name: room.name ?? null,
+    }).catch((e) => console.error('[chat] inbox ping failed:', newFp, e));
+
+    renderRoomList();
+    if (activeRoomId === roomId) { renderRoomHeader(roomById(roomId)); renderPresence(roomId); }
+  }
+
+  /**
+   * Entfernt `fp` aus einer Gruppe. Die eigentliche Wirkung: sendMessage()s
+   * `encryptFor` (Composer) liest `room.members` bei JEDEM Senden neu — ein
+   * entferntes Mitglied wird ab sofort nicht mehr adressiert, kann künftige
+   * Nachrichten also nicht mehr entschlüsseln, selbst wenn es (über
+   * `readers: ['*']`) weiterhin Chiffretext zu sehen bekäme. Schreibrecht
+   * im Space-Manifest wird zusätzlich entzogen (kann also auch nicht mehr
+   * SELBST schreiben). Bereits VOR der Entfernung gesendete Nachrichten
+   * bleiben für sie entschlüsselbar — dieselbe "Vergangenheit ändert sich
+   * nicht" wie bei deleteRoom() oben, kein rückwirkendes Neu-Verschlüsseln.
+   */
+  async function removeRoomMember(roomId, fp) {
+    const room = roomById(roomId);
+    if (!room || !room.members.includes(fp)) return;
+    await qu.removeFromRole(roomId, 'writers', fp);
+    await qu.removeFromRole(roomId, 'admins', fp);
+    upsertRoom(roomId, { members: room.members.filter((m) => m !== fp) });
+    renderRoomList();
+    if (activeRoomId === roomId) { renderRoomHeader(roomById(roomId)); renderPresence(roomId); }
+  }
+
+  /** Reagiert auf einen eingehenden Briefkasten-Eintrag (siehe ensureRoom() oben) — legt den Raum (und ggf. den Absender als Kontakt) bei Bedarf lokal an, ganz ohne dass die Nutzerin ihn vorher selbst hinzugefügt haben muss. Funktioniert identisch für einen neuen DM UND eine neue/erweiterte Gruppe. */
+  function handleInboxRequest(q) {
+    const fromFp = q?.value?.fromFp;
+    const roomId = q?.value?.roomId;
+    if (!fromFp || fromFp === qu.fingerprint || !roomId) return;
+    if (!contactByFp(fromFp)) upsertContact(fromFp, { alias: q.value.alias || shortFp(fromFp) });
+    if (!roomById(roomId)) {
+      const members = Array.isArray(q.value.members) && q.value.members.length ? q.value.members : [fromFp];
+      upsertRoom(roomId, { name: q.value.name ?? null, members });
+    }
+    renderRoomList();
+    ensureRoom(roomId).catch((e) => console.error('[chat] ensureRoom (inbox) failed:', roomId, e));
+  }
+
+  function handleIncomingMessage(roomId, q) {
+    const seen = seenIdsByRoom.get(roomId);
     if (seen.has(q.id)) return;
     seen.add(q.id);
-    const list = messagesByRoom.get(fp);
+    const list = messagesByRoom.get(roomId);
     list.push(q);
     list.sort((a, b) => a.ts - b.ts);
 
+    const room = roomById(roomId);
     const mine = q.writer === qu.fingerprint;
     const preview = q.value?.text || (q.refs?.length ? '📎 Anhang' : '');
-    const contact = contactByFp(fp);
-    const unread = mine || activeFp === fp ? 0 : (contact?.unread ?? 0) + 1;
-    upsertContact(fp, { lastTs: q.ts, lastPreview: preview, lastMine: mine, unread });
-    renderContactList();
+    const unread = mine || activeRoomId === roomId ? 0 : (room?.unread ?? 0) + 1;
+    upsertRoom(roomId, { lastTs: q.ts, lastPreview: preview, lastMine: mine, unread });
+    renderRoomList();
 
-    if (activeFp === fp) {
+    if (activeRoomId === roomId) {
       appendLiveMessage(q);
       if (document.hasFocus()) markActiveRead();
     }
@@ -809,7 +986,7 @@ async function main() {
     // ist (nicht erst ohne Fenster-Fokus wie die Desktop-Benachrichtigung
     // unten) — man soll eine neue Nachricht in einem anderen Chat auch
     // hören, während man aktiv in der App ist, genau wie bei Signal/Telegram.
-    if (!mine && activeFp !== fp && !isRoomMuted(roomId)) playMessageSound();
+    if (!mine && activeRoomId !== roomId && !isRoomMuted(roomId)) playMessageSound();
 
     // Lokale Benachrichtigung für "Tab läuft noch, ist aber nicht im
     // Fokus" (Handy gesperrt, anderer Tab aktiv, …) — der komplementäre
@@ -818,19 +995,20 @@ async function main() {
     // beide Wege feuern also nie für dasselbe Ereignis gleichzeitig.
     if (!mine && !document.hasFocus() && !isRoomMuted(roomId) && Notification.permission === 'granted') {
       try {
-        const notif = new Notification('QU Chat', { body: `${contactByFp(fp)?.alias ?? shortFp(fp)} hat dir geschrieben`, tag: fp });
-        notif.addEventListener('click', () => { window.focus(); openContact(fp); notif.close(); });
+        const senderName = contactByFp(q.writer)?.alias ?? shortFp(q.writer);
+        const body = isGroupRoom(room) ? `${senderName} in ${roomDisplayName(room)}` : `${senderName} hat dir geschrieben`;
+        const notif = new Notification('QU Chat', { body, tag: roomId });
+        notif.addEventListener('click', () => { window.focus(); openRoom(roomId); notif.close(); });
       } catch { /* z. B. Safari verweigert new Notification() aus einem Service-Worker-losen Kontext manchmal leise — kein harter Fehler */ }
     }
   }
 
   async function markActiveRead() {
-    if (!activeFp) return;
-    const roomId = ensuredRoomIds.get(activeFp);
-    const list = messagesByRoom.get(activeFp) ?? [];
+    if (!activeRoomId) return;
+    const list = messagesByRoom.get(activeRoomId) ?? [];
     const last = list.at(-1);
     if (!last) return;
-    await qu.markRead(roomId, last.ts);
+    await qu.markRead(activeRoomId, last.ts);
   }
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markActiveRead(); });
   window.addEventListener('focus', () => markActiveRead());
@@ -838,42 +1016,57 @@ async function main() {
   /**
    * "online" ist eine von der VERSTREICHENDEN ZEIT abgeleitete Größe
    * (modules/chat.js's getPresence(): frisch genug oder nicht), nicht nur
-   * vom zuletzt empfangenen Ereignis — ein Kontakt, der die App schließt,
-   * sendet schlicht NICHTS mehr, es gibt also kein weiteres Ereignis, das
-   * onPresenceChange() erneut auslösen würde, damit die Anzeige auf
-   * "offline" nachzieht. Statt das mit einem pauschalen Poll zu
-   * übertünchen, plant diese Funktion sich selbst EIN einziges Mal neu:
-   * solange der Kontakt gerade online ist, genau EIN setTimeout auf exakt
-   * den Moment, an dem sein `lastSeen` das Stale-Fenster verlässt — ein
-   * neueres Ereignis (onPresenceChange() ruft renderPresence() erneut auf)
-   * ersetzt diesen Timer einfach, statt einen zweiten parallel laufen zu
-   * lassen. Reines UI-Nachziehen einer bereits reaktiv bekannten
-   * Zeitschranke, kein Ersatz für die eigentlichen `.on()`/`.map()`-Abos.
+   * vom zuletzt empfangenen Ereignis — ein Mitglied, das die App
+   * schließt, sendet schlicht NICHTS mehr, es gibt also kein weiteres
+   * Ereignis, das onPresenceChange() erneut auslösen würde, damit die
+   * Anzeige auf "offline" nachzieht. Statt das mit einem pauschalen Poll
+   * zu übertünchen, plant diese Funktion sich selbst EIN einziges Mal neu:
+   * solange mindestens ein Mitglied gerade online ist, genau EIN
+   * setTimeout auf exakt den Moment, an dem das FRÜHESTE `lastSeen` das
+   * Stale-Fenster verlässt — ein neueres Ereignis (onPresenceChange() ruft
+   * renderPresence() erneut auf) ersetzt diesen Timer einfach, statt einen
+   * zweiten parallel laufen zu lassen. Reines UI-Nachziehen einer bereits
+   * reaktiv bekannten Zeitschranke, kein Ersatz für die eigentlichen
+   * `.on()`/`.map()`-Abos. Bei einem DM (ein Mitglied) UND einer Gruppe
+   * (mehrere) derselbe Code — nur die ANZEIGE unterscheidet sich (online/
+   * offline vs. "N Mitglieder, M online").
    */
-  function renderPresence(fp, roomId) {
-    clearTimeout(presenceStaleTimerByFp.get(fp));
-    presenceStaleTimerByFp.delete(fp);
+  function renderPresence(roomId) {
+    clearTimeout(presenceStaleTimerByRoom.get(roomId));
+    presenceStaleTimerByRoom.delete(roomId);
+    const room = roomById(roomId);
+    if (!room) return;
     qu.getPresence(roomId, { staleAfterMs: PRESENCE_STALE_MS }).then((presence) => {
-      const info = presence[fp];
-      const online = !!info?.online;
-      if (activeFp === fp) {
-        peerStatusEl.textContent = online ? 'online' : (info?.lastSeen ? `zuletzt online ${fmtTime(info.lastSeen)}` : 'offline');
+      const group = isGroupRoom(room);
+      const onlineCount = room.members.filter((fp) => presence[fp]?.online).length;
+      const online = group ? onlineCount > 0 : !!presence[room.members[0]]?.online;
+      if (activeRoomId === roomId) {
+        if (group) {
+          peerStatusEl.textContent = `${room.members.length + 1} Mitglieder${onlineCount ? `, ${onlineCount} online` : ''}`;
+        } else {
+          const info = presence[room.members[0]];
+          peerStatusEl.textContent = online ? 'online' : (info?.lastSeen ? `zuletzt online ${fmtTime(info.lastSeen)}` : 'offline');
+        }
         peerStatusEl.classList.toggle('online', online);
         const dot = peerAvatarEl.querySelector('.dot') ?? peerAvatarEl.appendChild(el('span', 'dot'));
         dot.classList.toggle('online', online);
       }
-      const listItem = contactListEl.querySelector(`[data-fp="${fp}"] .dot`);
+      const listItem = contactListEl.querySelector(`[data-room="${roomId}"] .dot`);
       if (listItem) listItem.classList.toggle('online', online);
 
-      if (online && info?.lastSeen) {
-        const dueInMs = info.lastSeen + PRESENCE_STALE_MS - Date.now();
-        presenceStaleTimerByFp.set(fp, setTimeout(() => renderPresence(fp, roomId), Math.max(0, dueInMs)));
+      const soonestDueInMs = room.members
+        .map((fp) => presence[fp])
+        .filter((info) => info?.online && info.lastSeen)
+        .map((info) => info.lastSeen + PRESENCE_STALE_MS - Date.now())
+        .reduce((min, v) => Math.min(min, v), Infinity);
+      if (Number.isFinite(soonestDueInMs)) {
+        presenceStaleTimerByRoom.set(roomId, setTimeout(() => renderPresence(roomId), Math.max(0, soonestDueInMs)));
       }
     }).catch(() => {});
   }
 
-  function renderTicks(fp) {
-    const receipts = receiptsByRoom.get(fp) ?? {};
+  function renderTicks(roomId) {
+    const receipts = receiptsByRoom.get(roomId) ?? {};
     const pendingIds = new Set(pendingDeliveries.map((p) => p.id));
     for (const li of messageListEl.querySelectorAll('[data-mine="1"]')) {
       const id = li.dataset.id;
@@ -892,43 +1085,55 @@ async function main() {
     }
   }
 
-  // --- Rendering: Kontaktliste ---
-  function renderContactList() {
+  // --- Rendering: Chat-/Raumliste (1:1 UND Gruppen, kein Unterschied im Markup außer dem Avatar-Fallback) ---
+  function renderRoomHeader(room) {
+    const name = roomDisplayName(room);
+    peerNameEl.textContent = name;
+    setAvatar(peerAvatarEl, name, roomDisplayAvatar(room));
+  }
+
+  function renderRoomList() {
     contactListEl.textContent = '';
-    const sorted = sortContactsByActivity(contacts);
+    const withNames = rooms.map((r) => ({ ...r, alias: roomDisplayName(r) }));
+    const sorted = sortByActivity(withNames);
     if (!sorted.length) {
       const empty = el('li', 'empty-list');
-      empty.append('Noch keine Kontakte. ');
+      empty.append('Noch keine Chats. ');
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.textContent = 'Jetzt hinzufügen';
+      btn.textContent = 'Jetzt starten';
       btn.addEventListener('click', () => openAddContactModal());
       empty.appendChild(btn);
       contactListEl.appendChild(empty);
       return;
     }
-    for (const c of sorted) {
-      const li = el('li', `contact${activeFp === c.fp ? ' active' : ''}`);
-      li.dataset.fp = c.fp;
+    for (const r of sorted) {
+      const li = el('li', `contact${activeRoomId === r.id ? ' active' : ''}`);
+      li.dataset.room = r.id;
       const avatar = el('div', 'avatar sm');
-      setAvatar(avatar, c.alias, c.avatar);
+      setAvatar(avatar, r.alias, roomDisplayAvatar(r));
       avatar.appendChild(el('span', 'dot'));
       li.appendChild(avatar);
-      if (!c.avatar) avatarFor(c.fp).then((url) => { if (url) setAvatar(avatar, c.alias, url); });
+      // Nur bei einem DM lohnt sich ein Nachladeversuch (roomDisplayAvatar()
+      // liest bei einer Gruppe schon `room.avatar` direkt, kein separater
+      // Netzwerk-Abruf nötig) — avatarFor() ist eine Pro-IDENTITÄT-Sache.
+      if (!isGroupRoom(r) && !roomDisplayAvatar(r)) {
+        avatarFor(r.members[0]).then((url) => { if (url) setAvatar(avatar, r.alias, url); });
+      }
 
       const body = el('div', 'contact-body');
       const top = el('div', 'contact-top');
-      top.appendChild(el('div', 'contact-name', c.alias));
-      top.appendChild(el('div', 'contact-time', c.lastTs ? fmtTime(c.lastTs) : ''));
+      top.appendChild(el('div', 'contact-name', r.alias));
+      top.appendChild(el('div', 'contact-time', r.lastTs ? fmtTime(r.lastTs) : ''));
       body.appendChild(top);
       const previewRow = el('div', 'contact-preview');
-      const previewText = c.lastTs ? `${c.lastMine ? 'Du: ' : ''}${c.lastPreview ?? ''}` : 'Noch keine Nachrichten';
+      const previewText = r.lastTs ? `${r.lastMine ? 'Du: ' : ''}${r.lastPreview ?? ''}` : 'Noch keine Nachrichten';
       previewRow.appendChild(el('div', 'contact-last', previewText));
-      if (c.unread) previewRow.appendChild(el('div', 'contact-unread', String(c.unread)));
+      if (r.unread) previewRow.appendChild(el('div', 'contact-unread', String(r.unread)));
       body.appendChild(previewRow);
       li.appendChild(body);
 
-      li.addEventListener('click', () => openContact(c.fp));
+      li.addEventListener('click', () => openRoom(r.id));
       contactListEl.appendChild(li);
     }
   }
@@ -1145,10 +1350,10 @@ async function main() {
 
   let lastRenderedDay = null; // von renderMessageList() (Neuaufbau) UND appendLiveMessage() (einzelne neue Nachricht) gemeinsam gepflegter Tages-Trenner-Zustand der aktuell angezeigten Liste
 
-  async function renderMessageList(fp) {
+  async function renderMessageList(roomId) {
     messageListEl.textContent = '';
     lastRenderedDay = null;
-    const list = messagesByRoom.get(fp) ?? [];
+    const list = messagesByRoom.get(roomId) ?? [];
     for (const q of list) {
       const dayLabel = fmtDayLabel(q.ts);
       if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
@@ -1159,7 +1364,7 @@ async function main() {
     // appendLiveMessage() unten, das das bewusst NUR tut, wenn man schon
     // dort war.
     messageListEl.scrollTop = messageListEl.scrollHeight;
-    renderTicks(fp);
+    renderTicks(roomId);
   }
 
   /** Hängt EINE neu eingetroffene Live-Nachricht an, statt die komplette Liste neu aufzubauen (kein erneutes Laden/Rendern schon vorhandener Anhänge bei jeder neuen Nachricht) — folgt dem Ende nur, wenn man vorher schon dort war (isNearBottom()), reißt also niemanden aus der gerade gelesenen älteren Historie. */
@@ -1169,51 +1374,59 @@ async function main() {
     if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
     messageListEl.appendChild(await buildMessageItem(q));
     if (stick) messageListEl.scrollTop = messageListEl.scrollHeight;
-    renderTicks(activeFp);
+    renderTicks(activeRoomId);
   }
 
-  async function openContact(fp) {
-    activeFp = fp;
-    const contact = contactByFp(fp);
-    peerNameEl.textContent = contact?.alias ?? shortFp(fp);
-    setAvatar(peerAvatarEl, contact?.alias ?? fp, contact?.avatar);
+  /** Öffnet einen bereits bekannten Raum (siehe rooms/ROOMS_KEY) — 1:1 UND Gruppe laufen durch denselben Code, nur roomDisplayName()/roomDisplayAvatar() unterscheiden zwischen beiden. */
+  async function openRoom(roomId) {
+    const room = roomById(roomId);
+    if (!room) return;
+    activeRoomId = roomId;
+    renderRoomHeader(room);
     peerStatusEl.textContent = '…';
     appEl.classList.add('chat-open');
     emptyStateEl.classList.remove('show');
     chatPanelEl.classList.remove('hidden-empty');
+    // Anrufe bleiben (vorerst) 1:1 — kein Gruppenanruf, siehe
+    // audioCallBtn/videoCallBtn's eigene Doku weiter unten.
+    audioCallBtn.hidden = isGroupRoom(room);
+    videoCallBtn.hidden = isGroupRoom(room);
+    groupMembersBtn.hidden = !isGroupRoom(room);
     // Direktlink für diesen Chat in die URL — Navigation dorthin (Teilen,
     // Lesezeichen, Vor-/Zurück-Button) siehe buildChatHashRoute()/
     // parseChatHash() (chat-lib.mjs) und den hashchange-Listener unten.
-    const targetHash = buildChatHashRoute(fp);
+    const targetHash = buildChatHashRoute(roomId);
     if (location.hash !== targetHash) location.hash = targetHash;
 
-    // Erst NACH ensureRoom() (das den Kontakt-Userspace synct, siehe dort)
-    // nach dem Avatar fragen — vorher lokal nachzusehen würde bei einem
-    // gerade erst hinzugefügten Kontakt fast immer "keiner" liefern, weil
-    // schlicht noch nichts synct war.
-    const roomId = await ensureRoom(fp);
-    if (!contact?.avatar) avatarFor(fp).then((url) => {
-      if (!url) return;
-      if (activeFp === fp) setAvatar(peerAvatarEl, contactByFp(fp)?.alias ?? fp, url);
-      renderContactList();
-    });
-    renderPresence(fp, roomId);
+    // Erst NACH ensureRoom() (das jedes Mitglieds Userspace synct, siehe
+    // dort) nach dem Avatar fragen — vorher lokal nachzusehen würde bei
+    // einem gerade erst hinzugefügten Kontakt fast immer "keiner" liefern,
+    // weil schlicht noch nichts synct war.
+    await ensureRoom(roomId);
+    if (!isGroupRoom(room) && !roomDisplayAvatar(room)) {
+      avatarFor(room.members[0]).then((url) => {
+        if (!url) return;
+        if (activeRoomId === roomId) renderRoomHeader(room);
+        renderRoomList();
+      });
+    }
+    renderPresence(roomId);
     renderMuteButton(roomId);
     renderEncryptionButton(roomId);
-    upsertContact(fp, { unread: 0 });
-    renderContactList();
-    await renderMessageList(fp);
+    upsertRoom(roomId, { unread: 0 });
+    renderRoomList();
+    await renderMessageList(roomId);
     await markActiveRead();
   }
 
-  function closeContact() {
-    activeFp = null;
+  function closeRoom() {
+    activeRoomId = null;
     appEl.classList.remove('chat-open');
     emptyStateEl.classList.add('show');
     chatPanelEl.classList.add('hidden-empty');
     if (location.hash) location.hash = '';
   }
-  backBtn.addEventListener('click', closeContact);
+  backBtn.addEventListener('click', closeRoom);
 
   /** Spiegelt den Stumm-Zustand des angegebenen Chats (Glocke durchgestrichen ja/nein) im mute-chat-btn — aufgerufen beim Öffnen eines Chats UND beim Umschalten selbst. */
   function renderMuteButton(roomId) {
@@ -1223,10 +1436,9 @@ async function main() {
     muteChatBtn.classList.toggle('active', muted);
   }
   muteChatBtn.addEventListener('click', () => {
-    const roomId = ensuredRoomIds.get(activeFp);
-    if (!roomId) return;
-    setRoomMuted(roomId, !isRoomMuted(roomId));
-    renderMuteButton(roomId);
+    if (!activeRoomId) return;
+    setRoomMuted(activeRoomId, !isRoomMuted(activeRoomId));
+    renderMuteButton(activeRoomId);
   });
 
   function renderEncryptionButton(roomId) {
@@ -1236,17 +1448,17 @@ async function main() {
     encryptionChatBtn.classList.toggle('active', !encrypted);
   }
   encryptionChatBtn.addEventListener('click', () => {
-    const roomId = ensuredRoomIds.get(activeFp);
-    if (!roomId) return;
+    if (!activeRoomId) return;
+    const roomId = activeRoomId;
     const currentlyEncrypted = isRoomEncrypted(roomId);
     // Nur beim AUSSCHALTEN warnen — wieder EINschalten ist immer die
     // sichere Richtung, braucht keine Bestätigung.
     if (currentlyEncrypted) {
-      const alias = contactByFp(activeFp)?.alias ?? shortFp(activeFp);
+      const name = roomDisplayName(roomById(roomId));
       const confirmed = confirm(
-        `Verschlüsselung für den Chat mit ${alias} deaktivieren?\n\n` +
-        'Deine künftigen Nachrichten in diesem Chat werden dann im Klartext übertragen und gespeichert — lesbar für den Relay-Betreiber und für jeden mit Lesezugriff auf diesen Raum, nicht mehr nur für euch beide. ' +
-        'Bereits gesendete Nachrichten bleiben unverändert (weiterhin verschlüsselt). Das gilt nur für DEINE Seite — die Gegenseite entscheidet unabhängig für ihre eigenen Nachrichten.',
+        `Verschlüsselung für den Chat mit ${name} deaktivieren?\n\n` +
+        'Deine künftigen Nachrichten in diesem Chat werden dann im Klartext übertragen und gespeichert — lesbar für den Relay-Betreiber und für jeden mit Lesezugriff auf diesen Raum, nicht mehr nur für die Mitglieder. ' +
+        'Bereits gesendete Nachrichten bleiben unverändert (weiterhin verschlüsselt). Das gilt nur für DEINE Seite — jedes andere Mitglied entscheidet unabhängig für seine eigenen Nachrichten.',
       );
       if (!confirmed) return;
     }
@@ -1310,9 +1522,9 @@ async function main() {
     }
 
     const matches = [];
-    for (const [fp, list] of messagesByRoom) {
+    for (const [roomId, list] of messagesByRoom) {
       for (const q of list) {
-        if (matchesSearch(q, query)) matches.push({ fp, q });
+        if (matchesSearch(q, query)) matches.push({ roomId, q });
       }
     }
     matches.sort((a, b) => b.q.ts - a.q.ts);
@@ -1324,22 +1536,26 @@ async function main() {
     }
     searchEmptyEl.hidden = true;
 
-    for (const { fp, q } of matches.slice(0, SEARCH_RESULT_LIMIT)) {
-      const contact = contactByFp(fp);
-      const name = contact?.alias ?? shortFp(fp);
+    for (const { roomId, q } of matches.slice(0, SEARCH_RESULT_LIMIT)) {
+      const room = roomById(roomId);
+      // Bei einer Gruppe zusätzlich zum Raumnamen der tatsächliche
+      // Absender — bei einem DM ist das ohnehin immer dieselbe Person wie
+      // der Raum selbst, keine zusätzliche Zeile nötig.
+      const name = roomDisplayName(room);
+      const senderName = isGroupRoom(room) ? (contactByFp(q.writer)?.alias ?? shortFp(q.writer)) : name;
       const li = el('li', 'search-result');
       const avatar = el('div', 'avatar sm');
-      setAvatar(avatar, name, contact?.avatar);
+      setAvatar(avatar, name, roomDisplayAvatar(room));
       li.appendChild(avatar);
       const body = el('div', 'search-result-body');
       const top = el('div', 'search-result-top');
-      top.appendChild(el('span', 'search-result-name', name));
+      top.appendChild(el('span', 'search-result-name', isGroupRoom(room) ? `${name} · ${senderName}` : name));
       top.appendChild(el('span', 'search-result-time', `${fmtDayLabel(q.ts)} · ${fmtTime(q.ts)}`));
       body.appendChild(top);
       const text = q.value?.text || (q.refs?.length ? '📎 Anhang' : '');
       body.appendChild(buildSnippet(text, query));
       li.appendChild(body);
-      li.addEventListener('click', () => openSearchResult(fp, q.id));
+      li.addEventListener('click', () => openSearchResult(roomId, q.id));
       searchResultsEl.appendChild(li);
     }
   }
@@ -1356,9 +1572,9 @@ async function main() {
     bubble?.classList.add('jump-highlight');
   }
 
-  async function openSearchResult(fp, messageId) {
+  async function openSearchResult(roomId, messageId) {
     closeSearch();
-    if (activeFp !== fp) await openContact(fp);
+    if (activeRoomId !== roomId) await openRoom(roomId);
     scrollToMessage(messageId);
   }
 
@@ -1386,58 +1602,81 @@ async function main() {
   document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !searchOverlay.hidden) closeSearch(); });
 
   /**
-   * Löscht einen Chat nur LOKAL — der Nachrichtenverlauf bleibt für den
-   * Kontakt selbst unangetastet (QU ist ein append-only Log, Whitepaper
-   * §7; "löschen" heißt hier "wir hören auf hinzuschauen", nicht "die
-   * Vergangenheit verschwindet für alle Beteiligten", genau wie bei
-   * jedem anderen 1:1-Chat auch). Räumt alles auf, was ensureRoom() für
-   * diesen Kontakt angelegt hat: laufende Live-Abos (unsubsByRoom),
-   * Presence-Heartbeat, und den gesamten Pro-Kontakt-Zustand — ein
-   * erneutes Öffnen (z. B. über einen Direktlink oder eine neue
-   * Nachricht vom Kontakt) ruft ensureRoom() einfach wieder frisch auf.
+   * Löscht einen Chat (1:1 ODER Gruppe) nur LOKAL — der Nachrichtenverlauf
+   * bleibt für jedes andere Mitglied unangetastet (QU ist ein append-only
+   * Log, Whitepaper §7; "löschen" heißt hier "wir hören auf
+   * hinzuschauen", nicht "die Vergangenheit verschwindet für alle
+   * Beteiligten"). Räumt alles auf, was ensureRoom() für diesen Raum
+   * angelegt hat: laufende Live-Abos (unsubsByRoom), Presence-Heartbeat,
+   * und den gesamten Pro-Raum-Zustand — ein erneutes Öffnen (z. B. über
+   * einen Direktlink oder eine neue Nachricht in diesem Raum) ruft
+   * ensureRoom() einfach wieder frisch auf. Rührt bewusst NICHT das
+   * Adressbuch (contacts) an — ein Kontakt kann in anderen Chats
+   * vorkommen, sein Alias/Avatar bleibt dort weiterhin gebraucht.
    */
-  function deleteContact(fp) {
-    stopHeartbeatByRoom.get(fp)?.();
-    stopHeartbeatByRoom.delete(fp);
-    for (const off of unsubsByRoom.get(fp) ?? []) off();
-    unsubsByRoom.delete(fp);
-    messagesByRoom.delete(fp);
-    seenIdsByRoom.delete(fp);
-    receiptsByRoom.delete(fp);
-    ensuredRoomIds.delete(fp);
-    clearTimeout(presenceStaleTimerByFp.get(fp));
-    presenceStaleTimerByFp.delete(fp);
-    avatarCache.delete(fp);
-    aliasCache.delete(fp);
-    removeContact(fp);
-    if (activeFp === fp) closeContact();
-    renderContactList();
+  function deleteRoom(roomId) {
+    stopHeartbeatByRoom.get(roomId)?.();
+    stopHeartbeatByRoom.delete(roomId);
+    for (const off of unsubsByRoom.get(roomId) ?? []) off();
+    unsubsByRoom.delete(roomId);
+    messagesByRoom.delete(roomId);
+    seenIdsByRoom.delete(roomId);
+    receiptsByRoom.delete(roomId);
+    ensuredRooms.delete(roomId);
+    clearTimeout(presenceStaleTimerByRoom.get(roomId));
+    presenceStaleTimerByRoom.delete(roomId);
+    removeRoomEntry(roomId);
+    if (activeRoomId === roomId) closeRoom();
+    renderRoomList();
   }
   $('delete-chat-btn').addEventListener('click', () => {
-    if (!activeFp) return;
-    const alias = contactByFp(activeFp)?.alias ?? shortFp(activeFp);
-    if (!confirm(`Chat mit ${alias} löschen?\n\nDer Nachrichtenverlauf bleibt beim Kontakt erhalten, wird hier aber entfernt.`)) return;
-    deleteContact(activeFp);
+    if (!activeRoomId) return;
+    const name = roomDisplayName(roomById(activeRoomId));
+    if (!confirm(`Chat "${name}" löschen?\n\nDer Nachrichtenverlauf bleibt bei den anderen Mitgliedern erhalten, wird hier aber entfernt.`)) return;
+    deleteRoom(activeRoomId);
   });
 
-  /** Ein Chat wird über seinen Direktlink (`#<fingerprint>`, siehe buildChatHashRoute()) geöffnet — im Gegensatz zum Einladungslink (`#add=...`) ohne Zwischenschritt: die Kontaktliste wird bei Bedarf (Alias per qu.getProfile()) automatisch ergänzt, genau wie handleInboxRequest() es für einen remote gestarteten Chat schon tut. */
-  async function openContactByHash(fp) {
-    if (fp === qu.fingerprint) return;
-    if (!contactByFp(fp)) {
-      let alias = shortFp(fp);
-      try { alias = (await qu.getProfile(fp)).alias ?? alias; } catch { /* Profil (noch) nicht synct — Fallback bleibt der Fingerprint, aliasFor()/ensureRoom() holen es später live nach */ }
-      upsertContact(fp, { alias, lastTs: 0, unread: 0 });
-      renderContactList();
+  /**
+   * Ein Chat wird über seinen Direktlink geöffnet (`#room=<roomId>`,
+   * siehe buildChatHashRoute()/parseChatHash()) — im Gegensatz zum
+   * Einladungslink (`#add=...`) ohne Zwischenschritt. Ein bereits
+   * bekannter Raum öffnet direkt. `legacyFp` (ein alter, blanker
+   * Fingerprint-Link von VOR diesem Umbau, als ein Chat-Link noch direkt
+   * den Kontakt statt den Raum adressierte) wird weiterhin auf den
+   * entsprechenden DM aufgelöst, samt automatischer Kontaktanlage — genau
+   * wie zuvor, damit alte Lesezeichen/geteilte Links nicht ins Leere laufen.
+   * Ein UNBEKANNTER `roomId` (z. B. ein an niemanden gerichteter Link)
+   * kann dagegen nicht blind geöffnet werden — dafür fehlt die
+   * Mitgliederliste; das passiert nur über handleInboxRequest() (jemand
+   * hat uns eingeladen) oder startDm()/createGroupRoom() (wir starten
+   * selbst einen neuen Chat).
+   */
+  async function openRoomByHash(parsed) {
+    if (parsed.legacyFp) {
+      const fp = parsed.legacyFp;
+      if (fp === qu.fingerprint) return;
+      if (!contactByFp(fp)) {
+        let alias = shortFp(fp);
+        try { alias = (await qu.getProfile(fp)).alias ?? alias; } catch { /* Profil (noch) nicht synct — Fallback bleibt der Fingerprint, aliasFor()/ensureRoom() holen es später live nach */ }
+        upsertContact(fp, { alias });
+      }
+      const roomId = await startDm(fp);
+      openRoom(roomId);
+      return;
     }
-    openContact(fp);
+    if (parsed.roomId && roomById(parsed.roomId)) openRoom(parsed.roomId);
   }
 
-  // Direktlinks/Vor-Zurück: `#<fingerprint>` öffnet den Chat, ein leerer
+  // Direktlinks/Vor-Zurück: `#room=<roomId>` öffnet den Chat, ein leerer
   // Hash (z. B. über den Zurück-Button oder Browser-"Zurück") schließt ihn.
   window.addEventListener('hashchange', () => {
-    const chatFp = parseChatHash(location.hash);
-    if (chatFp) { if (activeFp !== chatFp) openContactByHash(chatFp); return; }
-    if (!location.hash && activeFp) closeContact();
+    const parsed = parseChatHash(location.hash);
+    if (parsed) {
+      const roomId = parsed.roomId ?? (parsed.legacyFp ? dmRoomId(qu.fingerprint, parsed.legacyFp) : null);
+      if (roomId && activeRoomId !== roomId) openRoomByHash(parsed);
+      return;
+    }
+    if (!location.hash && activeRoomId) closeRoom();
   });
 
   // --- Senden ---
@@ -1464,12 +1703,12 @@ async function main() {
 
   composer.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    if (!activeFp) return;
+    if (!activeRoomId) return;
     const text = textInput.value.trim();
     const files = pendingFiles;
     if (!text && !files.length) return;
-    const roomId = ensuredRoomIds.get(activeFp);
-    const fp = activeFp;
+    const roomId = activeRoomId;
+    const room = roomById(roomId);
     sendBtn.disabled = true;
     try {
       const attachments = [];
@@ -1484,9 +1723,12 @@ async function main() {
       // statt der Empfängerliste, wenn diese Seite für DIESEN Chat
       // Verschlüsselung bewusst abgeschaltet hat (isRoomEncrypted() oben,
       // per mute-chat-btn-Pendant im Header) — session.js's eigene Doku
-      // nennt genau das den vorgesehenen expliziten Opt-out.
+      // nennt genau das den vorgesehenen expliziten Opt-out. Alle
+      // Mitglieder (nicht mehr nur EIN Peer) — bei einem DM ist das
+      // exakt der bisherige Zwei-Empfänger-Fall, bei einer Gruppe sind
+      // es entsprechend mehr.
       const sent = await qu.sendMessage(roomId, {
-        text, attachments, encryptFor: isRoomEncrypted(roomId) ? [qu.fingerprint, activeFp] : null,
+        text, attachments, encryptFor: isRoomEncrypted(roomId) ? [qu.fingerprint, ...room.members] : null,
         // Fortschritt für lokales Verschlüsseln/Zerstückeln GROSSER Anhänge
         // (z. B. ein Video) — ohne das sah ein größerer Upload nach einem
         // hängenden Sendevorgang aus, weil die UI vorher bis zum Schluss
@@ -1508,10 +1750,10 @@ async function main() {
       // "Beim Relay angekommen?"-Status: als unbestätigt eintragen (auch
       // persistiert, siehe PENDING_DELIVERY_KEY) und im Hintergrund prüfen
       // — siehe confirmDelivery()'s eigene Doku oben für das Wie/Warum.
-      const entry = { id: sent.qubit.id, ts: sent.qubit.ts, roomId, fp, refs: sent.refs };
+      const entry = { id: sent.qubit.id, ts: sent.qubit.ts, roomId, refs: sent.refs };
       pendingDeliveries.push(entry);
       savePendingDeliveries(pendingDeliveries);
-      if (activeFp === fp) renderTicks(fp);
+      if (activeRoomId === roomId) renderTicks(roomId);
       confirmDelivery(entry).catch(() => {});
     } catch (e) {
       console.error('[chat] send failed:', e);
@@ -1740,31 +1982,174 @@ async function main() {
     const fp = normalizeFingerprint(contactFpInput.value);
     if (!fp) { addContactError.textContent = 'Ungültiger Fingerprint (24 Hex-Zeichen erwartet).'; return; }
     if (fp === qu.fingerprint) { addContactError.textContent = 'Das ist dein eigener Fingerprint.'; return; }
-    if (contactByFp(fp)) { addContactModal.hidden = true; openContact(fp); return; }
-    let alias = contactAliasInput.value.trim();
-    if (!alias) {
-      try { alias = (await qu.getProfile(fp)).alias ?? shortFp(fp); } catch { alias = shortFp(fp); }
+    if (!contactByFp(fp)) {
+      let alias = contactAliasInput.value.trim();
+      if (!alias) {
+        try { alias = (await qu.getProfile(fp)).alias ?? shortFp(fp); } catch { alias = shortFp(fp); }
+      }
+      upsertContact(fp, { alias });
     }
-    upsertContact(fp, { alias, lastTs: 0, unread: 0 });
-    renderContactList();
     addContactModal.hidden = true;
-    openContact(fp);
+    const roomId = await startDm(fp);
+    openRoom(roomId);
+  });
+
+  // --- Neue-Gruppe-Modal ---
+  const newGroupModal = $('new-group-modal');
+  const newGroupNameInput = $('new-group-name-input');
+  const newGroupContactListEl = $('new-group-contact-list');
+  const newGroupFpInput = $('new-group-fp-input');
+  const newGroupError = $('new-group-error');
+  let newGroupExtraFps = []; // per Fingerprint hinzugefügte Mitglieder, die (noch) kein gespeicherter Kontakt sind
+  // Die Auswahl lebt als eigener State (nicht nur als DOM-Checkbox-Zustand)
+  // — renderNewGroupMemberPicker() baut die Liste bei JEDEM "Fingerprint
+  // hinzufügen" komplett neu auf (frische <input>-Elemente), ein bereits
+  // angehaktes Kontakt-Kästchen würde dabei sonst stillschweigend wieder
+  // verlieren, was man vorher ausgewählt hatte.
+  let newGroupSelectedFps = new Set();
+
+  function renderNewGroupMemberPicker() {
+    newGroupContactListEl.textContent = '';
+    const candidates = [
+      ...contacts.map((c) => ({ fp: c.fp, label: c.alias })),
+      ...newGroupExtraFps.filter((fp) => !contactByFp(fp)).map((fp) => ({ fp, label: shortFp(fp) })),
+    ];
+    if (!candidates.length) {
+      newGroupContactListEl.appendChild(el('li', 'empty-hint', 'Noch keine Kontakte — per Fingerprint unten hinzufügen.'));
+      return;
+    }
+    for (const { fp, label } of candidates) {
+      const li = el('li');
+      const labelEl = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = fp;
+      checkbox.checked = newGroupSelectedFps.has(fp);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) newGroupSelectedFps.add(fp); else newGroupSelectedFps.delete(fp);
+      });
+      labelEl.appendChild(checkbox);
+      labelEl.append(label);
+      li.appendChild(labelEl);
+      newGroupContactListEl.appendChild(li);
+    }
+  }
+
+  function openNewGroupModal() {
+    newGroupNameInput.value = '';
+    newGroupFpInput.value = '';
+    newGroupError.textContent = '';
+    newGroupExtraFps = [];
+    newGroupSelectedFps = new Set();
+    renderNewGroupMemberPicker();
+    newGroupModal.hidden = false;
+    newGroupNameInput.focus();
+  }
+  newGroupBtn.addEventListener('click', openNewGroupModal);
+  $('new-group-cancel-btn').addEventListener('click', () => { newGroupModal.hidden = true; });
+  newGroupModal.addEventListener('click', (ev) => { if (ev.target === newGroupModal) newGroupModal.hidden = true; });
+  $('new-group-fp-add-btn').addEventListener('click', () => {
+    const fp = normalizeFingerprint(newGroupFpInput.value);
+    if (!fp) { newGroupError.textContent = 'Ungültiger Fingerprint (24 Hex-Zeichen erwartet).'; return; }
+    if (fp === qu.fingerprint) { newGroupError.textContent = 'Das ist dein eigener Fingerprint.'; return; }
+    newGroupFpInput.value = '';
+    newGroupError.textContent = '';
+    if (!contactByFp(fp) && !newGroupExtraFps.includes(fp)) newGroupExtraFps.push(fp);
+    newGroupSelectedFps.add(fp); // frisch hinzugefügt heißt schon ausgewählt — kein zusätzlicher Klick nötig
+    renderNewGroupMemberPicker();
+  });
+  $('new-group-save-btn').addEventListener('click', async () => {
+    const name = newGroupNameInput.value.trim();
+    if (!name) { newGroupError.textContent = 'Bitte einen Gruppennamen eingeben.'; return; }
+    const selected = [...newGroupSelectedFps];
+    if (!selected.length) { newGroupError.textContent = 'Bitte mindestens ein Mitglied auswählen.'; return; }
+    newGroupModal.hidden = true;
+    for (const fp of selected) {
+      if (!contactByFp(fp)) upsertContact(fp, { alias: shortFp(fp) });
+    }
+    const roomId = await createGroupRoom(name, selected);
+    openRoom(roomId);
+  });
+
+  // --- Gruppendetails-Modal (Umbenennen, Mitglieder hinzufügen/entfernen) ---
+  const groupDetailsModal = $('group-details-modal');
+  const groupNameInput = $('group-name-input');
+  const groupMemberListEl = $('group-member-list');
+  const groupAddMemberInput = $('group-add-member-input');
+  const groupDetailsError = $('group-details-error');
+
+  function renderGroupMemberList(roomId) {
+    groupMemberListEl.textContent = '';
+    const room = roomById(roomId);
+    for (const fp of room?.members ?? []) {
+      const li = el('li');
+      const avatar = el('div', 'avatar sm');
+      const alias = contactByFp(fp)?.alias ?? shortFp(fp);
+      setAvatar(avatar, alias, contactByFp(fp)?.avatar);
+      li.appendChild(avatar);
+      li.appendChild(el('div', 'member-name', alias));
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'member-remove-btn';
+      removeBtn.title = 'Aus der Gruppe entfernen';
+      removeBtn.textContent = '×';
+      removeBtn.addEventListener('click', async () => {
+        await removeRoomMember(roomId, fp);
+        renderGroupMemberList(roomId);
+      });
+      li.appendChild(removeBtn);
+      groupMemberListEl.appendChild(li);
+    }
+    if (!room?.members?.length) groupMemberListEl.appendChild(el('li', 'empty-hint', 'Keine weiteren Mitglieder.'));
+  }
+
+  function openGroupDetailsModal() {
+    if (!activeRoomId) return;
+    const room = roomById(activeRoomId);
+    if (!room || !isGroupRoom(room)) return;
+    groupNameInput.value = room.name ?? '';
+    groupAddMemberInput.value = '';
+    groupDetailsError.textContent = '';
+    renderGroupMemberList(activeRoomId);
+    groupDetailsModal.hidden = false;
+  }
+  groupMembersBtn.addEventListener('click', openGroupDetailsModal);
+  $('group-details-close-btn').addEventListener('click', () => { groupDetailsModal.hidden = true; });
+  groupDetailsModal.addEventListener('click', (ev) => { if (ev.target === groupDetailsModal) groupDetailsModal.hidden = true; });
+  $('group-rename-save-btn').addEventListener('click', async () => {
+    if (!activeRoomId) return;
+    const name = groupNameInput.value.trim();
+    if (!name) { groupDetailsError.textContent = 'Bitte einen Gruppennamen eingeben.'; return; }
+    groupDetailsError.textContent = '';
+    await renameGroupRoom(activeRoomId, name).catch((e) => { groupDetailsError.textContent = `Fehler: ${e.message}`; });
+  });
+  $('group-add-member-btn').addEventListener('click', async () => {
+    if (!activeRoomId) return;
+    const fp = normalizeFingerprint(groupAddMemberInput.value);
+    if (!fp) { groupDetailsError.textContent = 'Ungültiger Fingerprint (24 Hex-Zeichen erwartet).'; return; }
+    if (fp === qu.fingerprint) { groupDetailsError.textContent = 'Das ist dein eigener Fingerprint.'; return; }
+    const room = roomById(activeRoomId);
+    if (room.members.includes(fp)) { groupDetailsError.textContent = 'Ist bereits Mitglied.'; return; }
+    groupDetailsError.textContent = '';
+    groupAddMemberInput.value = '';
+    await addRoomMember(activeRoomId, fp).catch((e) => { groupDetailsError.textContent = `Fehler: ${e.message}`; });
+    renderGroupMemberList(activeRoomId);
   });
 
   // Einladungslink (#add=<fingerprint>) direkt beim Laden verarbeiten —
   // history.replaceState() räumt den `#add=...`-Hash IMMER zuerst weg
   // (auch im Modal-Fall, in dem noch gar kein Chat-Hash gesetzt wird),
-  // damit ein anschließendes openContact() unten nicht seinen eigenen,
-  // gerade erst gesetzten Chat-Hash (`#<fingerprint>`) wieder verliert.
+  // damit ein anschließendes openRoom() unten nicht seinen eigenen, gerade
+  // erst gesetzten Chat-Hash (`#room=...`) wieder verliert.
   const invitedFp = parseInviteHash(location.hash);
   if (invitedFp && invitedFp !== qu.fingerprint) {
     history.replaceState(null, '', location.pathname);
     if (!contactByFp(invitedFp)) openAddContactModal(invitedFp);
-    else openContact(invitedFp);
+    else startDm(invitedFp).then(openRoom);
   } else {
-    // Direktlink zu einem Chat (#<fingerprint>, siehe buildChatHashRoute()).
-    const chatFp = parseChatHash(location.hash);
-    if (chatFp && chatFp !== qu.fingerprint) openContactByHash(chatFp);
+    // Direktlink zu einem Chat (#room=<roomId>, siehe buildChatHashRoute()).
+    const parsed = parseChatHash(location.hash);
+    if (parsed) openRoomByHash(parsed);
   }
 
   // --- Anruf (Audio/Video über WebRTC) ---
@@ -1970,8 +2355,19 @@ async function main() {
     }
   }
 
-  audioCallBtn.addEventListener('click', () => { if (activeFp) startCall(activeFp, 'audio'); });
-  videoCallBtn.addEventListener('click', () => { if (activeFp) startCall(activeFp, 'video'); });
+  // Anrufe bleiben (vorerst) 1:1 — ein Gruppenanruf bräuchte eine
+  // Mehrparteien-WebRTC-Signalisierung, die dieser Umbau nicht anfasst;
+  // die Buttons selbst sind für eine Gruppe schon per CSS/renderCallButtons()
+  // (siehe openRoom()) ausgeblendet, dieser Guard ist nur die zweite,
+  // vom Markup unabhängige Absicherung.
+  audioCallBtn.addEventListener('click', () => {
+    const room = roomById(activeRoomId);
+    if (room && !isGroupRoom(room)) startCall(room.members[0], 'audio');
+  });
+  videoCallBtn.addEventListener('click', () => {
+    const room = roomById(activeRoomId);
+    if (room && !isGroupRoom(room)) startCall(room.members[0], 'video');
+  });
 
   callAcceptBtn.addEventListener('click', async () => {
     if (!activeCall || activeCall.direction !== 'incoming') return;
@@ -2068,8 +2464,10 @@ async function main() {
         }, RING_TIMEOUT_MS),
       };
       renderCallUI();
-      const roomId = ensuredRoomIds.get(fromFp);
-      if (!roomId || !isRoomMuted(roomId)) startRingtone();
+      // Calls bleiben bewusst 1:1 (peerFp), auch nach dem Umbau auf Räume
+      // — dmRoomId() ist eine reine Funktion, funktioniert also auch ohne
+      // dass der DM-Raum mit `fromFp` hier schon lokal bekannt/ensureRoom()t ist.
+      if (!isRoomMuted(dmRoomId(qu.fingerprint, fromFp))) startRingtone();
     });
     onRoutedEvent(currentChannel, 'call-decline', (msg) => {
       if (activeCall?.peerFp === msg.from) endCall(msg.payload?.reason === 'busy' ? 'busy' : 'declined', { notifyPeer: false });
@@ -2080,11 +2478,13 @@ async function main() {
   }
 
   // --- Start ---
-  renderContactList();
-  for (const c of contacts) {
-    ensureRoom(c.fp)
-      .then(() => { if (!c.avatar) avatarFor(c.fp).then((url) => { if (url) renderContactList(); }); })
-      .catch((e) => console.error('[chat] ensureRoom failed:', c.fp, e));
+  renderRoomList();
+  for (const r of rooms) {
+    ensureRoom(r.id)
+      .then(() => {
+        if (!isGroupRoom(r) && !roomDisplayAvatar(r)) avatarFor(r.members[0]).then((url) => { if (url) renderRoomList(); });
+      })
+      .catch((e) => console.error('[chat] ensureRoom failed:', r.id, e));
   }
   window.addEventListener('beforeunload', () => { for (const stop of stopHeartbeatByRoom.values()) stop(); });
   // Zusätzlich zu 'beforeunload' — das feuert auf Mobile-Browsern oft gar

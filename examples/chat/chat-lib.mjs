@@ -1,19 +1,23 @@
-// Beispiel 7: ein 1:1-Privat-Chat ("Kontakt = Fingerprint") auf Basis der
-// bereits im Core vorhandenen Chat-Primitive (src/modules/chat.js:
-// sendMessage/onMessage, markRead/getReadReceipts, setPresence/getPresence).
-// Diese Datei enthält nur, was OHNE `window`/`localStorage` testbar ist:
-// Raum-Adressierung, Formatierung, Link-Erkennung, Einladungslinks. Der
-// Browser-Teil (Identität, Kontaktliste in localStorage, Lightbox, Emoji-
-// Picker, DOM-Rendering) liegt in app.mjs — derselbe Schnitt wie überall
-// sonst im Repo (space-app-lib.mjs vs. space-app-browser.js).
+// Beispiel 7: ein privater Chat (1:1 UND Gruppe — ein "Chat" ist ein Raum
+// mit einem ODER MEHREREN Mitgliedern, kein Sonderfall pro Mitgliederzahl)
+// auf Basis der bereits im Core vorhandenen Chat-Primitive
+// (src/modules/chat.js: sendMessage/onMessage, markRead/getReadReceipts,
+// setPresence/getPresence). Diese Datei enthält nur, was OHNE `window`/
+// `localStorage` testbar ist: Raum-Adressierung, Formatierung,
+// Link-Erkennung, Einladungslinks. Der Browser-Teil (Identität,
+// Kontakt-/Raumliste in localStorage, Lightbox, Emoji-Picker,
+// DOM-Rendering) liegt in app.mjs — derselbe Schnitt wie überall sonst im
+// Repo (space-app-lib.mjs vs. space-app-browser.js).
 //
-// Kernidee: ein 1:1-Raum ist derselbe generische Space wie ein Forum-Board
-// (Whitepaper §8), nur mit EINER aus beiden Fingerprints deterministisch
-// abgeleiteten Id statt einer zufälligen (modules/spaces.js's
-// `createSpaceAt(id, opts)`) — so finden zwei Kontakte denselben Raum,
-// ohne vorher einen Link austauschen zu müssen; nur der jeweils andere
-// Fingerprint (ohnehin Voraussetzung, um überhaupt schreiben zu dürfen)
-// wird gebraucht.
+// Kernidee: EIN Raum ist derselbe generische Space wie ein Forum-Board
+// (Whitepaper §8), egal ob 1:1 oder Gruppe — nur die Art, wie seine Id
+// entsteht, unterscheidet sich: ein 1:1 (dmRoomId()) leitet sie
+// deterministisch aus den zwei beteiligten Fingerprints ab (so finden
+// zwei Kontakte denselben Raum, ohne vorher einen Link austauschen zu
+// müssen), eine Gruppe (groupRoomId()) bekommt eine zufällige Id wie
+// jeder andere neu erstellte Space (modules/spaces.js's
+// `createSpaceAt(id, opts)`), weil ihre Mitgliederliste sich über die
+// Zeit ändern kann und es daher keine feste "Ableitung" gäbe.
 
 const FINGERPRINT_RE = /^[0-9a-f]{24}$/i;
 
@@ -41,6 +45,18 @@ export function dmRoomId(fingerprintA, fingerprintB) {
   if (!a || !b) throw new Error('[chat-lib] dmRoomId() braucht zwei gültige Fingerprints');
   const [x, y] = [a, b].sort();
   return `dm-${x}-${y}`;
+}
+
+/**
+ * Zufällige Gruppen-Raum-Id. Anders als dmRoomId() gibt es hier keine aus
+ * den Mitgliedern ABLEITBARE Id — eine Gruppe hat keine feste
+ * Mitgliederzahl (die ändert sich ja gerade durch Hinzufügen/Entfernen),
+ * es gibt also kein "die zwei/drei Fingerprints sortiert" wie bei einem
+ * DM. Ein zufälliger, eindeutiger Bezeichner wie bei jedem anderen neu
+ * erstellten Space (modules/spaces.js's createSpace()).
+ */
+export function groupRoomId() {
+  return `grp-${crypto.randomUUID()}`;
 }
 
 /**
@@ -135,9 +151,15 @@ export function mediaKind(mime) {
   return 'file';
 }
 
-/** Kontakte nach letzter Aktivität absteigend (zuletzt geschrieben zuerst) — `lastTs` fehlend/0 landet ans Ende, stabil nach Alias sortiert. */
-export function sortContactsByActivity(contacts) {
-  return contacts.slice().sort((a, b) => (b.lastTs ?? 0) - (a.lastTs ?? 0) || (a.alias ?? '').localeCompare(b.alias ?? ''));
+/**
+ * Chats (Räume — 1:1 UND Gruppen, siehe app.mjs's `rooms`) nach letzter
+ * Aktivität absteigend (zuletzt geschrieben zuerst) — `lastTs` fehlend/0
+ * landet ans Ende, stabil nach `alias` sortiert (bei einem Raum: sein
+ * Anzeigename, von app.mjs vor dem Aufruf berechnet — ein DM zeigt den
+ * Namen des einen anderen Mitglieds, eine Gruppe ihren eigenen Namen).
+ */
+export function sortByActivity(list) {
+  return list.slice().sort((a, b) => (b.lastTs ?? 0) - (a.lastTs ?? 0) || (a.alias ?? '').localeCompare(b.alias ?? ''));
 }
 
 /** Baut einen teilbaren Einladungslink (`<baseUrl>#add=<fingerprint>`) — die "Kontakt per Fingerprint hinzufügen"-Bequemlichkeit oben drauf: Fingerprint bleibt die eigentliche Identität, der Link ist nur Transportmittel. */
@@ -155,22 +177,38 @@ export function parseInviteHash(hash) {
 }
 
 /**
- * Der Direktlink zu EINEM Chat: `#<fingerprint>` — bewusst ein anderes
- * Format als buildInviteLink()s `#add=<fingerprint>` (eindeutig am
- * `add=`-Präfix unterscheidbar, siehe parseChatHash()/parseInviteHash()):
- * eine Einladung fragt erst nach ("Kontakt hinzufügen?"), ein Chat-Link
- * öffnet direkt — dieselbe Unterscheidung wie überall sonst im Repo
- * zwischen "ansehen" und "einer Aktion zustimmen".
+ * Der Direktlink zu EINEM Chat: `#room=<roomId>` — verdrahtet mit dem
+ * SPACE (roomId), NICHT (mehr) mit einer Kontakt-Fingerprint: ein Chat
+ * ist ein Raum mit einem ODER MEHREREN Mitgliedern (dmRoomId() ist nur
+ * der Spezialfall mit genau einem anderen Mitglied), die Adressierung
+ * muss also den Raum selbst benennen. Bewusst ein anderes Format als
+ * buildInviteLink()s `#add=<fingerprint>` (eindeutig am `add=`-Präfix
+ * unterscheidbar, siehe parseChatHash()/parseInviteHash()): eine
+ * Einladung fragt erst nach ("Kontakt hinzufügen?"), ein Chat-Link öffnet
+ * direkt.
  */
-export function buildChatHashRoute(fingerprint) {
-  const fp = normalizeFingerprint(fingerprint);
-  if (!fp) throw new Error('[chat-lib] buildChatHashRoute() braucht einen gültigen Fingerprint');
-  return `#${fp}`;
+export function buildChatHashRoute(roomId) {
+  if (!roomId) throw new Error('[chat-lib] buildChatHashRoute() braucht eine Raum-Id');
+  return `#room=${encodeURIComponent(roomId)}`;
 }
 
-/** Gegenstück zu buildChatHashRoute() — liest einen blanken Fingerprint-Hash (NICHT `#add=...`, das bleibt parseInviteHash()s Sache), `null` falls leer/kein gültiger Fingerprint. */
+/**
+ * Gegenstück zu buildChatHashRoute(). `{ roomId }` für das aktuelle
+ * `#room=...`-Format. Ein blanker 24-Hex-Zeichen-Fingerprint (das Format
+ * VOR diesem Umbau, als ein Chat-Link noch direkt den Kontakt statt den
+ * Raum adressierte) wird weiterhin als `{ legacyFp }` erkannt, damit
+ * alte Lesezeichen/geteilte Links nicht ins Leere laufen — app.mjs löst
+ * das auf den (ggf. neu erstellten) DM-Raum mit dieser Person auf.
+ * `null`, wenn der Hash leer ist oder keinem der beiden Formate
+ * entspricht (u. a. `#add=...`, das bleibt parseInviteHash()s Sache).
+ */
 export function parseChatHash(hash) {
   const raw = String(hash ?? '').replace(/^#/, '');
   if (!raw || raw.startsWith('add=')) return null;
-  return normalizeFingerprint(raw);
+  const m = /^room=(.+)$/.exec(raw);
+  if (m) {
+    try { return { roomId: decodeURIComponent(m[1]) }; } catch { return null; }
+  }
+  const legacyFp = normalizeFingerprint(raw);
+  return legacyFp ? { legacyFp } : null;
 }
