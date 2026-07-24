@@ -1293,15 +1293,28 @@ async function main() {
       const ts = Number(li.dataset.ts);
       const read = Object.entries(receipts).some(([reader, upTo]) => reader !== qu.fingerprint && upTo >= ts);
       const tick = li.querySelector('.tick');
-      if (!tick) continue;
-      // Reihenfolge: gelesen schlägt immer "noch nicht beim Relay
-      // bestätigt" (ein Empfänger, der es gelesen hat, hat es zwangsläufig
-      // auch empfangen — sonst könnte er es gar nicht gelesen haben,
-      // selbst wenn UNSERE eigene waitUntilReplicated()-Prüfung noch
-      // aussteht/fehlgeschlagen ist).
-      if (read) { tick.textContent = '✓✓'; tick.classList.add('read'); tick.classList.remove('pending'); }
-      else if (pendingIds.has(id) && !deliveredMsgIds.has(id)) { tick.textContent = '🕐'; tick.classList.remove('read'); tick.classList.add('pending'); }
-      else { tick.textContent = '✓'; tick.classList.remove('read', 'pending'); }
+      const stillPending = pendingIds.has(id) && !deliveredMsgIds.has(id);
+      if (tick) {
+        // Reihenfolge: gelesen schlägt immer "noch nicht beim Relay
+        // bestätigt" (ein Empfänger, der es gelesen hat, hat es zwangsläufig
+        // auch empfangen — sonst könnte er es gar nicht gelesen haben,
+        // selbst wenn UNSERE eigene waitUntilReplicated()-Prüfung noch
+        // aussteht/fehlgeschlagen ist).
+        if (read) { tick.textContent = '✓✓'; tick.classList.add('read'); tick.classList.remove('pending'); }
+        else if (stillPending) { tick.textContent = '🕐'; tick.classList.remove('read'); tick.classList.add('pending'); }
+        else { tick.textContent = '✓'; tick.classList.remove('read', 'pending'); }
+      }
+      // Eigenes, deutlich lesbares Badge zusätzlich zum kleinen Uhr-Symbol
+      // oben — NUR bei Nachrichten mit Anhang: genau dort ist "noch nicht
+      // beim Relay bestätigt" die eine Information, die vor dem
+      // Ausschalten des Geräts wirklich zählt (ein reiner Text repliziert
+      // praktisch sofort, ein großer Video-Anhang kann eine Weile
+      // brauchen — das winzige Uhr-Symbol allein ist dafür leicht zu
+      // übersehen). Zeigt/versteckt dasselbe Element wieder, statt es neu
+      // zu erzeugen — buildMessageItem() legt es für jede eigene Nachricht
+      // MIT Anhang von Anfang an (leer) an.
+      const badge = li.querySelector('.sync-badge');
+      if (badge) badge.hidden = !stillPending;
     }
   }
 
@@ -1600,6 +1613,14 @@ async function main() {
     for (const refId of q.refs ?? []) {
       bubble.appendChild(await renderAttachment(refId));
     }
+    if (mine && q.refs?.length) {
+      // Anfangszustand hier direkt aus pendingDeliveries — renderTicks()
+      // (bei jedem Reconnect/jeder Bestätigung aufgerufen) übernimmt ab
+      // hier laufend die Aktualisierung; siehe dessen eigene Doku.
+      const badge = el('div', 'sync-badge', '📤 Wird noch mit dem Server synchronisiert — bitte online bleiben, bis dies verschwindet.');
+      badge.hidden = !(pendingDeliveries.some((p) => p.id === q.id) && !deliveredMsgIds.has(q.id));
+      bubble.appendChild(badge);
+    }
     li.appendChild(bubble);
     const meta = el('div', 'msg-meta');
     meta.appendChild(document.createTextNode(fmtTime(q.ts)));
@@ -1871,7 +1892,14 @@ async function main() {
     pendingFilesEl.textContent = '';
     pendingFiles.forEach((file, i) => {
       const chip = el('div', 'pending-file');
+      chip.dataset.index = i;
       chip.appendChild(document.createTextNode(`${mediaKind(file.type) === 'image' ? '🖼️' : mediaKind(file.type) === 'video' ? '🎬' : mediaKind(file.type) === 'audio' ? '🎵' : '📎'} ${file.name}`));
+      // Leer/versteckt, solange nicht gesendet wird — setPendingFileProgress()
+      // (composer-Submit-Handler unten) füllt sie WÄHREND des lokalen
+      // Verschlüsselns/Zerstückelns eines großen Anhangs (z. B. Video), damit
+      // das nicht wie ein hängender Sendevorgang aussieht — direkt an DIESEM
+      // Datei-Chip, nicht nur als knappe, leicht übersehene Statuszeile oben.
+      chip.appendChild(el('div', 'pending-file-progress'));
       const rm = document.createElement('button');
       rm.type = 'button';
       rm.textContent = '×';
@@ -1896,6 +1924,10 @@ async function main() {
     const roomId = activeRoomId;
     const room = roomById(roomId);
     sendBtn.disabled = true;
+    // Entfernen-Buttons der Datei-Chips während des Sendens sperren — sonst
+    // könnte ein Klick währenddessen `pendingFiles` (dieselbe Referenz wie
+    // `files` oben) mitten im Verschlüsseln/Zerstückeln verändern.
+    for (const btn of pendingFilesEl.querySelectorAll('button')) btn.disabled = true;
     try {
       const attachments = [];
       for (const file of files) {
@@ -1922,9 +1954,15 @@ async function main() {
         // Hintergrund macht (Hashing/Verschlüsseln pro Chunk).
         onAttachmentProgress: attachments.length ? (i, p) => {
           const label = attachments.length > 1 ? ` (${i + 1}/${attachments.length})` : '';
-          statusBar.textContent = p.phase === 'encrypting'
-            ? `Anhang wird verschlüsselt${label} …`
-            : `Anhang wird hochgeladen${label} … ${Math.round((p.done / p.total) * 100)}%`;
+          const text = p.phase === 'encrypting'
+            ? `wird verschlüsselt …`
+            : `wird vorbereitet … ${Math.round((p.done / p.total) * 100)}%`;
+          statusBar.textContent = `Anhang${label} ${text}`;
+          // Direkt am betroffenen Datei-Chip, nicht nur in der leicht zu
+          // übersehenden Statuszeile oben — siehe renderPendingFiles()'
+          // eigene Doku zum `.pending-file-progress`-Element.
+          const chip = pendingFilesEl.querySelector(`.pending-file[data-index="${i}"] .pending-file-progress`);
+          if (chip) chip.textContent = text;
         } : undefined,
       });
       statusBar.textContent = 'Verbunden';
@@ -1948,6 +1986,11 @@ async function main() {
       setTimeout(() => { statusBar.textContent = 'Verbunden'; statusBar.classList.remove('err'); }, 4000);
     } finally {
       sendBtn.disabled = false;
+      // Bei einem Fehlschlag bleiben die Datei-Chips stehen (siehe catch
+      // oben) — dann müssen ihre Entfernen-Buttons auch wieder nutzbar
+      // sein. Bei Erfolg ist pendingFilesEl bereits leer (renderPendingFiles()
+      // oben), der Query trifft dann einfach nichts.
+      for (const btn of pendingFilesEl.querySelectorAll('button')) btn.disabled = false;
     }
   });
   textInput.addEventListener('keydown', (ev) => {
