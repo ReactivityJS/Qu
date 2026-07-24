@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isValidFingerprint, normalizeFingerprint, dmRoomId, groupRoomId, inboxId, shortFp, fmtBytes,
+  isValidFingerprint, normalizeFingerprint, dmRoomId, groupRoomId, shortFp, fmtBytes,
   fmtTime, fmtDayLabel, fmtCallDuration, linkify, mediaKind, sortByActivity,
   buildPath, parsePathSegments,
 } from './chat-lib.mjs';
@@ -35,12 +35,6 @@ test('groupRoomId() returns unique, differently-prefixed ids', () => {
   const b = groupRoomId();
   assert.match(a, /^grp-/);
   assert.notEqual(a, b);
-});
-
-test('inboxId()', () => {
-  assert.equal(inboxId(FP_A), `inbox-${FP_A}`);
-  assert.equal(inboxId(FP_A.toUpperCase()), `inbox-${FP_A}`);
-  assert.throws(() => inboxId('not-a-fingerprint'));
 });
 
 test('shortFp()', () => {

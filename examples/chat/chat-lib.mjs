@@ -17,7 +17,11 @@
 // müssen), eine Gruppe (groupRoomId()) bekommt eine zufällige Id wie
 // jeder andere neu erstellte Space (modules/spaces.js's
 // `createSpaceAt(id, opts)`), weil ihre Mitgliederliste sich über die
-// Zeit ändern kann und es daher keine feste "Ableitung" gäbe.
+// Zeit ändern kann und es daher keine feste "Ableitung" gäbe. Die
+// Discovery/Mitgliederschaft selbst (Briefkasten, inboxId()) ist NICHT
+// chat-spezifisch und lebt daher in src/modules/space-membership.js —
+// derselbe Mechanismus, den jede andere Space-basierte App (ToDo, Forum,
+// CMS) genauso braucht.
 
 const FINGERPRINT_RE = /^[0-9a-f]{24}$/i;
 
@@ -57,22 +61,6 @@ export function dmRoomId(fingerprintA, fingerprintB) {
  */
 export function groupRoomId() {
   return `grp-${crypto.randomUUID()}`;
-}
-
-/**
- * Der "Briefkasten"-Space eines Fingerprints — bewusst OHNE eigenes
- * Manifest angelegt (bleibt dauerhaft im Bootstrap-Zustand von
- * modules/spaces.js: "kein Manifest = jeder darf schreiben"), damit JEDE
- * andere Identität dorthin einen Hinweis ablegen kann, ohne vorher vom
- * Empfänger als Schreiber autorisiert worden zu sein — das ist genau der
- * Mechanismus, der einen remote gestarteten Chat beim Empfänger auftauchen
- * lässt, ohne dass der zuerst selbst denselben Kontakt hinzufügen müsste
- * (siehe app.mjs's ensureRoom()/Inbox-Abo).
- */
-export function inboxId(fingerprint) {
-  const fp = normalizeFingerprint(fingerprint);
-  if (!fp) throw new Error('[chat-lib] inboxId() braucht einen gültigen Fingerprint');
-  return `inbox-${fp}`;
 }
 
 /** Die ersten `n` Zeichen eines Fingerprints, für kompakte Anzeige (Avatar-Fallback, Kontaktliste). */

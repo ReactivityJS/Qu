@@ -10,10 +10,11 @@ import {
   createNetworkPlugin, createSpacesPlugin, createFileHandlerPlugin,
   createChatPlugin, createWebSocketChannel, IndexedDBFileStorageAdapter, reassembleFile, readFileMeta,
   createWebRTCPlugin, sendRoutedEvent, onRoutedEvent, enableConsoleDebug,
+  createSpaceMembershipPlugin, inboxId,
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
-  dmRoomId, groupRoomId, inboxId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
+  dmRoomId, groupRoomId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
   linkify, mediaKind, sortByActivity, buildPath, parsePathSegments, fmtCallDuration,
 } from './chat-lib.mjs';
 
@@ -431,7 +432,7 @@ function stopRingtone() {
 
 async function main() {
   const qu = await loadOrCreateIdentity(IDENTITY_KEY);
-  qu.use(createNetworkPlugin()).use(createSpacesPlugin()).use(createChatPlugin()).use(createWebRTCPlugin());
+  qu.use(createNetworkPlugin()).use(createSpacesPlugin()).use(createSpaceMembershipPlugin()).use(createChatPlugin()).use(createWebRTCPlugin());
   // IndexedDB, nicht MemoryFileStorageAdapter — Anhänge (Bilder, Videos, …)
   // sollen nach dem ersten Herunterladen auch einen Reload überleben, statt
   // bei jedem Laden erneut vom Relay angefragt zu werden (renderAttachment()
@@ -620,7 +621,7 @@ async function main() {
     statusBar.classList.remove('err');
     reconnectAttempt = 0;
     // Nach jedem (Wieder-)Verbinden alle bereits bekannten Räume UND den
-    // eigenen Briefkasten (chat-lib.mjs's inboxId()) erneut abonnieren —
+    // eigenen Briefkasten (space-membership.js's inboxId()) erneut abonnieren —
     // eine neue repl-Instanz kennt keine vorherigen Topics.
     repl.ensureSynced(`${inboxId(qu.fingerprint)}/requests`).catch((e) => console.error('[chat] inbox re-watch failed:', e));
     for (const roomId of ensuredRooms) {
@@ -680,7 +681,7 @@ async function main() {
   // (README, "ensureSynced() ... automatisch, sobald ein node.on/map
   // aktiviert wird") braucht eine bereits aktive Verbindung, sonst läuft
   // es beim allerersten Aufruf ins Leere.
-  qu.get(inboxId(qu.fingerprint)).get('requests').map((q) => handleInboxRequest(q));
+  qu.onSpaceInvite((q) => handleInboxRequest(q));
 
   // Nach einer Weile im Hintergrund die Verbindung aktiv trennen — siehe
   // Kommentar bei channel.onClose() oben: ein Mobil-Browser hält einen
@@ -931,45 +932,28 @@ async function main() {
     }
     await repl.ensureSynced(roomId);
 
-    const manifest = await qu.get(roomId);
-    if (!manifest) {
-      const allMembers = [...new Set([qu.fingerprint, ...room.members])].sort();
-      // `readers: ['*']` ist bewusst OFFEN, nicht auf die Mitglieder
-      // beschränkt: ein Relay darf ein QuBit nur dann überhaupt
-      // weiterleiten, wenn es selbst in dessen `readers` steht
-      // (core/acl.js's filterForReader() — ein Relay ist sonst einfach ein
-      // weiterer, nicht gelisteter Leser). Restriktive `readers` würde die
-      // eigentliche Übertragung über einen echten Relay strukturell
-      // blockieren, nicht nur "verstecken". Die eigentliche Privatsphäre
-      // kommt stattdessen aus Verschlüsselung (sendMessage()s
-      // `encryptFor` unten) — derselbe Aufbau wie Signal: der Server sieht
-      // Chiffretext, keinen Klartext. `writers` bleibt eng (nur die
-      // Mitglieder dürfen in diesen Raum schreiben).
-      const space = qu.createSpaceAt(roomId, { writers: allMembers, readers: ['*'], admins: allMembers });
-      await space.ready.catch((e) => console.error('[chat] room bootstrap failed:', roomId, e));
-    }
+    // Manifest-Bootstrap (falls noch keins existiert) — src/modules/
+    // space-membership.js's ensureSpace(), nicht chat-spezifisch: dieselbe
+    // Space+Mitgliederschaft-Logik, die jede andere Space-basierte App
+    // (ToDo, Forum, CMS) genauso braucht. `readers: ['*']` (der Default)
+    // ist bewusst OFFEN, nicht auf die Mitglieder beschränkt — siehe dessen
+    // Doku: ein Relay darf ein QuBit nur weiterleiten, wenn es selbst in
+    // dessen `readers` steht. Die eigentliche Privatsphäre kommt aus
+    // Verschlüsselung (sendMessage()s `encryptFor` unten).
+    await qu.ensureSpace(roomId, room.members);
 
     receiptsByRoom.set(roomId, await qu.getReadReceipts(roomId));
     renderPresence(roomId);
     stopHeartbeatByRoom.set(roomId, qu.startHeartbeat(roomId, { intervalMs: PRESENCE_HEARTBEAT_MS }));
 
-    // In den Briefkasten (chat-lib.mjs's inboxId()) JEDES anderen
+    // In den Briefkasten (space-membership.js's inboxId()) JEDES anderen
     // Mitglieds schreiben, damit ein von UNS gestarteter Chat spätestens
-    // jetzt (nicht erst mit der ersten Nachricht) bei jedem auftaucht,
-    // ohne dass irgendwer ihn zuerst selbst hätte hinzufügen müssen — der
-    // Briefkasten-Space bleibt bewusst manifestlos (siehe inboxId()s
-    // Doku: "kein Manifest = jeder darf schreiben"). `.get(qu.fingerprint)`
-    // als fester Schlüssel: ein erneuter Ping überschreibt den alten statt
-    // eine wachsende Liste zu bilden. Jedes Mitglied bekommt seine EIGENE
-    // Mitgliederliste (alle AUSSER sich selbst) mitgeschickt, damit sein
-    // handleInboxRequest()/ensureRoom() denselben Raum mit denselben
-    // Mitgliedern anlegt.
-    for (const memberFp of room.members) {
-      const membersForThem = [qu.fingerprint, ...room.members].filter((fp) => fp !== memberFp);
-      qu.get(inboxId(memberFp)).get('requests').get(qu.fingerprint).put({
-        fromFp: qu.fingerprint, alias: myAlias, roomId, members: membersForThem, name: room.name ?? null,
-      }).catch((e) => console.error('[chat] inbox ping failed:', memberFp, e));
-    }
+    // jetzt (nicht erst mit der ersten Nachricht) bei jedem auftaucht, ohne
+    // dass irgendwer ihn zuerst selbst hätte hinzufügen müssen —
+    // notifyMembers() schickt jedem Mitglied seine EIGENE Mitgliederliste
+    // (alle AUSSER sich selbst) mit, damit sein handleInboxRequest()/
+    // ensureRoom() denselben Raum mit denselben Mitgliedern anlegt.
+    await qu.notifyMembers(roomId, room.members, { alias: myAlias, name: room.name ?? null });
 
     return roomId;
   }
@@ -1022,9 +1006,11 @@ async function main() {
   async function addRoomMember(roomId, newFp) {
     const room = roomById(roomId);
     if (!room || room.members.includes(newFp) || newFp === qu.fingerprint) return;
-    await qu.addToRole(roomId, 'writers', newFp);
-    await qu.addToRole(roomId, 'admins', newFp);
-    const updatedMembers = [...room.members, newFp];
+    // src/modules/space-membership.js's addSpaceMember() — grants write/
+    // admin access AND pings every member's inbox (including the new one,
+    // see ensureRoom()s Doku); we only add the local rooms-list/contact/
+    // avatar-subscription bookkeeping specific to this app on top.
+    const updatedMembers = await qu.addSpaceMember(roomId, room.members, newFp, { alias: myAlias, name: room.name ?? null });
     upsertRoom(roomId, { members: updatedMembers });
 
     if (!contactByFp(newFp)) {
@@ -1041,10 +1027,6 @@ async function main() {
       if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
       renderRoomList();
     }));
-    const membersForThem = [qu.fingerprint, ...updatedMembers].filter((fp) => fp !== newFp);
-    qu.get(inboxId(newFp)).get('requests').get(qu.fingerprint).put({
-      fromFp: qu.fingerprint, alias: myAlias, roomId, members: membersForThem, name: room.name ?? null,
-    }).catch((e) => console.error('[chat] inbox ping failed:', newFp, e));
 
     renderRoomList();
     if (activeRoomId === roomId) { renderRoomHeader(roomById(roomId)); renderPresence(roomId); }
@@ -1064,9 +1046,8 @@ async function main() {
   async function removeRoomMember(roomId, fp) {
     const room = roomById(roomId);
     if (!room || !room.members.includes(fp)) return;
-    await qu.removeFromRole(roomId, 'writers', fp);
-    await qu.removeFromRole(roomId, 'admins', fp);
-    upsertRoom(roomId, { members: room.members.filter((m) => m !== fp) });
+    const updatedMembers = await qu.removeSpaceMember(roomId, room.members, fp);
+    upsertRoom(roomId, { members: updatedMembers });
     renderRoomList();
     if (activeRoomId === roomId) { renderRoomHeader(roomById(roomId)); renderPresence(roomId); }
   }
@@ -1074,7 +1055,7 @@ async function main() {
   /** Reagiert auf einen eingehenden Briefkasten-Eintrag (siehe ensureRoom() oben) — legt den Raum (und ggf. den Absender als Kontakt) bei Bedarf lokal an, ganz ohne dass die Nutzerin ihn vorher selbst hinzugefügt haben muss. Funktioniert identisch für einen neuen DM UND eine neue/erweiterte Gruppe. */
   function handleInboxRequest(q) {
     const fromFp = q?.value?.fromFp;
-    const roomId = q?.value?.roomId;
+    const roomId = q?.value?.id;
     if (!fromFp || fromFp === qu.fingerprint || !roomId) return;
     if (!contactByFp(fromFp)) upsertContact(fromFp, { alias: q.value.alias || shortFp(fromFp) });
     if (!roomById(roomId)) {
