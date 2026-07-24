@@ -56,6 +56,21 @@ function candidateType(candidate) {
 }
 
 /**
+ * IPv6-Adressen (host- oder srflx-Kandidat) erkennen — für den IPv4-
+ * Fallback unten. `candidate.address` ist in modernen Browsern direkt
+ * gesetzt; der Fallback liest das rohe SDP-Kandidatenfeld selbst
+ * (`candidate:<foundation> <component> <transport> <priority>
+ * <connection-address> <port> typ ...`, Adresse ist das 5. Feld nach dem
+ * "candidate:"-Präfix). Ein simples ":"-Vorkommen genügt zur
+ * Unterscheidung — IPv4-Adressen und Ports enthalten nie einen
+ * Doppelpunkt, IPv6-Adressen (auch verkürzt, z. B. "::1") immer.
+ */
+function isIPv6Candidate(candidate) {
+  const address = candidate?.address ?? candidate?.candidate?.split(' ')?.[4];
+  return typeof address === 'string' && address.includes(':');
+}
+
+/**
  * Erfüllt den bestehenden Channel-Contract (core/channel.js) — alles
  * darüber (DefaultReplication, DefaultFileTransfer, der QU-Handshake)
  * funktioniert unverändert, weil es nur diesen Contract kennt, nie
@@ -101,6 +116,27 @@ export function createWebRTCChannel({
   const polite = isPolite(myFingerprint, peerFingerprint);
   const shouldCreateDataChannel = initiator === null ? !polite : initiator;
   const pc = new RTCPeerConnection({ iceServers });
+
+  // IPv4-Fallback: WebRTC selbst hat keinen "nur IPv4"-Schalter in der
+  // RTCConfiguration — die Browser bieten dafür keine API. Was
+  // funktioniert: die EIGENEN IPv6-Kandidaten vor dem Versand an die
+  // Gegenseite herausfiltern, sodass nur noch IPv4-Adressen zur Auswahl
+  // stehen. Einseitig (nur unsere Seite filtert), aber genau das reicht
+  // gegen die Fälle, die diese Datei schon oben dokumentiert (ein IPv6-
+  // Bindungsfehler ODER eine kaputte IPv6-Route auf UNSERER Seite) — ein
+  // IPv4↔IPv6-Kandidatenpaar kann ohnehin nie verbinden, das Filtern
+  // entfernt hier also nur tote Optionen, keine echten.
+  //
+  // Standardmäßig AUS (dual-stack, wie bisher) — erst nach einem
+  // gescheiterten ersten Verbindungsversuch EINMAL automatisch auf
+  // IPv4-only umgeschaltet (via restartIce(), siehe
+  // onconnectionstatechange unten), nicht von Anfang an: die meisten
+  // Verbindungen funktionieren mit IPv6 einwandfrei, und ein pauschales
+  // Verbot würde diese unnötig auf STUN/TURN statt eines direkten
+  // IPv6-Pfads zwingen.
+  let ipv4OnlyMode = false;
+  let ipv4FallbackAttempted = false;
+  let sawIPv6Candidate = false;
 
   let dc = null;
   let closed = false;
@@ -212,7 +248,10 @@ export function createWebRTCChannel({
     // eigenes Signal, nur intern interessant) — siehe onicegatheringstatechange
     // unten für den expliziten "fertig gesammelt"-Zeitpunkt.
     if (!candidate) return;
-    debug('webrtc', 'local-ice-candidate', { peerFingerprint, candidateType: candidateType(candidate), protocol: candidate.protocol });
+    const isIPv6 = isIPv6Candidate(candidate);
+    if (isIPv6) sawIPv6Candidate = true;
+    debug('webrtc', 'local-ice-candidate', { peerFingerprint, candidateType: candidateType(candidate), protocol: candidate.protocol, isIPv6 });
+    if (ipv4OnlyMode && isIPv6) return; // IPv4-Fallback aktiv — siehe onconnectionstatechange unten
     sendRoutedEvent(signalingChannel, peerFingerprint, 'webrtc-signal', { kind: 'ice', data: candidate });
   };
 
@@ -239,7 +278,22 @@ export function createWebRTCChannel({
 
   pc.onconnectionstatechange = () => {
     debug('webrtc', 'connection-state', { peerFingerprint, state: pc.connectionState });
-    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') fireClose();
+    if (pc.connectionState === 'failed') {
+      // Ein Fehlschlag NUR dann als "vielleicht IPv6" behandeln, wenn
+      // überhaupt ein IPv6-Kandidat im Spiel war (sonst hat das Scheitern
+      // nichts mit IPv6 zu tun, ein Neuversuch würde nur Zeit kosten) —
+      // und höchstens EINMAL pro Kanal, kein Wiederholungs-Loop.
+      if (!ipv4FallbackAttempted && sawIPv6Candidate) {
+        ipv4FallbackAttempted = true;
+        ipv4OnlyMode = true;
+        debug('webrtc', 'ipv4-fallback-retry', { peerFingerprint });
+        try { pc.restartIce(); } catch (e) { debug('webrtc', 'ipv4-fallback-restart-error', { peerFingerprint, error: e.message }); fireClose(); }
+        return; // dem Neuversuch (restartIce() löst onnegotiationneeded erneut aus) eine Chance geben, statt sofort zu schließen
+      }
+      fireClose();
+    } else if (pc.connectionState === 'closed') {
+      fireClose();
+    }
   };
 
   return {

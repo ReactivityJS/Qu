@@ -18,19 +18,42 @@ async function startTestRelay(pushTopics) {
   return { server, url: `ws://127.0.0.1:${port}/relay` };
 }
 
+// `server.closeAllConnections()` does NOT reach a WebSocket-upgraded socket
+// — the upgrade hijacks it out of http.Server's normal connection tracking
+// (see test/ws-fragmentation.test.mjs's closeQuietly() doc for the same
+// fact from the server side). So `server.close()` below only ever resolves
+// once every CLIENT has already closed its own channel — chXxx.close()
+// must run, and complete, before this is called, not after and not
+// concurrently, or the awaited close() callback never fires and the whole
+// test hangs forever (confirmed the hard way: an earlier version of this
+// file's cleanup used one t.after() per resource, and node:test runs
+// t.after() hooks in REGISTRATION order — with the server's hook
+// registered first, for safety against a throw before any channel exists,
+// it ran BEFORE the channel-close hooks and deadlocked exactly like this).
 async function stopTestRelay(server) {
   server.closeAllConnections?.();
   await new Promise((resolve) => server.close(resolve));
 }
 
-test('two independent app instances exchange data through a shared, open App-Space over a real relay', async () => {
+test('two independent app instances exchange data through a shared, open App-Space over a real relay', async (t) => {
   const APP_SPACE = 'my-app';
   const { server, url } = await startTestRelay([`${APP_SPACE}/`]);
+  // ONE cleanup hook, registered immediately (still runs even if the test
+  // body throws before every resource below exists — that's the whole
+  // point), doing every close in the required order itself instead of
+  // relying on several separately-registered hooks' registration order.
+  let chA, chB, replA, replB;
+  t.after(async () => {
+    replA?.close(); replB?.close();
+    await chA?.close();
+    await chB?.close();
+    await stopTestRelay(server);
+  });
 
   const instanceA = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const instanceB = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
-  const { channel: chA, repl: replA } = await connectToRelay(instanceA, url, { pushTopics: [`${APP_SPACE}/`] });
-  const { channel: chB, repl: replB } = await connectToRelay(instanceB, url, { pushTopics: [`${APP_SPACE}/`] });
+  ({ channel: chA, repl: replA } = await connectToRelay(instanceA, url, { pushTopics: [`${APP_SPACE}/`] }));
+  ({ channel: chB, repl: replB } = await connectToRelay(instanceB, url, { pushTopics: [`${APP_SPACE}/`] }));
 
   const spaceA = openAppSpace(instanceA, APP_SPACE);
   const spaceB = openAppSpace(instanceB, APP_SPACE);
@@ -42,22 +65,24 @@ test('two independent app instances exchange data through a shared, open App-Spa
   assert.equal(seenByB.length, 1, 'instance B must see the entry instance A wrote, delivered by the relay, not shared local state');
   assert.equal(seenByB[0].value.text, 'hello from instance A');
   assert.equal(seenByB[0].writer, instanceA.fingerprint, 'the verified writer field, not just "some entry appeared"');
-
-  replA.close();
-  replB.close();
-  await chA.close();
-  await chB.close();
-  await stopTestRelay(server);
 });
 
-test('onEntry() delivers a live update to a peer without polling, and a late joiner catches up via sync()', async () => {
+test('onEntry() delivers a live update to a peer without polling, and a late joiner catches up via sync()', async (t) => {
   const APP_SPACE = 'live-app';
   const { server, url } = await startTestRelay([`${APP_SPACE}/`]);
+  let chA, chB, chC, replA, replB, replC;
+  t.after(async () => {
+    replA?.close(); replB?.close(); replC?.close();
+    await chA?.close();
+    await chB?.close();
+    await chC?.close();
+    await stopTestRelay(server);
+  });
 
   const instanceA = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const instanceB = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
-  const { channel: chA, repl: replA } = await connectToRelay(instanceA, url, { pushTopics: [`${APP_SPACE}/`] });
-  const { channel: chB, repl: replB } = await connectToRelay(instanceB, url, { pushTopics: [`${APP_SPACE}/`] });
+  ({ channel: chA, repl: replA } = await connectToRelay(instanceA, url, { pushTopics: [`${APP_SPACE}/`] }));
+  ({ channel: chB, repl: replB } = await connectToRelay(instanceB, url, { pushTopics: [`${APP_SPACE}/`] }));
 
   const spaceA = openAppSpace(instanceA, APP_SPACE);
   const spaceB = openAppSpace(instanceB, APP_SPACE);
@@ -73,29 +98,28 @@ test('onEntry() delivers a live update to a peer without polling, and a late joi
 
   // A third instance joins LATE — never saw the live pushes, must sync() to catch up.
   const instanceC = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
-  const { channel: chC, repl: replC } = await connectToRelay(instanceC, url, { pushTopics: [`${APP_SPACE}/`] });
+  ({ channel: chC, repl: replC } = await connectToRelay(instanceC, url, { pushTopics: [`${APP_SPACE}/`] }));
   await replC.sync({ topic: APP_SPACE, since: 0 });
 
   const spaceC = openAppSpace(instanceC, APP_SPACE);
   const seenByC = await listEntries(spaceC);
   assert.deepEqual(seenByC.map((e) => e.value.text).sort(), ['first', 'second'], 'a late joiner must be able to fetch existing history via sync(), not just future live pushes');
-
-  replA.close();
-  replB.close();
-  replC.close();
-  await chA.close();
-  await chB.close();
-  await chC.close();
-  await stopTestRelay(server);
 });
 
-test('a member-restricted App-Space rejects a write from a non-member, even when it arrives over the network', async () => {
+test('a member-restricted App-Space rejects a write from a non-member, even when it arrives over the network', async (t) => {
   const { server, url } = await startTestRelay(['']); // pushTopics: '' — restrictedAppSpace()'s id is a random UUID, not knowable in advance
+  let chOwner, chOutsider, replOwner, replOutsider;
+  t.after(async () => {
+    replOwner?.close(); replOutsider?.close();
+    await chOwner?.close();
+    await chOutsider?.close();
+    await stopTestRelay(server);
+  });
 
   const owner = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const outsider = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
-  const { channel: chOwner, repl: replOwner } = await connectToRelay(owner, url, { pushTopics: [''] });
-  const { channel: chOutsider, repl: replOutsider } = await connectToRelay(outsider, url, { pushTopics: [''] });
+  ({ channel: chOwner, repl: replOwner } = await connectToRelay(owner, url, { pushTopics: [''] }));
+  ({ channel: chOutsider, repl: replOutsider } = await connectToRelay(outsider, url, { pushTopics: [''] }));
 
   const space = restrictedAppSpace(owner, [owner.fingerprint]);
   await space.ready; // guarantees the manifest landed in owner's OWN store — the push to the relay itself is a separate, un-awaited async step
@@ -117,10 +141,4 @@ test('a member-restricted App-Space rejects a write from a non-member, even when
   await wait(50);
   const entries = await listEntries(owner.get(space.id));
   assert.equal(entries.length, 0, 'the rejected write must never have reached the shared App-Space at all');
-
-  replOwner.close();
-  replOutsider.close();
-  await chOwner.close();
-  await chOutsider.close();
-  await stopTestRelay(server);
 });

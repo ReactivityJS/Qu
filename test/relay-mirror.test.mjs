@@ -43,8 +43,16 @@ async function closeAll(server, ...channels) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-test('a file survives the uploader disconnecting: the relay mirrors it and serves it to a later client', async () => {
+test('a file survives the uploader disconnecting: the relay mirrors it and serves it to a later client', async (t) => {
   const { server, port } = await startTestServer(); // in-memory storage is enough here — the point is mirroring across connections, not restarts
+  // Registered immediately, in ADDITION to this test's own explicit
+  // closeAll() below — a t.after() hook still runs even if the test body
+  // throws before reaching that closeAll() call, which would otherwise
+  // leak this still-listening server and hang the whole CI run (the exact
+  // bug examples/app-space-lib.test.mjs's doc comment describes). Safe to
+  // have both: server.close() on an already-closed server just calls its
+  // callback with a harmless "Server is not running" error, never throws.
+  t.after(() => closeAll(server).catch(() => {}));
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const aliceFiles = new MemoryFileStorageAdapter();
@@ -81,10 +89,12 @@ test('a file survives the uploader disconnecting: the relay mirrors it and serve
   await closeAll(server, chB);
 });
 
-test('chat data survives a relay restart when given a data directory', async () => {
+test('chat data survives a relay restart when given a data directory', async (t) => {
   const dataDir = await tmpDir('persist');
+  t.after(() => fsp.rm(dataDir, { recursive: true, force: true }));
 
   const first = await startTestServer({ dataDir });
+  t.after(() => closeAll(first.server).catch(() => {})); // see the file's other tests' doc comment — harmless no-op if this test's own closeAll(first.server, ...) below already ran
   const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(`ws://127.0.0.1:${first.port}/relay`);
   await chA.connect();
@@ -95,6 +105,7 @@ test('chat data survives a relay restart when given a data directory', async () 
 
   // Simulate the relay process restarting: a brand new server, same dataDir.
   const second = await startTestServer({ dataDir });
+  t.after(() => closeAll(second.server).catch(() => {}));
   const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chB = createWebSocketChannel(`ws://127.0.0.1:${second.port}/relay`);
   await chB.connect();
@@ -105,13 +116,14 @@ test('chat data survives a relay restart when given a data directory', async () 
   assert.ok(view.some((m) => m.value.text === 'still here after a restart'));
 
   await closeAll(second.server, chB);
-  await fsp.rm(dataDir, { recursive: true, force: true });
 });
 
-test('the signal/ mount dispatches live but is never persisted, not even across a relay restart', async () => {
+test('the signal/ mount dispatches live but is never persisted, not even across a relay restart', async (t) => {
   const dataDir = await tmpDir('signal');
+  t.after(() => fsp.rm(dataDir, { recursive: true, force: true }));
 
   const first = await startTestServer({ dataDir, pushTopics: ['qu-demo-room/', 'signal/'] });
+  t.after(() => closeAll(first.server).catch(() => {}));
 
   const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(`ws://127.0.0.1:${first.port}/relay`);
@@ -135,13 +147,14 @@ test('the signal/ mount dispatches live but is never persisted, not even across 
   await closeAll(first.server, chA, chB);
 
   const second = await startTestServer({ dataDir });
+  t.after(() => closeAll(second.server).catch(() => {}));
   assert.equal(await second.relay.runtime.get('signal/webrtc-offer'), null, 'signal/ must not survive a restart either');
   await closeAll(second.server);
-  await fsp.rm(dataDir, { recursive: true, force: true });
 });
 
-test('sending a large multi-chunk image through the real relay does not break subsequent messages (regression for the reported bug)', async () => {
+test('sending a large multi-chunk image through the real relay does not break subsequent messages (regression for the reported bug)', async (t) => {
   const { server, port } = await startTestServer();
+  t.after(() => closeAll(server).catch(() => {}));
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const aliceFiles = new MemoryFileStorageAdapter();
@@ -183,8 +196,9 @@ test('sending a large multi-chunk image through the real relay does not break su
   await new Promise((resolve) => server.close(resolve));
 });
 
-test('a mirror that failed while the uploader had no fileTransfer to answer retries automatically once they reconnect with one', async () => {
+test('a mirror that failed while the uploader had no fileTransfer to answer retries automatically once they reconnect with one', async (t) => {
   const { server, port } = await startTestServer();
+  t.after(() => closeAll(server).catch(() => {}));
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const aliceFiles = new MemoryFileStorageAdapter();
