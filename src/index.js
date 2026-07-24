@@ -27,7 +27,7 @@ export { QU_PRESETS } from './presets.js';
 export { QuRuntime } from './core/runtime.js';
 export { QuStore, compareQubits } from './core/store.js';
 export { QuSession } from './core/session.js';
-export { QuIdentity } from './core/identity.js';
+export { QuIdentity, isValidFingerprint } from './core/identity.js';
 export { QuSpace } from './core/space-handle.js';
 export { QuClock } from './core/clock.js';
 export { QuPipeline } from './core/pipeline.js';

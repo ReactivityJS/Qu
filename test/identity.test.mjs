@@ -1,8 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { QuIdentity, QuSession } from '../src/index.js';
+import { QuIdentity, QuSession, isValidFingerprint } from '../src/index.js';
 import { canonical } from '../src/core/sign.js';
 import { makeRuntime } from './helpers.mjs';
+
+test('isValidFingerprint(): a real generated fingerprint always passes, garbage never does', async () => {
+  const alice = await QuIdentity.generate();
+  assert.equal(isValidFingerprint(alice.fingerprint), true);
+  assert.equal(isValidFingerprint(alice.fingerprint.toUpperCase()), true);
+  assert.equal(isValidFingerprint('too-short'), false);
+  assert.equal(isValidFingerprint(''), false);
+  assert.equal(isValidFingerprint(null), false);
+  assert.equal(isValidFingerprint(undefined), false);
+});
 
 test('a forged writer claim is rejected — fingerprint must equal hash(embedded pubKey)', async () => {
   const rt = makeRuntime();

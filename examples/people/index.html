@@ -12,11 +12,12 @@
   <div id="app" class="app">
     <header class="topbar">
       <div class="brand">👥 People</div>
-      <input id="search-input" type="search" placeholder="Suche nach Alias oder Fingerprint …" autocomplete="off" />
       <button id="me-avatar" class="avatar" type="button" title="Mein Profil"></button>
     </header>
 
-    <ul id="directory-list" class="directory-list"></ul>
+    <!-- <qu-people-search mode="browse"> (src/ui/people-search-components.js) wird von app.mjs HIER hinein erzeugt, erst NACHDEM `.qu` gesetzt werden konnte —
+         eine statisch im Markup stehende Instanz würde ihren connectedCallback() schon beim Parsen auslösen, lange bevor die (asynchron geladene) Identität existiert. -->
+    <div id="directory-search-slot"></div>
     <div id="empty-state" class="empty-state">
       <p>Noch niemand sichtbar im Verzeichnis.</p>
       <p class="hint">Öffne dein eigenes Profil und aktiviere „Im Verzeichnis sichtbar“, um selbst auffindbar zu werden.</p>

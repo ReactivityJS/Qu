@@ -10,16 +10,15 @@ import {
 } from '../../src/index.js';
 import { buildPath, parsePathSegments } from '../../src/ui/hash-router.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
-import { matchesQuery, sortDirectory, isValidFingerprint } from './people-lib.mjs';
-import '../../src/ui/profile-components.js'; // Seiteneffekt: registriert <qu-profile-card>
+import { isValidFingerprint } from './people-lib.mjs';
+import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert <qu-people-search> (und darüber <qu-profile-card>)
 
 const IDENTITY_KEY = 'qu-identity'; // siehe examples/chat/app.mjs's IDENTITY_KEY-Doku — bewusst derselbe Wert
 
 function $(id) { return document.getElementById(id); }
 const appEl = $('app');
-const searchInput = $('search-input');
 const meAvatarBtn = $('me-avatar');
-const directoryListEl = $('directory-list');
+const directorySearchSlot = $('directory-search-slot');
 const emptyStateEl = $('empty-state');
 
 const profileModal = $('profile-modal');
@@ -73,8 +72,15 @@ async function resizeAvatar(file, size = 96) {
 async function main() {
   const qu = await loadOrCreateIdentity(IDENTITY_KEY);
   qu.use(createNetworkPlugin()).use(createSpacesPlugin()).use(createProfilesPlugin());
-  appEl.qu = qu; // EIN Ort setzt den Qu-Kontext für jedes <qu-profile-card> unter #app (src/ui/components.js's findQu())
-  viewProfileModal.qu = qu; // eigener Teilbaum außerhalb von #app, siehe hideAllScreens()
+  // `.qu` auf beiden Wurzel-Containern (`#app` und der eigene Teilbaum
+  // `#view-profile-modal`, siehe hideAllScreens()) — deckt jedes künftig
+  // HIER NEU eingefügte Kind ab (components.js's findQu()-Doku: ein
+  // Assignment auf einem Container reicht für alle Nachfahren). Das unten
+  // erzeugte <qu-people-search> setzt sein `.qu` zusätzlich noch einmal
+  // DIREKT, weil es (anders als ein Kind, das erst NACH dieser Zeile
+  // eingefügt wird) beim Einfügen selbst erzeugt wird — sicher ist sicher.
+  appEl.qu = qu;
+  viewProfileModal.qu = qu;
 
   let repl;
   function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -116,49 +122,27 @@ async function main() {
   let myAvatarQ = await qu.get(`~${qu.fingerprint}/avatar`);
   setAvatar(meAvatarBtn, myProfile.alias, myAvatarQ?.value ?? null);
 
-  // --- Verzeichnis (Liste + Live-Aktualisierung + Suche) ---
-  let directoryEntries = []; // [{ fingerprint }]
-  const aliasCache = new Map(); // fp -> alias (für die Suche — die eigentliche Anzeige macht <qu-profile-card> selbst reaktiv)
-  const aliasUnsubs = new Map(); // fp -> unsub, nur solange der Eintrag sichtbar im Verzeichnis ist
-
-  function renderDirectoryList() {
-    const withAlias = directoryEntries.map((e) => ({ fingerprint: e.fingerprint, alias: aliasCache.get(e.fingerprint) ?? e.fingerprint }));
-    const filtered = withAlias.filter((e) => matchesQuery(e, searchInput.value));
-    const sorted = sortDirectory(filtered);
-    directoryListEl.textContent = '';
-    emptyStateEl.classList.toggle('show', directoryEntries.length === 0);
-    for (const entry of sorted) {
-      const li = document.createElement('li');
-      const card = document.createElement('qu-profile-card');
-      card.setAttribute('fp', entry.fingerprint);
-      card.setAttribute('href', '#/{fp}');
-      li.appendChild(card);
-      directoryListEl.appendChild(li);
-    }
-  }
-
-  async function refreshDirectory() {
-    directoryEntries = await qu.listDirectory();
-    const currentFps = new Set(directoryEntries.map((e) => e.fingerprint));
-    for (const fp of [...aliasUnsubs.keys()]) {
-      if (!currentFps.has(fp)) { aliasUnsubs.get(fp)?.(); aliasUnsubs.delete(fp); aliasCache.delete(fp); }
-    }
-    for (const { fingerprint: fp } of directoryEntries) {
-      if (aliasUnsubs.has(fp)) continue;
-      await repl.sync({ topic: `~${fp}` }).catch((e) => console.error('[people] directory profile sync failed:', fp, e));
-      const profile = await qu.readProfile(fp).catch(() => null);
-      aliasCache.set(fp, profile?.alias ?? fp);
-      aliasUnsubs.set(fp, qu.get(`~${fp}`).get('alias').on((q) => {
-        aliasCache.set(fp, q?.value ?? fp);
-        renderDirectoryList();
-      }));
-      renderDirectoryList();
-    }
-    renderDirectoryList();
-  }
-  qu.onDirectoryChange(() => refreshDirectory());
-  searchInput.addEventListener('input', renderDirectoryList);
-  await refreshDirectory();
+  // --- Verzeichnis: <qu-people-search mode="browse"> (src/ui/
+  // people-search-components.js) übernimmt Laden, Live-Aktualisierung UND
+  // Suche komplett selbst — hier bleibt nur noch, sie zu erzeugen und den
+  // Leer-Zustand anhand ihres eigenen Ergebnis-Events zu zeigen.
+  //
+  // ERST `.qu` setzen, DANN ins DOM einfügen — nicht umgekehrt: ein
+  // Custom Element löst seinen connectedCallback() SOFORT beim Einfügen
+  // aus (components.js's findQu()-Doku), zu diesem Zeitpunkt muss `.qu`
+  // also schon da sein, sonst bleibt nur der eine (viel zu frühe)
+  // Microtask-Retry, bevor endgültig aufgegeben wird. Deshalb steht dieses
+  // Element NICHT schon statisch in index.html — beim Parsen der Seite
+  // existiert `qu` (asynchron geladene Identität) noch gar nicht.
+  const directorySearchEl = document.createElement('qu-people-search');
+  directorySearchEl.setAttribute('mode', 'browse');
+  directorySearchEl.setAttribute('href', '#/{fp}');
+  directorySearchEl.setAttribute('placeholder', 'Suche nach Alias oder Fingerprint …');
+  directorySearchEl.qu = qu;
+  directorySearchEl.addEventListener('qu-people-search-results', (ev) => {
+    emptyStateEl.classList.toggle('show', ev.detail.count === 0 && !ev.detail.query);
+  });
+  directorySearchSlot.replaceWith(directorySearchEl);
 
   // --- Router ---
   // Dasselbe Prinzip wie examples/chat/app.mjs's Router: `location.hash`
