@@ -58,6 +58,23 @@
         <button id="attr-add-btn" class="btn btn-secondary" type="button">Hinzufügen</button>
       </div>
       <div class="modal-error" id="attr-error"></div>
+
+      <h3>Identität übertragen</h3>
+      <p class="modal-hint">Auf ein zweites Gerät übertragen — als Text zum Kopieren, optional mit Passwort geschützt. Ein Import ERSETZT die Identität auf diesem Gerät vollständig.</p>
+      <div class="transfer-export">
+        <label for="export-password-input">Passwort (optional)</label>
+        <input type="password" id="export-password-input" placeholder="Leer lassen für ungeschützten Export" autocomplete="new-password" />
+        <button id="export-btn" class="btn btn-secondary" type="button">Identität exportieren</button>
+        <textarea id="export-output" class="transfer-textarea" rows="4" readonly hidden placeholder="Exportierter Text erscheint hier"></textarea>
+        <button id="export-copy-btn" class="btn btn-secondary" type="button" hidden>In Zwischenablage kopieren</button>
+      </div>
+      <div class="transfer-import">
+        <label for="import-input">Identität importieren</label>
+        <textarea id="import-input" class="transfer-textarea" rows="4" placeholder="Exportierten Text hier einfügen"></textarea>
+        <input type="password" id="import-password-input" placeholder="Passwort (falls geschützt)" autocomplete="off" />
+        <button id="import-btn" class="btn btn-secondary" type="button">Identität importieren</button>
+      </div>
+      <div class="modal-error" id="transfer-error"></div>
     </div>
   </div>
 

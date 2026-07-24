@@ -7,6 +7,7 @@
 
 import {
   createNetworkPlugin, createSpacesPlugin, createProfilesPlugin, createWebSocketChannel, DIRECTORY_ID,
+  exportIdentity, importIdentity,
 } from '../../src/index.js';
 import { buildPath, parsePathSegments } from '../../src/ui/hash-router.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
@@ -38,6 +39,12 @@ const attrKeyInput = $('attr-key-input');
 const attrValueInput = $('attr-value-input');
 const attrPrivateToggle = $('attr-private-toggle');
 const attrErrorEl = $('attr-error');
+const exportPasswordInput = $('export-password-input');
+const exportOutputEl = $('export-output');
+const exportCopyBtn = $('export-copy-btn');
+const importInput = $('import-input');
+const importPasswordInput = $('import-password-input');
+const transferErrorEl = $('transfer-error');
 
 const viewProfileModal = $('view-profile-modal');
 const viewAvatarEl = $('view-avatar');
@@ -209,6 +216,13 @@ async function main() {
     visibleToggle.checked = !!ownEntry?.value?.visible;
     attrErrorEl.textContent = '';
     await renderOwnAttrs();
+    exportPasswordInput.value = '';
+    exportOutputEl.hidden = true;
+    exportOutputEl.value = '';
+    exportCopyBtn.hidden = true;
+    importInput.value = '';
+    importPasswordInput.value = '';
+    transferErrorEl.textContent = '';
     profileModal.hidden = false;
   }
   $('avatar-pick-btn').addEventListener('click', () => avatarInput.click());
@@ -277,6 +291,47 @@ async function main() {
     attrValueInput.value = '';
     attrPrivateToggle.checked = false;
     await renderOwnAttrs();
+  });
+
+  // --- Identität übertragen — Export (dieses Gerät) / Import (Ziel-Gerät) ---
+  // Export gibt der Nutzer:in nur einen Text zum Kopieren — die Übertragung
+  // selbst (wie der Text auf das zweite Gerät kommt) bleibt ihr überlassen,
+  // s. identity-transfer.js's Doku für die spätere QR-Erweiterung.
+  $('export-btn').addEventListener('click', async () => {
+    transferErrorEl.textContent = '';
+    const password = exportPasswordInput.value;
+    exportOutputEl.value = await exportIdentity(qu, password ? { password } : {});
+    exportOutputEl.hidden = false;
+    exportCopyBtn.hidden = false;
+  });
+  exportCopyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(exportOutputEl.value);
+      exportCopyBtn.textContent = 'Kopiert ✓';
+      setTimeout(() => { exportCopyBtn.textContent = 'In Zwischenablage kopieren'; }, 1500);
+    } catch {
+      exportOutputEl.select(); // Zwischenablage-API nicht verfügbar/verweigert — wenigstens auswählen, damit Strg+C funktioniert
+    }
+  });
+  // Import ERSETZT die lokale Identität vollständig (derselbe localStorage-
+  // Key, den loadOrCreateIdentity() beim nächsten Start liest, s. dessen
+  // Doku in space-app-browser.js) und lädt danach neu — ein laufendes
+  // Qu-Objekt kann seine Identität nicht nachträglich austauschen (Session/
+  // Netzwerk-Verbindungen hängen am ursprünglichen Fingerprint), ein
+  // Reload ist der einzige saubere Weg.
+  $('import-btn').addEventListener('click', async () => {
+    transferErrorEl.textContent = '';
+    const text = importInput.value.trim();
+    if (!text) { transferErrorEl.textContent = 'Bitte zuerst den exportierten Text einfügen.'; return; }
+    if (!confirm('Import ersetzt die Identität auf DIESEM Gerät vollständig (inkl. Chat-Zugriff). Fortfahren?')) return;
+    try {
+      const password = importPasswordInput.value;
+      const keys = await importIdentity(text, password ? { password } : {});
+      localStorage.setItem(IDENTITY_KEY, JSON.stringify(keys));
+      location.reload();
+    } catch (e) {
+      transferErrorEl.textContent = e.message;
+    }
   });
 
   // --- Fremdes Profil — /<fp> ---

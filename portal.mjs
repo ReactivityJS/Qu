@@ -20,6 +20,13 @@ import { buildPath, parsePathSegments } from './src/ui/hash-router.js';
 
 const CATEGORIES = ['services', 'examples', 'documentation'];
 const DEFAULT_CATEGORY = 'services';
+// Same targets as server/portal-routes.mjs's SERVICE_APPS — kept in sync
+// manually (two tiny static maps, one server-side one client-side; not
+// worth a shared module for two entries). Covers the case where someone
+// is ALREADY on the portal page and follows a `#/services/chat` link
+// (e.g. pasted, or set programmatically) rather than a fresh page load —
+// the server-side redirect alone only fires on the initial HTTP request.
+const SERVICE_APPS = { chat: '/examples/chat/index.html', people: '/examples/people/index.html' };
 
 const tabs = document.querySelectorAll('.category-tab');
 const sections = document.querySelectorAll('.cards-section');
@@ -36,7 +43,11 @@ function showCategory(category) {
 }
 
 function renderRoute() {
-  const [first] = parsePathSegments(location.hash);
+  const [first, second] = parsePathSegments(location.hash);
+  if (first === 'services' && second && SERVICE_APPS[second]) {
+    location.href = SERVICE_APPS[second];
+    return;
+  }
   showCategory(first ?? categoryFromPathname() ?? DEFAULT_CATEGORY);
 }
 
