@@ -162,51 +162,32 @@ export function sortByActivity(list) {
   return list.slice().sort((a, b) => (b.lastTs ?? 0) - (a.lastTs ?? 0) || (a.alias ?? '').localeCompare(b.alias ?? ''));
 }
 
-/** Baut einen teilbaren Einladungslink (`<baseUrl>#add=<fingerprint>`) — die "Kontakt per Fingerprint hinzufügen"-Bequemlichkeit oben drauf: Fingerprint bleibt die eigentliche Identität, der Link ist nur Transportmittel. */
-export function buildInviteLink(baseUrl, fingerprint) {
-  const fp = normalizeFingerprint(fingerprint);
-  if (!fp) throw new Error('[chat-lib] buildInviteLink() braucht einen gültigen Fingerprint');
-  return `${baseUrl}#add=${fp}`;
-}
-
-/** Gegenstück zu buildInviteLink() — liest `#add=<fingerprint>` aus einem Hash, `null` falls keiner/kein gültiger vorhanden ist. */
-export function parseInviteHash(hash) {
-  const raw = String(hash ?? '').replace(/^#/, '');
-  const match = /^add=(.+)$/.exec(raw);
-  return match ? normalizeFingerprint(decodeURIComponent(match[1])) : null;
-}
-
 /**
- * Der Direktlink zu EINEM Chat: ein Pfad-artiger Hash, `#/<roomId>` —
- * verdrahtet mit dem SPACE (roomId), nicht mit einer Kontakt-
- * Fingerprint: ein Chat ist ein Raum mit einem ODER MEHREREN Mitgliedern
- * (dmRoomId() ist nur der Spezialfall mit genau einem anderen Mitglied),
- * die Adressierung muss also den Raum selbst benennen. Bewusst ein
- * "sauberer" `/`-Pfad statt einer Query-artigen `?room=`/`#room=`-Notation
- * — die Raum-Id ist das erste Pfadsegment, weitere Segmente (künftig z. B.
- * `#/<roomId>/thread/<msgId>`) bleiben für spätere, tiefere Deep-Links
- * innerhalb eines Raums reserviert, auch wenn heute nur das erste
- * Segment gelesen wird. Ein anderes Format als buildInviteLink()s
- * `#add=<fingerprint>` (eindeutig am `add=`-Präfix unterscheidbar, siehe
- * parseChatHash()/parseInviteHash()): eine Einladung fragt erst nach
- * ("Kontakt hinzufügen?"), ein Chat-Link öffnet direkt.
+ * EIN Pfadschema für die gesamte App — jeder Screen (Chatliste, ein Chat,
+ * dessen Einstellungen, das eigene Profil, App-Einstellungen, Suche,
+ * "Kontakt hinzufügen", "Neue Gruppe", …) ist ein `#/a/b/c`-Pfad, nie eine
+ * Query-artige `#key=value`-Notation und nie ein reines `hidden`-Flag ohne
+ * URL-Entsprechung. app.mjs's Router baut jede Navigation über buildPath()
+ * und liest jeden `hashchange` über parsePathSegments() — der Hash IST der
+ * Zustand ("welcher Screen ist offen"), nichts pflegt das getrennt davon.
+ * Feste erste Segmente (`profile`, `settings`, `search`, `add-contact`,
+ * `new-group`) kollidieren nie mit einer echten Raum-Id — die beginnt
+ * immer mit `dm-` oder `grp-` (dmRoomId()/groupRoomId() oben).
+ *
+ * Ein geteilter Einladungslink ist kein Sonderformat mehr, sondern
+ * einfach `buildPath('add-contact', fingerprint)` — dieselbe Route wie
+ * der "+"-Button in der App, nur mit dem Fingerprint als zweitem Segment
+ * vorausgefüllt.
  */
-export function buildChatHashRoute(roomId) {
-  if (!roomId) throw new Error('[chat-lib] buildChatHashRoute() braucht eine Raum-Id');
-  return `#/${encodeURIComponent(roomId)}`;
+export function buildPath(...segments) {
+  return `#/${segments.map((s) => encodeURIComponent(s)).join('/')}`;
 }
 
-/**
- * Gegenstück zu buildChatHashRoute() — liest die Raum-Id aus dem ersten
- * Pfadsegment eines `#/...`-Hashes (weitere Segmente, falls vorhanden,
- * werden für jetzt ignoriert — siehe buildChatHashRoute()s Doku zu
- * künftigen tieferen Deep-Links). `null`, wenn der Hash leer ist oder
- * kein `/`-Pfad (u. a. `#add=...`, das bleibt parseInviteHash()s Sache).
- */
-export function parseChatHash(hash) {
+/** Gegenstück zu buildPath() — liest die Pfadsegmente eines `#/a/b/c`-Hashes, dekodiert. `[]` für einen leeren/nicht-Pfad-Hash (die Chatliste, das Wurzel-"Verzeichnis"). */
+export function parsePathSegments(hash) {
   const raw = String(hash ?? '').replace(/^#/, '');
-  if (!raw.startsWith('/')) return null;
-  const [roomId] = raw.slice(1).split('/');
-  if (!roomId) return null;
-  try { return decodeURIComponent(roomId); } catch { return null; }
+  if (!raw.startsWith('/')) return [];
+  return raw.slice(1).split('/').filter(Boolean).map((s) => {
+    try { return decodeURIComponent(s); } catch { return s; }
+  });
 }

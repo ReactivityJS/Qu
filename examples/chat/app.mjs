@@ -14,8 +14,7 @@ import {
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
   dmRoomId, groupRoomId, inboxId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
-  linkify, mediaKind, sortByActivity, buildInviteLink, parseInviteHash,
-  buildChatHashRoute, parseChatHash, fmtCallDuration,
+  linkify, mediaKind, sortByActivity, buildPath, parsePathSegments, fmtCallDuration,
 } from './chat-lib.mjs';
 
 // Anruf-Diagnose: jede Signaling-/ICE-/Verbindungs-Phase eines Anrufs
@@ -88,7 +87,8 @@ const meNameEl = $('me-name');
 const meFpShortEl = $('me-fp-short');
 const addContactBtn = $('add-contact-btn');
 const newGroupBtn = $('new-group-btn');
-const groupMembersBtn = $('group-members-btn');
+const settingsBtn = $('settings-btn');
+const chatSettingsBtn = $('chat-settings-btn');
 const searchBtn = $('search-btn');
 const searchOverlay = $('search-overlay');
 const searchBackBtn = $('search-back-btn');
@@ -99,10 +99,37 @@ const searchResultsEl = $('search-results');
 const searchEmptyEl = $('search-empty');
 const audioCallBtn = $('audio-call-btn');
 const videoCallBtn = $('video-call-btn');
-const muteChatBtn = $('mute-chat-btn');
-const encryptionChatBtn = $('encryption-chat-btn');
 const soundMessagesToggle = $('sound-messages-toggle');
 const soundCallsToggle = $('sound-calls-toggle');
+
+// --- Screens/Modals — jeder ist ein eigener Router-Pfad, siehe main()s
+// navigate()/renderRoute() weiter unten für das vollständige Pfadschema. ---
+const profileModal = $('profile-modal');
+const avatarPreviewBtn = $('avatar-preview-btn');
+const avatarInput = $('avatar-input');
+const appSettingsModal = $('app-settings-modal');
+const pushToggleBtn = $('push-toggle-btn');
+const pushStatusEl = $('push-status');
+const addContactModal = $('add-contact-modal');
+const contactFpInput = $('contact-fp-input');
+const contactAliasInput = $('contact-alias-input');
+const addContactError = $('add-contact-error');
+const newGroupModal = $('new-group-modal');
+const newGroupNameInput = $('new-group-name-input');
+const newGroupContactListEl = $('new-group-contact-list');
+const newGroupFpInput = $('new-group-fp-input');
+const newGroupError = $('new-group-error');
+const chatSettingsModal = $('chat-settings-modal');
+const chatSettingsTitleEl = $('chat-settings-title');
+const chatSettingsGroupSection = $('chat-settings-group-section');
+const groupNameInput = $('group-name-input');
+const groupMemberListEl = $('group-member-list');
+const groupAddMemberInput = $('group-add-member-input');
+const groupDetailsError = $('group-details-error');
+const chatMuteToggle = $('chat-mute-toggle');
+const chatEncryptionToggle = $('chat-encryption-toggle');
+const chatEncryptionHint = $('chat-encryption-hint');
+const chatDeleteBtn = $('chat-delete-btn');
 const callOverlay = $('call-overlay');
 const callAvatarEl = $('call-avatar');
 const callPeerNameEl = $('call-peer-name');
@@ -706,6 +733,102 @@ async function main() {
   const avatarCache = new Map(); // fp -> dataUrl | null (null = bekannt abwesend, nicht "noch nicht geprüft")
   let activeRoomId = null;
 
+  // --- Router ---
+  // EIN Ort übersetzt `location.hash` in "welcher Screen ist offen"
+  // (renderRoute()), EIN Ort navigiert dorthin (navigate()) — nirgendwo
+  // sonst schaltet Code direkt ein `.hidden`/eine CSS-Klasse eines
+  // Screens um. Der Hash IST der Zustand, jeder Screen zieht seine
+  // Sichtbarkeit ausschließlich davon ab (dasselbe reaktive Prinzip wie
+  // überall sonst in dieser App — Nachrichten/Presence/... —, hier nur
+  // auf "welcher Screen ist offen" angewandt).
+  //
+  // Pfadschema (chat-lib.mjs's buildPath()/parsePathSegments(); das erste
+  // Segment entscheidet — die festen Namen unten kollidieren nie mit
+  // einer echten Raum-Id, die immer mit `dm-`/`grp-` beginnt):
+  //   /                    Chatliste
+  //   /profile             eigenes Profil
+  //   /settings            App-Einstellungen
+  //   /search              Suche über alle Chats
+  //   /add-contact[/<fp>]  neuer 1:1-Chat per Fingerprint, optional
+  //                        vorausgefüllt — ein geteilter Einladungslink
+  //                        ist einfach diese Route mit gesetztem <fp>,
+  //                        kein eigenes Link-Format mehr.
+  //   /new-group           neue Gruppe
+  //   /<roomId>            ein Chat
+  //   /<roomId>/settings   dessen Einstellungen (Stumm/Verschlüsselung/
+  //                        [Gruppe: Umbenennen/Mitglieder]/Löschen)
+  //
+  // Jede Navigation läuft über location.hash = ... (navigate()), das
+  // erzeugt von selbst einen Browser-Verlaufseintrag UND feuert
+  // 'hashchange' — kein manuelles history.pushState() nötig. closeScreen()
+  // nutzt deshalb einfach history.back(): main()s Start (siehe ganz unten)
+  // garantiert per history.replaceState(), dass unter einem tief
+  // verlinkten Screen IMMER die Chatliste liegt, "zurück" verlässt die
+  // App also nie, selbst wenn die Seite direkt über einen Chat-/
+  // Einstellungs-Link geöffnet wurde.
+  async function navigate(...segments) {
+    const hash = segments.length ? buildPath(...segments) : '#/';
+    if (location.hash === hash) return renderRoute();
+    location.hash = hash; // setzt location.hash SOFORT (synchron lesbar) — nur das zugehörige 'hashchange'-Event feuert erst asynchron, siehe renderRoute()s Dedup-Wächter
+    return renderRoute();
+  }
+
+  /** Wie navigate(), aber OHNE neuen Verlaufseintrag — für Umleitungen (z. B. ein unbekannter Raum in der URL), die "zurück" nicht als eigenen Schritt zählen sollen. */
+  async function redirectTo(...segments) {
+    const hash = segments.length ? buildPath(...segments) : '#/';
+    history.replaceState(null, '', location.pathname + hash);
+    return renderRoute();
+  }
+
+  /** Schließt den aktuell offenen Screen — jede Navigation hierher lief über navigate(), hat also einen Verlaufseintrag hinterlassen; ein echtes Browser-"Zurück" statt eines eigenen "vorherigen Screen"-Stapels. */
+  function closeScreen() {
+    history.back();
+  }
+
+  function hideAllScreens() {
+    appEl.classList.remove('chat-open');
+    emptyStateEl.classList.remove('show');
+    chatPanelEl.classList.add('hidden-empty');
+    profileModal.hidden = true;
+    appSettingsModal.hidden = true;
+    searchOverlay.hidden = true;
+    addContactModal.hidden = true;
+    newGroupModal.hidden = true;
+    chatSettingsModal.hidden = true;
+  }
+
+  const ROOT_ROUTES = {
+    profile: () => showProfileScreen(),
+    settings: () => showAppSettingsScreen(),
+    search: () => showSearchScreen(),
+    'add-contact': (prefillFp) => showAddContactScreen(prefillFp),
+    'new-group': () => showNewGroupScreen(),
+  };
+
+  // navigate()/redirectTo() rendern SOFORT synchron (damit ein Aufrufer
+  // z. B. "Raum öffnen, DANN zu einer Nachricht scrollen" korrekt
+  // nacheinander ablaufen lassen kann, siehe openSearchResult()) — das
+  // spätere, tatsächliche 'hashchange'-Event für GENAU denselben Hash
+  // würde also ein zweites Mal rendern, rein event-getrieben (z. B.
+  // Browser-Vor-/Zurück) macht das nichts, doppelt für denselben Hash ist
+  // aber unnötige Arbeit. `lastRenderedHash` merkt sich den zuletzt
+  // gerenderten Hash und überspringt eine Wiederholung dafür.
+  let lastRenderedHash = null;
+  async function renderRoute() {
+    if (location.hash === lastRenderedHash) return;
+    lastRenderedHash = location.hash;
+    const segments = parsePathSegments(location.hash);
+    hideAllScreens();
+    if (!segments.length) { showChatListScreen(); return; }
+    const [first, second] = segments;
+    if (ROOT_ROUTES[first]) { await ROOT_ROUTES[first](second); return; }
+    const room = roomById(first);
+    if (!room) { await redirectTo(); return; } // unbekannte/fremde Raum-Id -> zurück zur Chatliste, kein Verlaufseintrag dafür
+    if (second === 'settings') { showChatSettingsScreen(room); return; }
+    await showChatScreen(room);
+  }
+  window.addEventListener('hashchange', renderRoute);
+
   async function aliasFor(fp) {
     if (fp === qu.fingerprint) return myAlias;
     const contact = contactByFp(fp);
@@ -998,7 +1121,7 @@ async function main() {
         const senderName = contactByFp(q.writer)?.alias ?? shortFp(q.writer);
         const body = isGroupRoom(room) ? `${senderName} in ${roomDisplayName(room)}` : `${senderName} hat dir geschrieben`;
         const notif = new Notification('QU Chat', { body, tag: roomId });
-        notif.addEventListener('click', () => { window.focus(); openRoom(roomId); notif.close(); });
+        notif.addEventListener('click', () => { window.focus(); navigate(roomId); notif.close(); });
       } catch { /* z. B. Safari verweigert new Notification() aus einem Service-Worker-losen Kontext manchmal leise — kein harter Fehler */ }
     }
   }
@@ -1102,7 +1225,7 @@ async function main() {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.textContent = 'Jetzt starten';
-      btn.addEventListener('click', () => openAddContactModal());
+      btn.addEventListener('click', () => navigate('add-contact'));
       empty.appendChild(btn);
       contactListEl.appendChild(empty);
       return;
@@ -1133,7 +1256,7 @@ async function main() {
       body.appendChild(previewRow);
       li.appendChild(body);
 
-      li.addEventListener('click', () => openRoom(r.id));
+      li.addEventListener('click', () => navigate(r.id));
       contactListEl.appendChild(li);
     }
   }
@@ -1378,25 +1501,24 @@ async function main() {
   }
 
   /** Öffnet einen bereits bekannten Raum (siehe rooms/ROOMS_KEY) — 1:1 UND Gruppe laufen durch denselben Code, nur roomDisplayName()/roomDisplayAvatar() unterscheiden zwischen beiden. */
-  async function openRoom(roomId) {
-    const room = roomById(roomId);
-    if (!room) return;
+  /** Chatliste — der Wurzel-Screen (`/`). hideAllScreens() (Router) hat bereits alles andere versteckt; hier nur, was DIESER Screen selbst braucht. */
+  function showChatListScreen() {
+    activeRoomId = null;
+    emptyStateEl.classList.add('show');
+  }
+
+  /** Ein Chat — `/<roomId>` (Router). */
+  async function showChatScreen(room) {
+    const roomId = room.id;
     activeRoomId = roomId;
     renderRoomHeader(room);
     peerStatusEl.textContent = '…';
     appEl.classList.add('chat-open');
-    emptyStateEl.classList.remove('show');
     chatPanelEl.classList.remove('hidden-empty');
     // Anrufe bleiben (vorerst) 1:1 — kein Gruppenanruf, siehe
     // audioCallBtn/videoCallBtn's eigene Doku weiter unten.
     audioCallBtn.hidden = isGroupRoom(room);
     videoCallBtn.hidden = isGroupRoom(room);
-    groupMembersBtn.hidden = !isGroupRoom(room);
-    // Direktlink für diesen Chat in die URL — Navigation dorthin (Teilen,
-    // Lesezeichen, Vor-/Zurück-Button) siehe buildChatHashRoute()/
-    // parseChatHash() (chat-lib.mjs) und den hashchange-Listener unten.
-    const targetHash = buildChatHashRoute(roomId);
-    if (location.hash !== targetHash) location.hash = targetHash;
 
     // Erst NACH ensureRoom() (das jedes Mitglieds Userspace synct, siehe
     // dort) nach dem Avatar fragen — vorher lokal nachzusehen würde bei
@@ -1411,60 +1533,13 @@ async function main() {
       });
     }
     renderPresence(roomId);
-    renderMuteButton(roomId);
-    renderEncryptionButton(roomId);
     upsertRoom(roomId, { unread: 0 });
     renderRoomList();
     await renderMessageList(roomId);
     await markActiveRead();
   }
-
-  function closeRoom() {
-    activeRoomId = null;
-    appEl.classList.remove('chat-open');
-    emptyStateEl.classList.add('show');
-    chatPanelEl.classList.add('hidden-empty');
-    if (location.hash) location.hash = '';
-  }
-  backBtn.addEventListener('click', closeRoom);
-
-  /** Spiegelt den Stumm-Zustand des angegebenen Chats (Glocke durchgestrichen ja/nein) im mute-chat-btn — aufgerufen beim Öffnen eines Chats UND beim Umschalten selbst. */
-  function renderMuteButton(roomId) {
-    const muted = isRoomMuted(roomId);
-    muteChatBtn.textContent = muted ? '🔕' : '🔔';
-    muteChatBtn.title = muted ? 'Stummschaltung aufheben' : 'Diesen Chat stummschalten';
-    muteChatBtn.classList.toggle('active', muted);
-  }
-  muteChatBtn.addEventListener('click', () => {
-    if (!activeRoomId) return;
-    setRoomMuted(activeRoomId, !isRoomMuted(activeRoomId));
-    renderMuteButton(activeRoomId);
-  });
-
-  function renderEncryptionButton(roomId) {
-    const encrypted = isRoomEncrypted(roomId);
-    encryptionChatBtn.textContent = encrypted ? '🔒' : '🔓';
-    encryptionChatBtn.title = encrypted ? 'Verschlüsselung für diesen Chat deaktivieren' : 'Verschlüsselung für diesen Chat wieder aktivieren';
-    encryptionChatBtn.classList.toggle('active', !encrypted);
-  }
-  encryptionChatBtn.addEventListener('click', () => {
-    if (!activeRoomId) return;
-    const roomId = activeRoomId;
-    const currentlyEncrypted = isRoomEncrypted(roomId);
-    // Nur beim AUSSCHALTEN warnen — wieder EINschalten ist immer die
-    // sichere Richtung, braucht keine Bestätigung.
-    if (currentlyEncrypted) {
-      const name = roomDisplayName(roomById(roomId));
-      const confirmed = confirm(
-        `Verschlüsselung für den Chat mit ${name} deaktivieren?\n\n` +
-        'Deine künftigen Nachrichten in diesem Chat werden dann im Klartext übertragen und gespeichert — lesbar für den Relay-Betreiber und für jeden mit Lesezugriff auf diesen Raum, nicht mehr nur für die Mitglieder. ' +
-        'Bereits gesendete Nachrichten bleiben unverändert (weiterhin verschlüsselt). Das gilt nur für DEINE Seite — jedes andere Mitglied entscheidet unabhängig für seine eigenen Nachrichten.',
-      );
-      if (!confirmed) return;
-    }
-    setRoomEncrypted(roomId, !currentlyEncrypted);
-    renderEncryptionButton(roomId);
-  });
+  backBtn.addEventListener('click', closeScreen);
+  chatSettingsBtn.addEventListener('click', () => { if (activeRoomId) navigate(activeRoomId, 'settings'); });
 
   // --- Suche (über alle Chats hinweg) ---
   // messagesByRoom hält bereits JEDEN Raum jedes Kontakts geladen
@@ -1573,12 +1648,12 @@ async function main() {
   }
 
   async function openSearchResult(roomId, messageId) {
-    closeSearch();
-    if (activeRoomId !== roomId) await openRoom(roomId);
+    await navigate(roomId);
     scrollToMessage(messageId);
   }
 
-  function openSearch() {
+  /** Suche über alle Chats — `/search` (Router). */
+  function showSearchScreen() {
     searchOverlay.hidden = false;
     searchInput.value = '';
     searchFilter = 'all';
@@ -1586,10 +1661,9 @@ async function main() {
     renderSearchResults();
     searchInput.focus();
   }
-  function closeSearch() { searchOverlay.hidden = true; }
 
-  searchBtn.addEventListener('click', openSearch);
-  searchBackBtn.addEventListener('click', closeSearch);
+  searchBtn.addEventListener('click', () => navigate('search'));
+  searchBackBtn.addEventListener('click', closeScreen);
   searchInput.addEventListener('input', renderSearchResults);
   searchClearBtn.addEventListener('click', () => { searchInput.value = ''; renderSearchResults(); searchInput.focus(); });
   for (const btn of searchFiltersEl.querySelectorAll('.search-filter-btn')) {
@@ -1599,7 +1673,7 @@ async function main() {
       renderSearchResults();
     });
   }
-  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !searchOverlay.hidden) closeSearch(); });
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !searchOverlay.hidden) closeScreen(); });
 
   /**
    * Löscht einen Chat (1:1 ODER Gruppe) nur LOKAL — der Nachrichtenverlauf
@@ -1626,29 +1700,9 @@ async function main() {
     clearTimeout(presenceStaleTimerByRoom.get(roomId));
     presenceStaleTimerByRoom.delete(roomId);
     removeRoomEntry(roomId);
-    if (activeRoomId === roomId) closeRoom();
+    if (activeRoomId === roomId) navigate();
     renderRoomList();
   }
-  $('delete-chat-btn').addEventListener('click', () => {
-    if (!activeRoomId) return;
-    const name = roomDisplayName(roomById(activeRoomId));
-    if (!confirm(`Chat "${name}" löschen?\n\nDer Nachrichtenverlauf bleibt bei den anderen Mitgliedern erhalten, wird hier aber entfernt.`)) return;
-    deleteRoom(activeRoomId);
-  });
-
-  // Direktlinks/Vor-Zurück: `#/<roomId>` (siehe buildChatHashRoute()/
-  // parseChatHash()) öffnet den Chat — nur wenn der Raum lokal schon
-  // bekannt ist (Mitgliederliste nötig, um ihn zu öffnen; das entsteht nur
-  // über handleInboxRequest()/startDm()/createGroupRoom()). Ein leerer
-  // Hash (z. B. über den Zurück-Button oder Browser-"Zurück") schließt ihn.
-  window.addEventListener('hashchange', () => {
-    const roomId = parseChatHash(location.hash);
-    if (roomId) {
-      if (roomId !== activeRoomId && roomById(roomId)) openRoom(roomId);
-      return;
-    }
-    if (!location.hash && activeRoomId) closeRoom();
-  });
 
   // --- Senden ---
   let pendingFiles = [];
@@ -1739,25 +1793,18 @@ async function main() {
     if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); composer.requestSubmit(); }
   });
 
-  // --- Profil-Modal ---
-  const profileModal = $('profile-modal');
-  const avatarPreviewBtn = $('avatar-preview-btn');
-  const avatarInput = $('avatar-input');
+  // --- Eigenes Profil — `/profile` (Router) ---
   let pendingAvatar; // undefined = unverändert, null = "entfernen", dataUrl = neu gewählt
-  meAvatarBtn.addEventListener('click', () => {
+  function showProfileScreen() {
     $('alias-input').value = myAlias;
     $('my-fp-full').textContent = qu.fingerprint;
     pendingAvatar = undefined;
     setAvatar(avatarPreviewBtn, myAlias, myAvatar);
     profileModal.hidden = false;
-    refreshPushUI();
-    soundMessagesToggle.checked = soundEnabled(SOUND_MESSAGES_KEY);
-    soundCallsToggle.checked = soundEnabled(SOUND_CALLS_KEY);
-  });
-  soundMessagesToggle.addEventListener('change', () => setSoundEnabled(SOUND_MESSAGES_KEY, soundMessagesToggle.checked));
-  soundCallsToggle.addEventListener('change', () => setSoundEnabled(SOUND_CALLS_KEY, soundCallsToggle.checked));
-  $('profile-cancel-btn').addEventListener('click', () => { profileModal.hidden = true; });
-  profileModal.addEventListener('click', (ev) => { if (ev.target === profileModal) profileModal.hidden = true; });
+  }
+  meAvatarBtn.addEventListener('click', () => navigate('profile'));
+  $('profile-cancel-btn').addEventListener('click', closeScreen);
+  profileModal.addEventListener('click', (ev) => { if (ev.target === profileModal) closeScreen(); });
   $('avatar-pick-btn').addEventListener('click', () => avatarInput.click());
   $('avatar-clear-btn').addEventListener('click', () => {
     pendingAvatar = null;
@@ -1785,16 +1832,32 @@ async function main() {
     }
     setAvatar(meAvatarBtn, alias, myAvatar);
     await repl.sync({ topic: qu.userSpaceId }).catch((e) => console.error('[chat] self-profile sync failed:', e));
-    profileModal.hidden = true;
+    closeScreen();
   });
   $('copy-fp-btn').addEventListener('click', async () => {
     await navigator.clipboard.writeText(qu.fingerprint).catch(() => {});
   });
   $('share-link-btn').addEventListener('click', async () => {
-    const link = buildInviteLink(location.origin + location.pathname, qu.fingerprint);
+    // Ein geteilter Einladungslink ist einfach `/add-contact/<fp>` — dieselbe
+    // Route wie der "+"-Button, nur mit dem eigenen Fingerprint als zweitem
+    // Pfadsegment vorausgefüllt (siehe Router-Doku oben und showAddContactScreen()).
+    const link = location.origin + location.pathname + buildPath('add-contact', qu.fingerprint);
     if (navigator.share) { await navigator.share({ title: 'QU Chat', text: `Schreib mir im Chat: ${link}` }).catch(() => {}); }
     else { await navigator.clipboard.writeText(link).catch(() => {}); }
   });
+
+  // --- App-Einstellungen — `/settings` (Router) ---
+  function showAppSettingsScreen() {
+    appSettingsModal.hidden = false;
+    refreshPushUI();
+    soundMessagesToggle.checked = soundEnabled(SOUND_MESSAGES_KEY);
+    soundCallsToggle.checked = soundEnabled(SOUND_CALLS_KEY);
+  }
+  settingsBtn.addEventListener('click', () => navigate('settings'));
+  $('app-settings-close-btn').addEventListener('click', closeScreen);
+  appSettingsModal.addEventListener('click', (ev) => { if (ev.target === appSettingsModal) closeScreen(); });
+  soundMessagesToggle.addEventListener('change', () => setSoundEnabled(SOUND_MESSAGES_KEY, soundMessagesToggle.checked));
+  soundCallsToggle.addEventListener('change', () => setSoundEnabled(SOUND_CALLS_KEY, soundCallsToggle.checked));
 
   /**
    * "App zurücksetzen" — für den Fall, dass ein Update (Anruf-Code, ein
@@ -1934,21 +1997,18 @@ async function main() {
 
   initPush();
 
-  // --- Kontakt-hinzufügen-Modal ---
-  const addContactModal = $('add-contact-modal');
-  const contactFpInput = $('contact-fp-input');
-  const contactAliasInput = $('contact-alias-input');
-  const addContactError = $('add-contact-error');
-  function openAddContactModal(prefillFp = '') {
-    contactFpInput.value = prefillFp;
+  // --- Neuer 1:1-Chat — `/add-contact[/<fp>]` (Router; die zweite Form ist
+  // auch das Ziel eines geteilten Einladungslinks, siehe share-link-btn) ---
+  function showAddContactScreen(prefillFp = '') {
+    contactFpInput.value = prefillFp ?? '';
     contactAliasInput.value = '';
     addContactError.textContent = '';
     addContactModal.hidden = false;
     if (!prefillFp) contactFpInput.focus();
   }
-  addContactBtn.addEventListener('click', () => openAddContactModal());
-  $('add-contact-cancel-btn').addEventListener('click', () => { addContactModal.hidden = true; });
-  addContactModal.addEventListener('click', (ev) => { if (ev.target === addContactModal) addContactModal.hidden = true; });
+  addContactBtn.addEventListener('click', () => navigate('add-contact'));
+  $('add-contact-cancel-btn').addEventListener('click', closeScreen);
+  addContactModal.addEventListener('click', (ev) => { if (ev.target === addContactModal) closeScreen(); });
   $('add-contact-save-btn').addEventListener('click', async () => {
     const fp = normalizeFingerprint(contactFpInput.value);
     if (!fp) { addContactError.textContent = 'Ungültiger Fingerprint (24 Hex-Zeichen erwartet).'; return; }
@@ -1960,17 +2020,15 @@ async function main() {
       }
       upsertContact(fp, { alias });
     }
-    addContactModal.hidden = true;
     const roomId = await startDm(fp);
-    openRoom(roomId);
+    // redirectTo() statt navigate(): das ausgefüllte Formular soll nicht
+    // als eigener Schritt im Verlauf stehen bleiben — "zurück" aus dem neu
+    // geöffneten Chat soll dahin führen, wo man VOR dem Öffnen dieses
+    // Screens war, nicht zurück ins (bereits abgeschickte) Formular.
+    await redirectTo(roomId);
   });
 
-  // --- Neue-Gruppe-Modal ---
-  const newGroupModal = $('new-group-modal');
-  const newGroupNameInput = $('new-group-name-input');
-  const newGroupContactListEl = $('new-group-contact-list');
-  const newGroupFpInput = $('new-group-fp-input');
-  const newGroupError = $('new-group-error');
+  // --- Neue Gruppe — `/new-group` (Router) ---
   let newGroupExtraFps = []; // per Fingerprint hinzugefügte Mitglieder, die (noch) kein gespeicherter Kontakt sind
   // Die Auswahl lebt als eigener State (nicht nur als DOM-Checkbox-Zustand)
   // — renderNewGroupMemberPicker() baut die Liste bei JEDEM "Fingerprint
@@ -2006,7 +2064,7 @@ async function main() {
     }
   }
 
-  function openNewGroupModal() {
+  function showNewGroupScreen() {
     newGroupNameInput.value = '';
     newGroupFpInput.value = '';
     newGroupError.textContent = '';
@@ -2016,9 +2074,9 @@ async function main() {
     newGroupModal.hidden = false;
     newGroupNameInput.focus();
   }
-  newGroupBtn.addEventListener('click', openNewGroupModal);
-  $('new-group-cancel-btn').addEventListener('click', () => { newGroupModal.hidden = true; });
-  newGroupModal.addEventListener('click', (ev) => { if (ev.target === newGroupModal) newGroupModal.hidden = true; });
+  newGroupBtn.addEventListener('click', () => navigate('new-group'));
+  $('new-group-cancel-btn').addEventListener('click', closeScreen);
+  newGroupModal.addEventListener('click', (ev) => { if (ev.target === newGroupModal) closeScreen(); });
   $('new-group-fp-add-btn').addEventListener('click', () => {
     const fp = normalizeFingerprint(newGroupFpInput.value);
     if (!fp) { newGroupError.textContent = 'Ungültiger Fingerprint (24 Hex-Zeichen erwartet).'; return; }
@@ -2034,20 +2092,21 @@ async function main() {
     if (!name) { newGroupError.textContent = 'Bitte einen Gruppennamen eingeben.'; return; }
     const selected = [...newGroupSelectedFps];
     if (!selected.length) { newGroupError.textContent = 'Bitte mindestens ein Mitglied auswählen.'; return; }
-    newGroupModal.hidden = true;
     for (const fp of selected) {
       if (!contactByFp(fp)) upsertContact(fp, { alias: shortFp(fp) });
     }
     const roomId = await createGroupRoom(name, selected);
-    openRoom(roomId);
+    await redirectTo(roomId); // siehe add-contact-save-btn's Doku oben — kein Verlaufseintrag fürs abgeschickte Formular
   });
 
-  // --- Gruppendetails-Modal (Umbenennen, Mitglieder hinzufügen/entfernen) ---
-  const groupDetailsModal = $('group-details-modal');
-  const groupNameInput = $('group-name-input');
-  const groupMemberListEl = $('group-member-list');
-  const groupAddMemberInput = $('group-add-member-input');
-  const groupDetailsError = $('group-details-error');
+  // --- Chat-Einstellungen — `/<roomId>/settings` (Router). Stumm/
+  // Verschlüsselung/Löschen für JEDEN Chat, Umbenennen/Mitglieder nur für
+  // eine Gruppe (chatSettingsGroupSection wird für einen DM versteckt). ---
+  function renderChatEncryptionHint(roomId) {
+    chatEncryptionHint.textContent = isRoomEncrypted(roomId)
+      ? 'Deine künftigen Nachrichten sind Ende-zu-Ende verschlüsselt — lesbar nur für die Mitglieder dieses Chats, nicht für den Relay-Betreiber.'
+      : 'Deine künftigen Nachrichten werden im Klartext übertragen und gespeichert — lesbar für den Relay-Betreiber und für jeden mit Lesezugriff auf diesen Raum. Bereits gesendete Nachrichten bleiben unverändert. Gilt nur für DEINE Seite.';
+  }
 
   function renderGroupMemberList(roomId) {
     groupMemberListEl.textContent = '';
@@ -2074,25 +2133,58 @@ async function main() {
     if (!room?.members?.length) groupMemberListEl.appendChild(el('li', 'empty-hint', 'Keine weiteren Mitglieder.'));
   }
 
-  function openGroupDetailsModal() {
-    if (!activeRoomId) return;
-    const room = roomById(activeRoomId);
-    if (!room || !isGroupRoom(room)) return;
-    groupNameInput.value = room.name ?? '';
-    groupAddMemberInput.value = '';
-    groupDetailsError.textContent = '';
-    renderGroupMemberList(activeRoomId);
-    groupDetailsModal.hidden = false;
+  function showChatSettingsScreen(room) {
+    const roomId = room.id;
+    activeRoomId = roomId; // Einstellungen gehören zu GENAU diesem Raum — bleibt "aktiv" wie im Chat-Screen selbst, siehe renderPresence()/renderTicks() u. a., die harmlos auf jetzt verstecktes Markup zielen, falls der darunterliegende Chat-Screen selbst gerade nicht sichtbar ist.
+    chatSettingsTitleEl.textContent = roomDisplayName(room);
+    chatSettingsGroupSection.hidden = !isGroupRoom(room);
+    if (isGroupRoom(room)) {
+      groupNameInput.value = room.name ?? '';
+      groupAddMemberInput.value = '';
+      groupDetailsError.textContent = '';
+      renderGroupMemberList(roomId);
+    }
+    chatMuteToggle.checked = isRoomMuted(roomId);
+    chatEncryptionToggle.checked = isRoomEncrypted(roomId);
+    renderChatEncryptionHint(roomId);
+    chatSettingsModal.hidden = false;
   }
-  groupMembersBtn.addEventListener('click', openGroupDetailsModal);
-  $('group-details-close-btn').addEventListener('click', () => { groupDetailsModal.hidden = true; });
-  groupDetailsModal.addEventListener('click', (ev) => { if (ev.target === groupDetailsModal) groupDetailsModal.hidden = true; });
+  $('chat-settings-close-btn').addEventListener('click', closeScreen);
+  chatSettingsModal.addEventListener('click', (ev) => { if (ev.target === chatSettingsModal) closeScreen(); });
+  chatMuteToggle.addEventListener('change', () => {
+    if (!activeRoomId) return;
+    setRoomMuted(activeRoomId, chatMuteToggle.checked);
+  });
+  chatEncryptionToggle.addEventListener('change', () => {
+    if (!activeRoomId) return;
+    const roomId = activeRoomId;
+    // Nur beim AUSSCHALTEN warnen — wieder EINschalten ist immer die
+    // sichere Richtung, braucht keine Bestätigung.
+    if (!chatEncryptionToggle.checked) {
+      const name = roomDisplayName(roomById(roomId));
+      const confirmed = confirm(
+        `Verschlüsselung für den Chat "${name}" deaktivieren?\n\n` +
+        'Deine künftigen Nachrichten in diesem Chat werden dann im Klartext übertragen und gespeichert — lesbar für den Relay-Betreiber und für jeden mit Lesezugriff auf diesen Raum, nicht mehr nur für die Mitglieder. ' +
+        'Bereits gesendete Nachrichten bleiben unverändert (weiterhin verschlüsselt). Das gilt nur für DEINE Seite — jedes andere Mitglied entscheidet unabhängig für seine eigenen Nachrichten.',
+      );
+      if (!confirmed) { chatEncryptionToggle.checked = true; return; }
+    }
+    setRoomEncrypted(roomId, chatEncryptionToggle.checked);
+    renderChatEncryptionHint(roomId);
+  });
+  chatDeleteBtn.addEventListener('click', () => {
+    if (!activeRoomId) return;
+    const name = roomDisplayName(roomById(activeRoomId));
+    if (!confirm(`Chat "${name}" löschen?\n\nDer Nachrichtenverlauf bleibt bei den anderen Mitgliedern erhalten, wird hier aber entfernt.`)) return;
+    deleteRoom(activeRoomId);
+  });
   $('group-rename-save-btn').addEventListener('click', async () => {
     if (!activeRoomId) return;
     const name = groupNameInput.value.trim();
     if (!name) { groupDetailsError.textContent = 'Bitte einen Gruppennamen eingeben.'; return; }
     groupDetailsError.textContent = '';
     await renameGroupRoom(activeRoomId, name).catch((e) => { groupDetailsError.textContent = `Fehler: ${e.message}`; });
+    chatSettingsTitleEl.textContent = roomDisplayName(roomById(activeRoomId));
   });
   $('group-add-member-btn').addEventListener('click', async () => {
     if (!activeRoomId) return;
@@ -2107,22 +2199,20 @@ async function main() {
     renderGroupMemberList(activeRoomId);
   });
 
-  // Einladungslink (#add=<fingerprint>) direkt beim Laden verarbeiten —
-  // history.replaceState() räumt den `#add=...`-Hash IMMER zuerst weg
-  // (auch im Modal-Fall, in dem noch gar kein Chat-Hash gesetzt wird),
-  // damit ein anschließendes openRoom() unten nicht seinen eigenen, gerade
-  // erst gesetzten Chat-Hash (`#/<roomId>`) wieder verliert.
-  const invitedFp = parseInviteHash(location.hash);
-  if (invitedFp && invitedFp !== qu.fingerprint) {
+  // Erste Route rendern. Zeigt der aktuelle Hash NICHT die Chatliste
+  // (Direktlink — ein geteilter Einladungslink, ein Lesezeichen, ein
+  // Reload mitten in einem Screen), wird die aktuelle Adresse zuerst per
+  // replaceState() zur Chatliste normalisiert und der eigentliche
+  // Ziel-Hash DANACH per navigate() (echter Verlaufseintrag) obendrauf
+  // gelegt — garantiert, dass history.back() (closeScreen()) aus JEDEM
+  // Screen, auch einem direkt verlinkten, auf der Chatliste landet statt
+  // die App zu verlassen (siehe Router-Doku weiter oben).
+  if (location.hash && location.hash !== '#/') {
+    const target = parsePathSegments(location.hash);
     history.replaceState(null, '', location.pathname);
-    if (!contactByFp(invitedFp)) openAddContactModal(invitedFp);
-    else startDm(invitedFp).then(openRoom);
+    if (target.length) await navigate(...target);
   } else {
-    // Direktlink zu einem Chat (#/<roomId>, siehe buildChatHashRoute()) —
-    // nur wenn der Raum lokal schon bekannt ist (siehe hashchange-Listener
-    // oben für die identische Bedingung/Begründung).
-    const roomId = parseChatHash(location.hash);
-    if (roomId && roomById(roomId)) openRoom(roomId);
+    await renderRoute();
   }
 
   // --- Anruf (Audio/Video über WebRTC) ---
@@ -2330,9 +2420,9 @@ async function main() {
 
   // Anrufe bleiben (vorerst) 1:1 — ein Gruppenanruf bräuchte eine
   // Mehrparteien-WebRTC-Signalisierung, die dieser Umbau nicht anfasst;
-  // die Buttons selbst sind für eine Gruppe schon per CSS/renderCallButtons()
-  // (siehe openRoom()) ausgeblendet, dieser Guard ist nur die zweite,
-  // vom Markup unabhängige Absicherung.
+  // die Buttons selbst sind für eine Gruppe schon ausgeblendet (siehe
+  // showChatScreen()), dieser Guard ist nur die zweite, vom Markup
+  // unabhängige Absicherung.
   audioCallBtn.addEventListener('click', () => {
     const room = roomById(activeRoomId);
     if (room && !isGroupRoom(room)) startCall(room.members[0], 'audio');

@@ -33,6 +33,7 @@
         <button id="search-btn" class="icon-btn" type="button" title="Suchen">🔍</button>
         <button id="new-group-btn" class="icon-btn" type="button" title="Neue Gruppe">👥</button>
         <button id="add-contact-btn" class="icon-btn" type="button" title="Neuer Chat">+</button>
+        <button id="settings-btn" class="icon-btn" type="button" title="Einstellungen">⚙</button>
       </header>
       <div id="status-bar" class="status-bar">Verbinde …</div>
       <ul id="contact-list" class="contact-list"></ul>
@@ -48,10 +49,7 @@
         </div>
         <button id="audio-call-btn" class="icon-btn" type="button" title="Anrufen">📞</button>
         <button id="video-call-btn" class="icon-btn" type="button" title="Videoanruf">🎥</button>
-        <button id="group-members-btn" class="icon-btn" type="button" title="Mitglieder verwalten" hidden>👥</button>
-        <button id="mute-chat-btn" class="icon-btn" type="button" title="Diesen Chat stummschalten">🔔</button>
-        <button id="encryption-chat-btn" class="icon-btn" type="button" title="Verschlüsselung für diesen Chat">🔒</button>
-        <button id="delete-chat-btn" class="icon-btn" type="button" title="Chat löschen">🗑</button>
+        <button id="chat-settings-btn" class="icon-btn" type="button" title="Chat-Einstellungen">⚙</button>
       </header>
 
       <ul id="message-list" class="message-list"></ul>
@@ -73,7 +71,7 @@
     </div>
   </div>
 
-  <!-- Eigenes Profil / Fingerprint teilen -->
+  <!-- Eigenes Profil (Avatar, Anzeigename, Fingerprint, Einladungslink) — #/profile -->
   <div id="profile-modal" class="modal-backdrop" hidden>
     <div class="modal">
       <h2>Mein Profil</h2>
@@ -94,6 +92,17 @@
         <button id="copy-fp-btn" class="btn btn-secondary" type="button">Fingerprint kopieren</button>
         <button id="share-link-btn" class="btn btn-secondary" type="button">Einladungslink teilen</button>
       </div>
+      <div class="modal-actions">
+        <button id="profile-cancel-btn" class="btn btn-secondary" type="button">Schließen</button>
+        <button id="profile-save-btn" class="btn btn-primary" type="button">Speichern</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- App-Einstellungen (Push, Töne, Zurücksetzen) — #/settings -->
+  <div id="app-settings-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <h2>Einstellungen</h2>
       <label>Push-Benachrichtigungen</label>
       <div class="modal-actions push-row">
         <button id="push-toggle-btn" class="btn btn-secondary" type="button">…</button>
@@ -102,15 +111,14 @@
       <label>Töne</label>
       <label class="toggle-row"><input type="checkbox" id="sound-messages-toggle" /> Ton bei neuen Nachrichten</label>
       <label class="toggle-row"><input type="checkbox" id="sound-calls-toggle" /> Klingelton bei Anrufen</label>
-      <p class="modal-hint">Pro Chat lässt sich zusätzlich stummschalten (🔔-Symbol im jeweiligen Chat).</p>
+      <p class="modal-hint">Pro Chat lässt sich zusätzlich stummschalten (siehe die Einstellungen des jeweiligen Chats).</p>
       <label>Fehlerbehebung</label>
       <div class="modal-actions">
         <button id="reset-app-btn" class="btn btn-secondary" type="button">App zurücksetzen</button>
       </div>
       <p class="modal-hint">Erneuert Service Worker &amp; Browser-Cache und lädt neu — für den Fall, dass ein Update (z. B. am Anruf-Code) nicht ankommt. Fingerprint, Kontakte und Nachrichten bleiben erhalten.</p>
       <div class="modal-actions">
-        <button id="profile-cancel-btn" class="btn btn-secondary" type="button">Schließen</button>
-        <button id="profile-save-btn" class="btn btn-primary" type="button">Speichern</button>
+        <button id="app-settings-close-btn" class="btn btn-secondary" type="button">Schließen</button>
       </div>
     </div>
   </div>
@@ -152,25 +160,41 @@
     </div>
   </div>
 
-  <!-- Gruppendetails: umbenennen, Mitglieder hinzufügen/entfernen -->
-  <div id="group-details-modal" class="modal-backdrop" hidden>
+  <!-- Chat-Einstellungen — #/<roomId>/settings. Stumm/Verschlüsselung/Löschen
+       gelten für JEDEN Chat (1:1 UND Gruppe); Umbenennen/Mitglieder nur für
+       eine Gruppe (app.mjs blendet diese Sektion für einen DM aus). -->
+  <div id="chat-settings-modal" class="modal-backdrop" hidden>
     <div class="modal">
-      <h2>Gruppendetails</h2>
-      <label for="group-name-input">Gruppenname</label>
-      <div class="modal-actions">
-        <input type="text" id="group-name-input" maxlength="60" />
-        <button id="group-rename-save-btn" class="btn btn-secondary" type="button">Speichern</button>
+      <h2 id="chat-settings-title">Chat-Einstellungen</h2>
+
+      <div id="chat-settings-group-section">
+        <label for="group-name-input">Gruppenname</label>
+        <div class="modal-actions">
+          <input type="text" id="group-name-input" maxlength="60" />
+          <button id="group-rename-save-btn" class="btn btn-secondary" type="button">Speichern</button>
+        </div>
+        <label>Mitglieder</label>
+        <ul id="group-member-list" class="group-member-list"></ul>
+        <label for="group-add-member-input">Mitglied per Fingerprint hinzufügen</label>
+        <div class="modal-actions">
+          <input type="text" id="group-add-member-input" placeholder="24 Hex-Zeichen" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <button id="group-add-member-btn" class="btn btn-secondary" type="button">Hinzufügen</button>
+        </div>
+        <div class="modal-error" id="group-details-error"></div>
       </div>
-      <label>Mitglieder</label>
-      <ul id="group-member-list" class="group-member-list"></ul>
-      <label for="group-add-member-input">Mitglied per Fingerprint hinzufügen</label>
+
+      <label class="toggle-row"><input type="checkbox" id="chat-mute-toggle" /> Diesen Chat stummschalten</label>
+      <label class="toggle-row"><input type="checkbox" id="chat-encryption-toggle" checked /> Ende-zu-Ende verschlüsselt</label>
+      <p class="modal-hint" id="chat-encryption-hint">Deine künftigen Nachrichten werden Ende-zu-Ende verschlüsselt — lesbar nur für die Mitglieder dieses Chats, nicht für den Relay-Betreiber.</p>
+
+      <label>Chat löschen</label>
       <div class="modal-actions">
-        <input type="text" id="group-add-member-input" placeholder="24 Hex-Zeichen" autocomplete="off" autocapitalize="off" spellcheck="false" />
-        <button id="group-add-member-btn" class="btn btn-secondary" type="button">Hinzufügen</button>
+        <button id="chat-delete-btn" class="btn btn-secondary" type="button">Chat löschen</button>
       </div>
-      <div class="modal-error" id="group-details-error"></div>
+      <p class="modal-hint">Löscht den Chat nur auf diesem Gerät — der Nachrichtenverlauf bleibt bei den anderen Mitgliedern erhalten.</p>
+
       <div class="modal-actions">
-        <button id="group-details-close-btn" class="btn btn-secondary" type="button">Schließen</button>
+        <button id="chat-settings-close-btn" class="btn btn-secondary" type="button">Schließen</button>
       </div>
     </div>
   </div>

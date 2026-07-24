@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   isValidFingerprint, normalizeFingerprint, dmRoomId, groupRoomId, inboxId, shortFp, fmtBytes,
   fmtTime, fmtDayLabel, fmtCallDuration, linkify, mediaKind, sortByActivity,
-  buildInviteLink, parseInviteHash, buildChatHashRoute, parseChatHash,
+  buildPath, parsePathSegments,
 } from './chat-lib.mjs';
 
 const FP_A = 'a1b2c3d4e5f60718293a4b5c';
@@ -109,38 +109,28 @@ test('sortByActivity() sorts by lastTs desc, missing lastTs last, tie-break by a
   assert.deepEqual(sorted.map((c) => c.alias), ['Cid', 'Bea', 'Amy', 'Zoe']);
 });
 
-test('buildInviteLink()/parseInviteHash() round-trip', () => {
-  const link = buildInviteLink('https://chat.example/app.html', FP_A);
-  assert.equal(link, `https://chat.example/app.html#add=${FP_A}`);
-  const hash = link.slice(link.indexOf('#'));
-  assert.equal(parseInviteHash(hash), FP_A);
-});
-
-test('parseInviteHash() returns null for garbage/missing hash', () => {
-  assert.equal(parseInviteHash('#foo=bar'), null);
-  assert.equal(parseInviteHash(''), null);
-  assert.equal(parseInviteHash('#add=not-a-fingerprint'), null);
-});
-
-test('buildChatHashRoute()/parseChatHash() round-trip (clean path-style hash, roomId as the first segment)', () => {
-  const hash = buildChatHashRoute('dm-abc-def');
+test('buildPath()/parsePathSegments() round-trip for a single segment', () => {
+  const hash = buildPath('dm-abc-def');
   assert.equal(hash, '#/dm-abc-def');
-  assert.equal(parseChatHash(hash), 'dm-abc-def');
-  assert.equal(parseChatHash('/dm-abc-def'), 'dm-abc-def'); // auch ohne führendes '#' (z. B. schon von location.hash getrennt)
+  assert.deepEqual(parsePathSegments(hash), ['dm-abc-def']);
+  assert.deepEqual(parsePathSegments('/dm-abc-def'), ['dm-abc-def']); // auch ohne führendes '#' (z. B. schon von location.hash getrennt)
 });
 
-test('buildChatHashRoute() encodes/decodes a special character in a roomId round-trip', () => {
-  const hash = buildChatHashRoute('grp-a b');
-  assert.equal(parseChatHash(hash), 'grp-a b');
+test('buildPath()/parsePathSegments() round-trip for multiple segments — the same route scheme every screen (chat, chat settings, profile, app settings, search, add-contact, new-group) is built from', () => {
+  const hash = buildPath('add-contact', 'a1b2c3d4e5f60718293a4b5c');
+  assert.equal(hash, '#/add-contact/a1b2c3d4e5f60718293a4b5c');
+  assert.deepEqual(parsePathSegments(hash), ['add-contact', 'a1b2c3d4e5f60718293a4b5c']);
+
+  assert.deepEqual(parsePathSegments(buildPath('dm-abc-def', 'settings')), ['dm-abc-def', 'settings']);
 });
 
-test('parseChatHash() only reads the FIRST path segment — later segments are reserved for future deep-links, not part of the roomId', () => {
-  assert.equal(parseChatHash('#/dm-abc-def/thread/xyz'), 'dm-abc-def');
+test('buildPath() encodes/decodes a special character in a segment round-trip', () => {
+  const hash = buildPath('grp-a b');
+  assert.deepEqual(parsePathSegments(hash), ['grp-a b']);
 });
 
-test('parseChatHash() never matches an invite hash, a bare (non-path) hash, or garbage', () => {
-  assert.equal(parseChatHash(`#add=${FP_A}`), null);
-  assert.equal(parseChatHash(''), null);
-  assert.equal(parseChatHash(`#${FP_A}`), null); // kein "/"-Pfad — kein Chat-Link (mehr)
-  assert.equal(parseChatHash('#/'), null); // Pfad ohne Segment
+test('parsePathSegments() returns [] for the root/empty/non-path hash — the chat list', () => {
+  assert.deepEqual(parsePathSegments(''), []);
+  assert.deepEqual(parsePathSegments('#/'), []);
+  assert.deepEqual(parsePathSegments(`#${FP_A}`), []); // kein "/"-Pfad
 });
