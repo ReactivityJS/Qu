@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { QuRuntime, QuStore, MemoryAdapter, createVerifyPlugin } from '../src/index.js';
+import { createRelay } from '../relay/relay.mjs';
+import { bridgeWebSocketServer } from '../relay/node-ws-bridge.mjs';
 
 export function makeRuntime() {
   const rt = new QuRuntime({ store: new QuStore([{ prefix: '', adapter: new MemoryAdapter() }]) });
@@ -55,6 +58,42 @@ export async function assertStorageAdapterContract(adapter) {
   await adapter.delete(a.id);
   assert.equal(await adapter.get(a.id), null, 'delete() must make a subsequent get() return null');
   assert.equal((await adapter.getAll('contract/')).length, 1, 'delete() must also remove the entry from getAll()');
+}
+
+/**
+ * A real relay over a real WebSocket server on an ephemeral port — the
+ * exact same handful of lines (http.createServer + listen(0) +
+ * createRelay() + bridgeWebSocketServer()) was independently duplicated
+ * across test/relay.test.mjs, test/relay-mirror.test.mjs,
+ * test/relay-push.test.mjs, and examples/app-space-lib.test.mjs, each with
+ * its own slightly-differently-named local `startTestServer()`. `relayOpts`
+ * is passed straight through to createRelay() — the STORE/fileStorage/
+ * pushTopics/sendPush shape a specific test needs stays entirely with that
+ * test, only the server bootstrapping itself is shared here.
+ */
+export async function startTestRelayServer(relayOpts = {}) {
+  const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const relayApi = await createRelay(relayOpts);
+  bridgeWebSocketServer(server, relayApi, { path: '/relay' });
+  return { server, port, url: `ws://127.0.0.1:${port}/relay`, ...relayApi };
+}
+
+/**
+ * Counterpart to startTestRelayServer(). `closeAllConnections()` does NOT
+ * reach a WebSocket-upgraded socket — the upgrade hijacks it out of
+ * http.Server's normal connection tracking — so this only reliably
+ * resolves if every CLIENT channel talking to this server was already
+ * closed beforehand; otherwise the awaited `server.close()` callback can
+ * hang forever waiting for a connection it doesn't know is still open
+ * (confirmed the hard way — see examples/app-space-lib.test.mjs's git
+ * history for the CI hang this caused when a cleanup hook closed the
+ * server before its channels).
+ */
+export async function stopTestRelayServer(server) {
+  server.closeAllConnections?.();
+  await new Promise((resolve) => server.close(resolve));
 }
 
 export async function withSilencedConsoleError(fn) {
