@@ -23,12 +23,12 @@
 // derselbe Mechanismus, den jede andere Space-basierte App (ToDo, Forum,
 // CMS) genauso braucht.
 
-const FINGERPRINT_RE = /^[0-9a-f]{24}$/i;
-
-/** Ist `value` ein plausibler QU-Fingerprint (24 Hex-Zeichen, core/identity.js)? */
-export function isValidFingerprint(value) {
-  return typeof value === 'string' && FINGERPRINT_RE.test(value.trim());
-}
+// Kanonische Definition + Regex liegen in core/identity.js — hier nur
+// re-exportiert (wie examples/people/people-lib.mjs es schon vormacht),
+// keine eigene Kopie mehr. Als Import statt reinem `export ... from`, weil
+// normalizeFingerprint() unten selbst darauf aufbaut.
+import { isValidFingerprint } from '../../src/core/identity.js';
+export { isValidFingerprint };
 
 /** Trimmt/normalisiert eine per Hand eingefügte Fingerprint-Eingabe (Groß-/Kleinschreibung, Whitespace) — `null`, falls das Ergebnis kein gültiger Fingerprint ist. */
 export function normalizeFingerprint(input) {

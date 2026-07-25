@@ -191,25 +191,27 @@ export async function createSpaceAt(session, id, opts) {
  * — for an App-Space, where the id is fixed and known upfront rather than
  * freshly generated.
  */
+/**
+ * Shared by `qu.createSpace()`/`qu.createSpaceAt()` below — both are the
+ * same "make a node at `id`, fire off its manifest write, expose that write
+ * as `.ready`" recipe, differing only in whether `id` is freshly random or
+ * caller-chosen. `fnName` is only for the error/log messages, so a failure
+ * still points at the actual call the caller made.
+ */
+function makeSpace(qu, id, opts, fnName) {
+  if (qu.isGuest) throw new Error(`[Spaces] Guest-Sessions haben kein Schreibrecht (versucht: ${fnName}). Mit Qu.create({ identity }) eine echte Identität verwenden.`);
+  const space = qu.get(id);
+  space.ready = qu.session.publish(id, buildManifest(qu.fingerprint, opts));
+  space.ready.catch((e) => console.error(`[Spaces] ${fnName}(): manifest write for ${id} failed:`, e));
+  return space;
+}
+
 export function createSpacesPlugin() {
   return {
     install(qu) {
       qu.setACLResolver(createSpaceACLResolver(qu.runtime));
-      qu.createSpace = (opts) => {
-        if (qu.isGuest) throw new Error('[Spaces] Guest-Sessions haben kein Schreibrecht (versucht: createSpace). Mit Qu.create({ identity }) eine echte Identität verwenden.');
-        const spaceId = randomSpaceId();
-        const space = qu.get(spaceId);
-        space.ready = qu.session.publish(spaceId, buildManifest(qu.fingerprint, opts));
-        space.ready.catch((e) => console.error(`[Spaces] createSpace(): manifest write for ${spaceId} failed:`, e));
-        return space;
-      };
-      qu.createSpaceAt = (id, opts) => {
-        if (qu.isGuest) throw new Error('[Spaces] Guest-Sessions haben kein Schreibrecht (versucht: createSpaceAt). Mit Qu.create({ identity }) eine echte Identität verwenden.');
-        const space = qu.get(id);
-        space.ready = qu.session.publish(id, buildManifest(qu.fingerprint, opts));
-        space.ready.catch((e) => console.error(`[Spaces] createSpaceAt(): manifest write for ${id} failed:`, e));
-        return space;
-      };
+      qu.createSpace = (opts) => makeSpace(qu, randomSpaceId(), opts, 'createSpace');
+      qu.createSpaceAt = (id, opts) => makeSpace(qu, id, opts, 'createSpaceAt');
       // qu-gebundene Bequemlichkeit über addToRole()/removeFromRole() (siehe
       // deren Doku oben) — `session` muss so nicht an jeder Aufrufstelle
       // durchgereicht werden, derselbe Komfort wie qu.createSpace(opts)
