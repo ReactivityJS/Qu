@@ -1637,12 +1637,70 @@ async function main() {
     if (isNearBottom()) messageListEl.scrollTop = messageListEl.scrollHeight;
   }
 
+  /**
+   * Baut sofort/synchron nur den Platzhalter (`wrap`) und gibt ihn direkt
+   * zurück — der eigentliche Aufbau (Manifest abwarten, dann Anhang selbst)
+   * läuft asynchron im Hintergrund und füllt dieselbe `wrap`-Node später.
+   * Genau das erlaubt buildMessageItem()/appendLiveMessage() weiterhin
+   * `await renderAttachment(refId)` zu schreiben, ohne dass das komplette
+   * Rendern der Nachrichtenliste auf einen unter Umständen mehrere Sekunden
+   * dauernden Manifest-Sync warten müsste.
+   */
   async function renderAttachment(refId) {
-    const manifestQ = await qu.get(refId);
-    if (!manifestQ) return el('div', 'attachment-progress', 'Anhang nicht gefunden');
-    const manifest = manifestQ.value;
     const wrap = el('div', 'attachment');
-    let status = el('div', 'attachment-progress', 'wird geladen …');
+    const status = el('div', 'attachment-progress', 'wird geladen …');
+    wrap.appendChild(status);
+    waitForManifestThenRender(refId, wrap, status);
+    return wrap;
+  }
+
+  /**
+   * Der Anhangs-Verweis (`refId`) und die Nachricht, die ihn trägt, sind
+   * ZWEI unabhängige QuBits — eine Live-Zustellung kann die Nachricht
+   * liefern, bevor ihr Manifest lokal angekommen ist (der Sender
+   * veröffentlicht zwar immer erst das Manifest, dann die Nachricht, aber
+   * die NETZWERK-Zustellung beider ist unabhängig, keine garantierte
+   * Reihenfolge). Ein einmaliges `qu.get(refId) === null` ist also meist
+   * ein VORÜBERGEHENDER Zustand ("noch nicht angekommen"), kein
+   * dauerhaftes "existiert nicht" — mit Backoff mehrfach erneut versuchen,
+   * statt sofort aufzugeben und dauerhaft "Anhang nicht gefunden"
+   * anzuzeigen (der eigentliche Bug: ein reiner Zeitpunkt-Schnappschuss,
+   * der nie erneut gerendert wurde, selbst wenn das Manifest kurz danach
+   * doch noch ankam). Gibt bei endgültigem Fehlschlag einen "Erneut
+   * versuchen"-Button statt einer Sackgasse.
+   */
+  async function waitForManifestThenRender(refId, wrap, status) {
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      const manifestQ = await qu.get(refId);
+      if (manifestQ) { await renderAttachmentBody(refId, manifestQ, wrap, status); return; }
+      // Erst NACH dem ersten await prüfbar (renderAttachment() hat `wrap`
+      // bis hierhin noch gar nicht an den Aufrufer zurückgegeben, geschweige
+      // denn dieser es schon ins DOM gehängt — ein Check VOR dem ersten
+      // await würde hier fälschlich immer "nicht verbunden" sehen).
+      if (!wrap.isConnected) return; // Nachricht/Raum inzwischen verlassen — nichts mehr zu tun
+      status.textContent = `Anhang wird synchronisiert … (${attempt}/8)`;
+      await new Promise((r) => setTimeout(r, 500 * attempt));
+    }
+    if (!wrap.isConnected) return;
+    wrap.textContent = '';
+    wrap.appendChild(el('div', 'attachment-progress', 'Anhang noch nicht verfügbar — der Absender synchronisiert möglicherweise noch.'));
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'attachment-btn';
+    retry.textContent = 'Erneut versuchen';
+    retry.addEventListener('click', () => {
+      wrap.textContent = '';
+      const newStatus = el('div', 'attachment-progress', 'wird geladen …');
+      wrap.appendChild(newStatus);
+      waitForManifestThenRender(refId, wrap, newStatus);
+    });
+    wrap.appendChild(retry);
+  }
+
+  /** Der eigentliche Anhang-Aufbau, sobald das Manifest lokal feststeht — befüllt die von renderAttachment() bereits ins DOM gehängte `wrap`-Node, statt eine neue zurückzugeben (die alte hat der Aufrufer schon angehängt). */
+  async function renderAttachmentBody(refId, manifestQ, wrap, status) {
+    const manifest = manifestQ.value;
+    wrap.textContent = '';
     wrap.appendChild(status);
 
     // name/mime/size stehen bei einem verschlüsselten Anhang NICHT direkt
@@ -1650,7 +1708,11 @@ async function main() {
     // entschlüsselt sie separat vom eigentlichen Dateiinhalt, damit Vorschau/
     // Download-Link auch VOR dem vollständigen Herunterladen möglich sind.
     const fileMeta = await readFileMeta(manifest, qu.identity);
-    if (!fileMeta) return el('div', 'attachment-progress', 'Anhang nicht zugänglich (nicht für dich verschlüsselt).');
+    if (!fileMeta) {
+      wrap.textContent = '';
+      wrap.appendChild(el('div', 'attachment-progress', 'Anhang nicht zugänglich (nicht für dich verschlüsselt).'));
+      return;
+    }
     const kind = mediaKind(fileMeta.mime);
 
     /** Zeigt einen Fehler + "Erneut versuchen"-Button statt eines kaputten Bild-/Player-Elements — z. B. wenn ein Chunk beim Absender/Relay (noch) nicht verfügbar ist. */
@@ -1794,7 +1856,6 @@ async function main() {
     // ausstehender Download wird gegen "Medien automatisch laden" geprüft.
     if ((await fileTransfer.hasComplete(refId)) || (await autoLoadMedia())) reveal();
     else showLoadPlaceholder();
-    return wrap;
   }
 
   function renderMessageText(container, text) {
