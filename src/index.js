@@ -2,114 +2,34 @@
 // here — internal file layout (core/adapters/network/data/modules) can
 // change without breaking `import { ... } from 'qu-core'`.
 //
+// Composed from src/bundles/core-plugins.js (Core + storage/network/data
+// plugins) + src/bundles/app-space.js (Spaces/membership/profiles/chat/
+// presence) — the same two pieces scripts/build.mjs bundles separately
+// for a size-conscious consumer, just re-exported together here as the
+// "everything except UI" default. See src/bundles/README.md for the full
+// bundle breakdown (core / plugins-* / app-space / ui / core-plugins / all).
+//
 // Deliberately NOT exported here — for opposite platform reasons:
 // - adapters/node-fs.js and adapters/node-fs-file-storage.js import
 //   node:fs/node:path, which would break any page that loads this barrel
 //   in a browser (CORS/module-resolution errors, not just "unused code").
 //   Node-only consumers (the relay, Node scripts) import them directly.
-// - ui/components.js extends HTMLElement at module-evaluation time (a
-//   Custom Element class declaration, not just a function body reference),
-//   which throws immediately if imported in Node. Browser consumers import
-//   it directly: `import '../ui/components.js';`.
+// - ui/components.js (and profile-components.js/people-search-components.js)
+//   extend HTMLElement at module-evaluation time (a Custom Element class
+//   declaration, not just a function body reference), which throws
+//   immediately if imported in Node. Browser consumers import
+//   src/bundles/ui.js (or the individual files) directly instead.
 // Everything else here only *references* browser globals (WebSocket,
 // RTCPeerConnection, localStorage, indexedDB, ...) inside function bodies —
 // safe to import in Node too, it just can't be called there.
+export * from './bundles/core-plugins.js';
+export * from './bundles/app-space.js';
 
-// Recommended entry point for most applications:
-export { Qu } from './qu.js';
-
-// Ready-made `plugins` combinations for `Qu.create({ plugins })` — see
-// src/presets.js. Lives outside qu.js itself (Core must never import
-// modules/network — see that file's own doc comment for why).
-export { QU_PRESETS } from './presets.js';
-
-// Underlying primitives — still directly usable for advanced composition.
-export { QuRuntime } from './core/runtime.js';
-export { QuStore, compareQubits } from './core/store.js';
-export { QuSession } from './core/session.js';
-export { QuIdentity, isValidFingerprint } from './core/identity.js';
-export { QuSpace } from './core/space-handle.js';
-export { QuClock } from './core/clock.js';
-export { QuPipeline } from './core/pipeline.js';
-export { debug, onDebug, enableConsoleDebug } from './core/debug.js';
-export { assertChannel, createLoopbackChannelPair } from './core/channel.js';
-export { assertStorageAdapter } from './core/storage.js';
-export { createVerifyPlugin } from './core/verify.js';
-export { createACLPlugin, filterForReader } from './core/acl.js';
-export { createIdentityACL } from './core/identity-acl.js';
-export {
-  spaceIdOf,
-  isUserSpaceId,
-  userSpaceId,
-  fingerprintOfUserSpace,
-  randomSpaceId,
-  isReservedProfilePath,
-  RESERVED_PROFILE_PATHS,
-} from './core/space.js';
-export { assertValidPattern } from './core/pattern.js';
-
-// Category 1 — storage adapters. Memory/Null are what make the Core
-// local-only/offline by default; Local/Session/IndexedDB cover the browser,
-// node-fs*.js (Node-only, see note above) covers the filesystem.
-export { MemoryAdapter } from './adapters/memory.js';
-export { NullAdapter } from './adapters/null.js';
-export { MemoryFileStorageAdapter } from './adapters/file-storage-memory.js';
-export { IndexedDBFileStorageAdapter } from './adapters/indexeddb-file-storage.js';
-export { LocalStorageAdapter } from './adapters/local-storage.js';
-export { SessionStorageAdapter } from './adapters/session-storage.js';
-export { WebStorageAdapter } from './adapters/web-storage.js';
-export { IndexedDBAdapter } from './adapters/indexeddb.js';
-
-// Category 2 — network: replication, transports, routing. Entirely optional
-// — a Qu instance that never imports/uses any of this stays fully offline.
-export { authenticateChannel } from './network/handshake.js';
-export { Router } from './network/router.js';
-export { sendRoutedEvent, onRoutedEvent } from './network/routed-events.js';
-export { createWebSocketChannel } from './network/transports/websocket-browser.js';
-export { createWebRTCChannel } from './network/transports/webrtc-browser.js';
-export { PeerConnectionManager } from './network/webrtc-peer-manager.js';
-export { createWebRTCPlugin } from './network/webrtc-plugin.js';
-export { DefaultReplication } from './network/replication/default.js';
-export { ReplicationHub } from './network/replication/hub.js';
-export { assertReplicationProvider } from './network/replication/provider.js';
-export { createNetworkPlugin } from './network/index.js';
-export { createRateLimiter } from './network/rate-limiter.js';
-export { requireDirectWriterGate, rateLimitGate } from './network/ingest-gate.js';
-
-// Category 3 — data: references (obj://, key://, file://) and files.
-export {
-  isReference, parseReference, objRef, keyRef, fileRef,
-  resolveReference, resolveValue, createReferenceHandlerPlugin,
-} from './data/references.js';
-export { publishFile, reassembleFile, missingChunks, readFileMeta } from './data/files/manifest.js';
-export { DefaultFileTransfer } from './data/files/transfer.js';
-export { assertFileStorageAdapter } from './data/files/contract.js';
-export { shareFile, resolveFileRef, createFileHandlerPlugin } from './data/files/index.js';
-
-// Application modules — optional, built entirely on the public Qu/Session
-// API (see modules/spaces.js, modules/chat.js). createSpacesPlugin() is
-// what makes qu.createSpace() exist at all — the Core default ACL
-// (core/identity-acl.js) only ever grants `~<your fingerprint>`.
-export { createSpaceACLResolver, createSpace, createSpaceAt, createSpacesPlugin, addToRole, removeFromRole } from './modules/spaces.js';
-export {
-  inboxId, ensureSpace, notifyMembers, onSpaceInvite, addSpaceMember, removeSpaceMember, createSpaceMembershipPlugin,
-} from './modules/space-membership.js';
-export {
-  setProfileAttr, getProfileAttr, deleteProfileAttr, listProfileAttrs, onProfileAttrsChange,
-  DIRECTORY_ID, ensureDirectory, setDirectoryVisible, listDirectory, onDirectoryChange, createProfilesPlugin,
-} from './modules/profiles.js';
-export { exportIdentity, importIdentity } from './modules/identity-transfer.js';
-export { sendMessage, listMessages, onMessage, createChatRoom, createChatPlugin } from './modules/chat.js';
-export {
-  markRead, getReadReceipts, onReadReceipt,
-  setPresence, getPresence, onPresenceChange, startHeartbeat,
-  createPresencePlugin,
-} from './modules/presence.js';
-
-// UI bindings — reactive view/binding primitives (viewKey/viewObject are
-// one-way, bindKey/bindObject add local edit write-back). DOM-library-
-// agnostic: no document.* calls in here, safe in the barrel like
-// everything else that only *references* browser APIs inside function
-// bodies (see note at the top of this file).
+// ui/bindings.js and ui/hash-router.js (unlike ui/components.js and its
+// Custom Element siblings, see the doc block above) only *reference*
+// browser globals inside function bodies — safe to import in Node too, so
+// they stay directly in this barrel same as before, even though
+// src/bundles/ui.js also includes them (that bundle is "everything UI",
+// this barrel is "everything except the actual Custom Elements").
 export { viewKey, viewObject, bindKey, bindObject } from './ui/bindings.js';
 export { buildPath, parsePathSegments } from './ui/hash-router.js';
