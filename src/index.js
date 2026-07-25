@@ -57,6 +57,7 @@ export { MemoryFileStorageAdapter } from './adapters/file-storage-memory.js';
 export { IndexedDBFileStorageAdapter } from './adapters/indexeddb-file-storage.js';
 export { LocalStorageAdapter } from './adapters/local-storage.js';
 export { SessionStorageAdapter } from './adapters/session-storage.js';
+export { WebStorageAdapter } from './adapters/web-storage.js';
 export { IndexedDBAdapter } from './adapters/indexeddb.js';
 
 // Category 2 — network: replication, transports, routing. Entirely optional

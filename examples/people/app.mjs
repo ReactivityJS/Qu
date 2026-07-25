@@ -7,7 +7,7 @@
 
 import {
   createNetworkPlugin, createSpacesPlugin, createProfilesPlugin, createWebSocketChannel, DIRECTORY_ID,
-  exportIdentity, importIdentity,
+  exportIdentity, importIdentity, LocalStorageAdapter,
 } from '../../src/index.js';
 import { buildPath, parsePathSegments } from '../../src/ui/hash-router.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
@@ -15,6 +15,10 @@ import { isValidFingerprint } from './people-lib.mjs';
 import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert <qu-people-search> (und darüber <qu-profile-card>)
 
 const IDENTITY_KEY = 'qu-identity'; // siehe examples/chat/app.mjs's IDENTITY_KEY-Doku — bewusst derselbe Wert
+// Leerer Namespace — siehe space-app-browser.js's eigene Doku dazu: hält
+// den tatsächlichen localStorage-Key exakt bei IDENTITY_KEY, unverändert
+// gegenüber vor dieser Umstellung auf den StorageAdapter.
+const identityStorage = new LocalStorageAdapter({ namespace: '' });
 
 function $(id) { return document.getElementById(id); }
 const appEl = $('app');
@@ -327,7 +331,7 @@ async function main() {
     try {
       const password = importPasswordInput.value;
       const keys = await importIdentity(text, password ? { password } : {});
-      localStorage.setItem(IDENTITY_KEY, JSON.stringify(keys));
+      await identityStorage.put(IDENTITY_KEY, keys);
       location.reload();
     } catch (e) {
       transferErrorEl.textContent = e.message;

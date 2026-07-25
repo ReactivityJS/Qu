@@ -10,7 +10,7 @@ import {
   createNetworkPlugin, createSpacesPlugin, createFileHandlerPlugin,
   createChatPlugin, createWebSocketChannel, IndexedDBFileStorageAdapter, reassembleFile, readFileMeta,
   createWebRTCPlugin, sendRoutedEvent, onRoutedEvent, enableConsoleDebug,
-  createSpaceMembershipPlugin, inboxId, createProfilesPlugin, DIRECTORY_ID,
+  createSpaceMembershipPlugin, inboxId, createProfilesPlugin, DIRECTORY_ID, LocalStorageAdapter,
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
@@ -100,6 +100,16 @@ const PENDING_DELIVERY_KEY = 'qu-chat-pending-delivery'; // siehe confirmDeliver
 // bei jedem kleinen Hänger fälschlich "offline" zu blinken.
 const PRESENCE_HEARTBEAT_MS = 5_000;
 const PRESENCE_STALE_MS = 15_000;
+
+// Alle oben stehenden *_KEY-Konstanten laufen ab hier über Qu's eigenen
+// StorageAdapter statt direkter `localStorage.getItem()/.setItem()`-Aufrufe
+// — derselbe Adapter, den auch Qu selbst als StorageAdapter für einen
+// QuStore verwenden könnte (get/put/delete/getAll/clear), hier einfach
+// standalone für App-Einstellungen genutzt. Leerer Namespace: hält jeden
+// bestehenden localStorage-Key exakt beim bisherigen Namen (kein `qu:`-
+// Präfix), damit dieser Umbau kein bereits gespeichertes Adressbuch/
+// Chat-Liste/... stillschweigend verwaist.
+const storage = new LocalStorageAdapter({ namespace: '' });
 
 const $ = (id) => document.getElementById(id);
 const appEl = $('app');
@@ -312,33 +322,38 @@ function closeLightbox() {
   lightboxImg.src = '';
 }
 
-// --- Adressbuch (localStorage, per Fingerprint gepflegt — WER man kennt) ---
-function loadContacts() {
-  try { return JSON.parse(localStorage.getItem(CONTACTS_KEY)) ?? []; } catch { return []; }
+// --- Adressbuch (StorageAdapter, per Fingerprint gepflegt — WER man kennt) ---
+async function loadContacts() {
+  return (await storage.get(CONTACTS_KEY)) ?? [];
 }
-function saveContacts(contacts) {
-  localStorage.setItem(CONTACTS_KEY, JSON.stringify(contacts));
+async function saveContacts(contacts) {
+  await storage.put(CONTACTS_KEY, contacts);
 }
-let contacts = loadContacts();
+// Top-level await — dieses Modul läuft als <script type="module">, das
+// unterstützt das nativ. LocalStorageAdapter ist unter der Haube synchron
+// (Web Storage selbst ist es), das await hier löst also praktisch sofort
+// auf, im allerersten Mikrotask nach dem Import — kein spürbarer
+// Unterschied zum vorherigen rein synchronen `loadContacts()`-Aufruf.
+let contacts = await loadContacts();
 function upsertContact(fp, patch) {
   const i = contacts.findIndex((c) => c.fp === fp);
   if (i === -1) contacts.push({ fp, alias: shortFp(fp), ...patch });
   else contacts[i] = { ...contacts[i], ...patch };
-  saveContacts(contacts);
+  saveContacts(contacts); // fire-and-forget ist hier sicher — der eigentliche Schreibvorgang läuft synchron innerhalb von put(), bevor dessen erstes (hier gar nicht vorhandenes) await; die zurückgegebene Promise ist nur Formsache
 }
 function contactByFp(fp) {
   return contacts.find((c) => c.fp === fp) ?? null;
 }
 
-// --- Chat-/Raumliste (localStorage, siehe ROOMS_KEY oben — die eigentliche
-// Chat-Liste, unabhängig vom Adressbuch) ---
-function loadRooms() {
-  try { return JSON.parse(localStorage.getItem(ROOMS_KEY)) ?? []; } catch { return []; }
+// --- Chat-/Raumliste (StorageAdapter, siehe ROOMS_KEY oben — die
+// eigentliche Chat-Liste, unabhängig vom Adressbuch) ---
+async function loadRooms() {
+  return (await storage.get(ROOMS_KEY)) ?? [];
 }
-function saveRooms(rooms) {
-  localStorage.setItem(ROOMS_KEY, JSON.stringify(rooms));
+async function saveRooms(rooms) {
+  await storage.put(ROOMS_KEY, rooms);
 }
-let rooms = loadRooms();
+let rooms = await loadRooms();
 function roomById(id) {
   return rooms.find((r) => r.id === id) ?? null;
 }
@@ -346,11 +361,11 @@ function upsertRoom(id, patch) {
   const i = rooms.findIndex((r) => r.id === id);
   if (i === -1) rooms.push({ id, name: null, members: [], lastTs: 0, unread: 0, ...patch });
   else rooms[i] = { ...rooms[i], ...patch };
-  saveRooms(rooms);
+  saveRooms(rooms); // fire-and-forget — siehe upsertContact()'s Doku oben
 }
 function removeRoomEntry(id) {
   rooms = rooms.filter((r) => r.id !== id);
-  saveRooms(rooms);
+  saveRooms(rooms); // fire-and-forget — siehe upsertContact()'s Doku oben
 }
 /** Ein DM (genau ein anderes Mitglied) oder eine Gruppe (mehrere)? */
 function isGroupRoom(room) {
@@ -371,14 +386,14 @@ function roomDisplayAvatar(room) {
 }
 
 // --- Stumm-Schaltung pro Chat (siehe MUTED_ROOMS_KEY oben) ---
-function loadMutedRooms() {
-  try { return new Set(JSON.parse(localStorage.getItem(MUTED_ROOMS_KEY)) ?? []); } catch { return new Set(); }
+async function loadMutedRooms() {
+  return new Set((await storage.get(MUTED_ROOMS_KEY)) ?? []);
 }
-const mutedRooms = loadMutedRooms();
+const mutedRooms = await loadMutedRooms();
 function isRoomMuted(roomId) { return mutedRooms.has(roomId); }
 function setRoomMuted(roomId, muted) {
   if (muted) mutedRooms.add(roomId); else mutedRooms.delete(roomId);
-  localStorage.setItem(MUTED_ROOMS_KEY, JSON.stringify([...mutedRooms]));
+  storage.put(MUTED_ROOMS_KEY, [...mutedRooms]); // fire-and-forget — siehe upsertContact()'s Doku
 }
 
 // --- Verschlüsselung pro Chat (Default: AN) ---
@@ -404,14 +419,14 @@ function setRoomMuted(roomId, muted) {
 // Gilt NUR für die eigenen, künftigen Nachrichten dieses Geräts — jede
 // Seite entscheidet für ihre eigenen Schreibvorgänge unabhängig, und
 // bereits gesendete Nachrichten bleiben, wie sie geschrieben wurden.
-function loadUnencryptedRooms() {
-  try { return new Set(JSON.parse(localStorage.getItem(UNENCRYPTED_ROOMS_KEY)) ?? []); } catch { return new Set(); }
+async function loadUnencryptedRooms() {
+  return new Set((await storage.get(UNENCRYPTED_ROOMS_KEY)) ?? []);
 }
-const unencryptedRooms = loadUnencryptedRooms();
+const unencryptedRooms = await loadUnencryptedRooms();
 function isRoomEncrypted(roomId) { return !unencryptedRooms.has(roomId); }
 function setRoomEncrypted(roomId, encrypted) {
   if (encrypted) unencryptedRooms.delete(roomId); else unencryptedRooms.add(roomId);
-  localStorage.setItem(UNENCRYPTED_ROOMS_KEY, JSON.stringify([...unencryptedRooms]));
+  storage.put(UNENCRYPTED_ROOMS_KEY, [...unencryptedRooms]); // fire-and-forget — siehe upsertContact()'s Doku
 }
 
 // --- "Beim Relay angekommen?"-Status eigener Nachrichten (siehe
@@ -422,11 +437,11 @@ function setRoomEncrypted(roomId, encrypted) {
 // Persistenz würde der nächste Appstart einfach vergessen, dass da noch
 // etwas unbestätigt in der Luft hängt, und die UI zeigte dauerhaft (fälschlich)
 // "gesendet" statt es beim nächsten Verbindungsaufbau erneut zu prüfen.
-function loadPendingDeliveries() {
-  try { return JSON.parse(localStorage.getItem(PENDING_DELIVERY_KEY)) ?? []; } catch { return []; }
+async function loadPendingDeliveries() {
+  return (await storage.get(PENDING_DELIVERY_KEY)) ?? [];
 }
-function savePendingDeliveries(list) {
-  localStorage.setItem(PENDING_DELIVERY_KEY, JSON.stringify(list));
+async function savePendingDeliveries(list) {
+  await storage.put(PENDING_DELIVERY_KEY, list);
 }
 
 // --- Töne (Web Audio API, synthetisiert — kein externes Audio-Asset
@@ -436,8 +451,12 @@ function savePendingDeliveries(list) {
 // schaltbar (mutedRooms oben) — beides zusammen ergibt "Nachrichtenton
 // an, aber dieser eine Chat stumm" ODER "dieser Chat nicht stumm, aber
 // Töne insgesamt aus", unabhängig voneinander einstellbar.
-function soundEnabled(key) { return localStorage.getItem(key) !== '0'; }
-function setSoundEnabled(key, enabled) { localStorage.setItem(key, enabled ? '1' : '0'); }
+// Werte hier sind bewusst KEIN JSON (nur '0'/'1') — get()/put() unten
+// gehen trotzdem über denselben Adapter wie alles andere, JSON.stringify('1')
+// bzw. JSON.parse('"1"') sind für einen einzelnen String-Wert unauffällig,
+// sparen sich hier aber keine eigene Sonderbehandlung.
+async function soundEnabled(key) { return (await storage.get(key)) !== '0'; }
+async function setSoundEnabled(key, enabled) { await storage.put(key, enabled ? '1' : '0'); }
 
 let audioCtx = null;
 function getAudioCtx() {
@@ -471,14 +490,14 @@ function playTone(freqs, { duration = 0.16, gain = 0.15, startOffset = 0 } = {})
   }
 }
 
-function playMessageSound() {
-  if (!soundEnabled(SOUND_MESSAGES_KEY)) return;
+async function playMessageSound() {
+  if (!(await soundEnabled(SOUND_MESSAGES_KEY))) return;
   playTone([880, 1318.5], { duration: 0.18, gain: 0.12 }); // A5 -> E6, kurzer aufsteigender "Ping"
 }
 
 let ringtoneTimer = null;
-function startRingtone() {
-  if (!soundEnabled(SOUND_CALLS_KEY) || ringtoneTimer) return;
+async function startRingtone() {
+  if ((!(await soundEnabled(SOUND_CALLS_KEY))) || ringtoneTimer) return;
   const ring = () => playTone([659.25, 523.25], { duration: 0.5, gain: 0.14 }); // E5 -> C5, klassisches Zwei-Ton-Klingeln
   ring();
   ringtoneTimer = setInterval(ring, 1800);
@@ -503,8 +522,9 @@ async function main() {
   registerServiceWorker(); // so früh wie möglich, unabhängig von der restlichen Chat-Initialisierung — siehe dessen Doku oben
 
   meFpShortEl.textContent = shortFp(qu.fingerprint, 10) + '…';
-  setAvatar(meAvatarBtn, localStorage.getItem(ALIAS_KEY) || qu.fingerprint);
-  let myAlias = localStorage.getItem(ALIAS_KEY) || `Ich-${qu.fingerprint.slice(0, 4)}`;
+  const savedAlias = await storage.get(ALIAS_KEY);
+  setAvatar(meAvatarBtn, savedAlias || qu.fingerprint);
+  let myAlias = savedAlias || `Ich-${qu.fingerprint.slice(0, 4)}`;
   let myAvatar = null;
   meNameEl.textContent = myAlias;
   setAvatar(meAvatarBtn, myAlias);
@@ -519,10 +539,10 @@ async function main() {
   // verschlüsselte Nachricht zu schreiben, bevor unser `epub` beim Relay
   // angekommen ist (core/session.js's #resolveRecipientKey()).
   async function ensureAlias() {
-    let alias = localStorage.getItem(ALIAS_KEY);
+    let alias = await storage.get(ALIAS_KEY);
     if (!alias) {
       alias = prompt('Dein Anzeigename:', `Ich-${qu.fingerprint.slice(0, 4)}`) || `Ich-${qu.fingerprint.slice(0, 4)}`;
-      localStorage.setItem(ALIAS_KEY, alias);
+      await storage.put(ALIAS_KEY, alias);
     }
     await qu.publishProfile({ alias });
     await repl.sync({ topic: qu.userSpaceId }).catch((e) => console.error('[chat] self-profile sync failed:', e));
@@ -555,7 +575,7 @@ async function main() {
   // jede ältere/unbekannte eigene Nachricht gilt stillschweigend als
   // "gesendet" (renderTicks() weiter unten), genau wie vor diesem Feature.
   const deliveredMsgIds = new Set();
-  let pendingDeliveries = loadPendingDeliveries();
+  let pendingDeliveries = await loadPendingDeliveries();
 
   /**
    * Prüft für EINE eigene Nachricht (+ ihre Anhänge), ob sie inzwischen
@@ -2093,7 +2113,7 @@ async function main() {
   $('profile-save-btn').addEventListener('click', async () => {
     const alias = $('alias-input').value.trim() || myAlias;
     myAlias = alias;
-    localStorage.setItem(ALIAS_KEY, alias);
+    await storage.put(ALIAS_KEY, alias);
     meNameEl.textContent = alias;
     aliasCache.set(qu.fingerprint, alias);
     await qu.publishProfile({ alias });
@@ -2119,11 +2139,11 @@ async function main() {
   });
 
   // --- App-Einstellungen — `/settings` (Router) ---
-  function showAppSettingsScreen() {
+  async function showAppSettingsScreen() {
     appSettingsModal.hidden = false;
     refreshPushUI();
-    soundMessagesToggle.checked = soundEnabled(SOUND_MESSAGES_KEY);
-    soundCallsToggle.checked = soundEnabled(SOUND_CALLS_KEY);
+    soundMessagesToggle.checked = await soundEnabled(SOUND_MESSAGES_KEY);
+    soundCallsToggle.checked = await soundEnabled(SOUND_CALLS_KEY);
   }
   settingsBtn.addEventListener('click', () => navigate('settings'));
   $('app-settings-close-btn').addEventListener('click', closeScreen);
@@ -2160,6 +2180,11 @@ async function main() {
         const req = indexedDB.deleteDatabase('qu-chat-files');
         req.onsuccess = resolve; req.onerror = resolve; req.onblocked = resolve;
       });
+      // Bewusst weiterhin direktes `localStorage` — dies ist ein "alles
+      // außer X auf diesem Origin löschen"-Vorgang, nicht "meinen per
+      // Adapter verwalteten Datensatz lesen/schreiben"; `storage` (der
+      // LocalStorageAdapter oben) kennt nur EIGENE Keys, kein generisches
+      // "alle Keys auflisten".
       for (const key of Object.keys(localStorage)) {
         if (key !== IDENTITY_KEY) localStorage.removeItem(key);
       }
