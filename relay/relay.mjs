@@ -245,7 +245,14 @@ export async function createRelay({
     mirrorInFlight.add(id);
     debug('relay', 'mirror-start', { id, writer });
     try {
-      await fileTransfer.requestFile(id);
+      // Höhere Concurrency als transfer.js's eigener Default (24 statt 12)
+      // — der Relay zieht die Chunks vom UPLOADER (typischerweise ein
+      // Handy mit begrenztem Upload, aber der Relay selbst hat auf seiner
+      // Seite normalerweise deutlich mehr Spielraum), mehr gleichzeitig
+      // ausstehende Requests nutzen die verfügbare Bandbreite des
+      // Uploaders besser aus, solange dessen Roundtrip-Zeit (nicht
+      // Bandbreite) der limitierende Faktor ist.
+      await fileTransfer.requestFile(id, { concurrency: 24 });
       pendingMirrors.get(writer)?.delete(id);
       debug('relay', 'mirror-complete', { id });
     } catch (e) {

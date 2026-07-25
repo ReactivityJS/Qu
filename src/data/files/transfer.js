@@ -135,17 +135,24 @@ export class DefaultFileTransfer {
   }
 
   /**
-   * `concurrency` (default 6): how many chunk requests may be in flight at
-   * once. Chunk fetching used to be strictly sequential — one request,
-   * fully awaited, before the next — which made a large file's download
-   * time scale with round-trip latency × chunk count rather than with
-   * bandwidth: at 64 KiB/chunk, a 200 MB file is ~3200 chunks, and even at
-   * a modest 20-50ms RTT that's over a minute spent purely serialized on
-   * one socket, before a single byte's worth of actual bandwidth became
-   * the bottleneck. A sliding window of concurrent requests overlaps that
-   * latency instead of paying it once per chunk.
+   * `concurrency` (default 12, was 6): how many chunk requests may be in
+   * flight at once. Chunk fetching used to be strictly sequential — one
+   * request, fully awaited, before the next — which made a large file's
+   * download time scale with round-trip latency × chunk count rather than
+   * with bandwidth: at 256 KiB/chunk (manifest.js's DEFAULT_CHUNK_SIZE),
+   * a 200 MB file is ~800 chunks, and even a modest 20-50ms RTT adds up
+   * fast when paid once per chunk instead of overlapped. A sliding window
+   * of concurrent requests overlaps that latency instead. 12 (not 6):
+   * real-world reports of a mobile-WLAN-to-relay transfer still taking
+   * several minutes for a large file suggested round trips, not raw
+   * bandwidth, were still the dominant cost even with 6 in flight — a
+   * single WebSocket happily carries more outstanding small requests
+   * without meaningfully increasing per-connection overhead. The relay's
+   * own mirroring (relay/relay.mjs's mirrorFile()) requests an even
+   * higher concurrency explicitly, since the relay side of that
+   * connection typically has much more headroom than a phone's uplink.
    */
-  async requestFile(manifestId, { onProgress, concurrency = 6 } = {}) {
+  async requestFile(manifestId, { onProgress, concurrency = 12 } = {}) {
     const qubit = await this.#ensureManifest(manifestId);
     const manifest = qubit.value;
     // De-duplicated: content-addressing means the SAME hash can legitimately
