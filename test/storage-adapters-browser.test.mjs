@@ -51,3 +51,14 @@ browserOnlyTest('LocalStorageAdapter: two instances with different namespaces on
   assert.deepEqual(await b.getAll(''), []);
   await a.clear();
 });
+
+browserOnlyTest('LocalStorageAdapter: a pre-existing non-JSON value (e.g. from before this adapter existed, or a key collision on an empty namespace) is treated as absent, not a thrown exception', async () => {
+  const ns = `qu-corrupt-test-${Date.now()}:`;
+  const adapter = new LocalStorageAdapter({ namespace: ns });
+  localStorage.setItem(`${ns}bad`, 'Chrome/121.0.0.0'); // a raw, non-JSON string — exactly what an unrelated script/extension or a pre-migration write could leave behind
+  localStorage.setItem(`${ns}good`, JSON.stringify({ id: 'good', value: 1, ts: 1 }));
+  assert.equal(await adapter.get('bad'), null, 'a corrupt entry must resolve to null, never throw');
+  const all = await adapter.getAll('');
+  assert.deepEqual(all, [{ id: 'good', value: 1, ts: 1 }], 'getAll() must skip the corrupt entry but keep the valid one');
+  await adapter.clear();
+});

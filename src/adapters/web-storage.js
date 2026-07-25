@@ -21,21 +21,45 @@ export class WebStorageAdapter {
     this.#ns = namespace;
   }
 
+  /**
+   * Ein leerer Namespace (siehe examples/space-app-browser.js's
+   * `LocalStorageAdapter({ namespace: '' })`) bedeutet: dieser Adapter
+   * teilt sich denselben Key-Raum mit JEDEM anderen Script auf derselben
+   * Origin — einer Browser-Extension, einem anderen Tool, sogar einer
+   * älteren, VOR diesem Adapter geschriebenen, nicht-JSON-Version desselben
+   * Keys. `JSON.parse()` auf so einen fremden/kaputten Wert würde sonst die
+   * gesamte aufrufende Kette hochwerfen (z. B. den kompletten App-Start,
+   * wenn das beim initialen Laden von Kontakten/Räumen passiert) — behandelt
+   * einen nicht parsbaren Wert stattdessen wie "nicht vorhanden" (mit
+   * Warnung), genau wie ein fehlender Key auch.
+   */
   async get(id) {
     const raw = this.#storage.getItem(this.#ns + id);
-    return raw === null ? null : JSON.parse(raw);
+    if (raw === null) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      console.warn(`[WebStorageAdapter] Wert unter "${this.#ns + id}" ist kein gültiges JSON, wird wie "nicht vorhanden" behandelt:`, e.message);
+      return null;
+    }
   }
 
   async put(id, q) { this.#storage.setItem(this.#ns + id, JSON.stringify(q)); }
 
   async delete(id) { this.#storage.removeItem(this.#ns + id); }
 
+  /** Ein einzelner kaputter Eintrag (siehe get()s Doku) übersprungen statt die ganze Liste zum Scheitern zu bringen — die übrigen, gültigen Einträge bleiben nutzbar. */
   async getAll(prefix = '') {
     const out = [];
     const full = this.#ns + prefix;
     for (let i = 0; i < this.#storage.length; i++) {
       const key = this.#storage.key(i);
-      if (key.startsWith(full)) out.push(JSON.parse(this.#storage.getItem(key)));
+      if (!key.startsWith(full)) continue;
+      try {
+        out.push(JSON.parse(this.#storage.getItem(key)));
+      } catch (e) {
+        console.warn(`[WebStorageAdapter] Wert unter "${key}" ist kein gültiges JSON, wird übersprungen:`, e.message);
+      }
     }
     return out;
   }

@@ -38,8 +38,24 @@ const storage = new LocalStorageAdapter({ namespace: '' });
  * including this one, the earliest possible.
  */
 export async function loadOrCreateIdentity(storageKey) {
-  const saved = await storage.get(storageKey);
-  if (saved) return Qu.create({ identity: saved });
+  // Ein beschädigter Wert (nicht valides JSON — z. B. ein Rest aus der Zeit
+  // vor diesem Adapter, oder ein fremder Key-Kollisionsfall auf demselben,
+  // absichtlich leeren Namespace, siehe oben) behandelt storage.get() wie
+  // "nicht vorhanden" (WebStorageAdapter.js's eigene Doku) — für JEDEN
+  // anderen Key genau richtig, aber hier die eine Stelle, an der das
+  // katastrophal wäre: ein `saved == null` würde sonst kommentarlos eine
+  // KOMPLETT NEUE Identität erzeugen und die alte (samt Fingerprint, damit
+  // samt Kontakten/Räumen anderer Nutzer) für immer unauffindbar machen.
+  // Deshalb hier die einzige bewusste Ausnahme von "immer über den Adapter,
+  // nie direkt localStorage" (siehe Phase-1.5-Nachtrag): ein roher
+  // Vorab-Check, der "wirklich leer" von "vorhanden, aber kaputt"
+  // unterscheidet, bevor überhaupt erwogen wird, eine neue Identität
+  // anzulegen.
+  if (localStorage.getItem(storageKey) !== null) {
+    const saved = await storage.get(storageKey);
+    if (saved) return Qu.create({ identity: saved });
+    throw new Error(`Deine gespeicherte Identität unter "${storageKey}" ist beschädigt (kein gültiges JSON) — um Datenverlust zu vermeiden, wird KEINE neue Identität angelegt. Bitte Browser-Konsole/localStorage prüfen, bevor dieser Eintrag gelöscht wird.`);
+  }
   const qu = await Qu.create();
   await storage.put(storageKey, await qu.exportKeys());
   return qu;
