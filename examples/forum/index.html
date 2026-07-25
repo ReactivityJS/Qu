@@ -18,10 +18,21 @@
     #bucket-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
     #bucket-bar strong { color: var(--accent); }
     ul#posts { list-style: none; margin: 0 0 1.25rem; padding: 0; }
-    ul#posts li { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; margin-bottom: 0.5rem; }
-    ul#posts li .post-text { display: block; margin-bottom: 0.3rem; }
+    ul#posts li { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; margin-bottom: 0.5rem; cursor: pointer; }
+    ul#posts li:hover { border-color: var(--accent); }
+    ul#posts li .post-title { display: block; font-weight: 600; margin-bottom: 0.2rem; }
+    ul#posts li .post-text { display: block; margin-bottom: 0.3rem; color: var(--muted); font-size: 0.85rem; }
     ul#posts li .post-meta { font-size: 0.72rem; color: var(--muted); }
     #empty-notice { color: var(--muted); font-size: 0.85rem; }
+    .row.title-row { margin-bottom: 0.5rem; }
+    .hidden { display: none; }
+    #thread-view h2 { margin: 0 0 0.3rem; font-size: 1.1rem; }
+    #thread-view .post-meta { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.75rem; }
+    #thread-body { margin-bottom: 1.25rem; white-space: pre-wrap; }
+    ul#replies { list-style: none; margin: 0 0 1.25rem; padding: 0; }
+    ul#replies li { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; margin-bottom: 0.5rem; }
+    ul#replies li .post-text { display: block; margin-bottom: 0.3rem; white-space: pre-wrap; }
+    .back-to-board { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; margin-bottom: 0.75rem; font-size: 0.85rem; }
   </style>
 </head>
 <body>
@@ -48,19 +59,40 @@
       <input type="text" id="share-link" readonly onclick="this.select()" style="width:100%; background:#00000066; border:1px solid var(--border); border-radius:6px; padding:0.5rem; color:var(--text); font-size:0.8rem;" />
     </div>
 
-    <div id="bucket-bar">
-      <button id="older-btn" type="button">&larr; Älterer Monat</button>
-      <strong id="bucket-label">…</strong>
-      <button id="newer-btn" type="button">Aktueller Monat &rarr;</button>
+    <div id="board-view">
+      <div id="bucket-bar">
+        <button id="older-btn" type="button">&larr; Älterer Monat</button>
+        <strong id="bucket-label">…</strong>
+        <button id="newer-btn" type="button">Aktueller Monat &rarr;</button>
+      </div>
+
+      <p id="empty-notice" hidden>Noch keine Themen in diesem Monat.</p>
+      <ul id="posts"></ul>
+
+      <form id="post-form">
+        <div class="row title-row">
+          <input type="text" id="post-title" placeholder="Titel …" />
+        </div>
+        <div class="row">
+          <input type="text" id="post-text" placeholder="Text …" />
+          <button type="submit">Thema eröffnen</button>
+        </div>
+      </form>
     </div>
 
-    <p id="empty-notice" hidden>Noch keine Posts in diesem Monat.</p>
-    <ul id="posts"></ul>
+    <div id="thread-view" class="hidden">
+      <button type="button" class="back-to-board" id="back-to-board-btn">&larr; Zurück zum Board</button>
+      <h2 id="thread-title">…</h2>
+      <p class="post-meta" id="thread-meta">…</p>
+      <p id="thread-body"></p>
 
-    <form id="post-form" class="row">
-      <input type="text" id="post-text" placeholder="Neuer Post …" />
-      <button type="submit">Posten</button>
-    </form>
+      <ul id="replies"></ul>
+
+      <form id="reply-form" class="row">
+        <input type="text" id="reply-text" placeholder="Antworten …" />
+        <button type="submit">Antworten</button>
+      </form>
+    </div>
   </main>
 
   <script type="module" src="./app.mjs"></script>
