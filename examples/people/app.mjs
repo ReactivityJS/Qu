@@ -185,9 +185,19 @@ async function main() {
     return renderRoute();
   }
   function closeScreen() { history.back(); }
+  // Wechselt ein Attribut-Abo (own/view) sauber aus — ruft zuerst die alte
+  // Abbestellfunktion auf (No-Op, falls keine läuft), speichert die neue
+  // dann in derselben Variable. Hält renderOwnAttrs()/showViewProfileScreen()
+  // unten symmetrisch, ohne die Abo-Verwaltung an zwei Stellen zu duplizieren.
+  function replaceAttrsSub(off) {
+    attrsSubOff?.();
+    attrsSubOff = off;
+  }
+  let attrsSubOff = null;
   function hideAllScreens() {
     profileModal.hidden = true;
     viewProfileModal.hidden = true;
+    replaceAttrsSub(null); // kein Screen mehr offen, der von Attribut-Änderungen live betroffen wäre
   }
 
   let lastRenderedHash = null;
@@ -220,6 +230,12 @@ async function main() {
     visibleToggle.checked = !!ownEntry?.value?.visible;
     attrErrorEl.textContent = '';
     await renderOwnAttrs();
+    // Live statt nur beim eigenen Bearbeiten: eine zweite Instanz derselben
+    // Identität (anderes Gerät, anderer Tab) kann ein Attribut ändern,
+    // während dieser Screen offen ist — onProfileAttrsChange() (bislang
+    // ungenutzt in src/modules/profiles.js) übernimmt das Nachrendern dann
+    // genauso wie ein lokaler Add/Delete-Klick es unten schon tut.
+    replaceAttrsSub(qu.onProfileAttrsChange(qu.fingerprint, () => renderOwnAttrs()));
     exportPasswordInput.value = '';
     exportOutputEl.hidden = true;
     exportOutputEl.value = '';
@@ -347,9 +363,15 @@ async function main() {
     let avatarQ = null;
     try { avatarQ = await qu.get(`~${fp}/avatar`); } catch { /* kein Avatar */ }
     setAvatar(viewAvatarEl, profile.alias, avatarQ?.value ?? null);
-    const attrs = await qu.listProfileAttrs(fp);
-    renderAttrList(viewAttrListEl, viewAttrEmptyEl, attrs, { removable: false });
+    async function renderViewAttrs() {
+      renderAttrList(viewAttrListEl, viewAttrEmptyEl, await qu.listProfileAttrs(fp), { removable: false });
+    }
+    await renderViewAttrs();
     viewProfileModal.hidden = false;
+    // Fremdes Profil bleibt bis zum Schließen des Screens live: ändert die
+    // betrachtete Identität (auf ihrem eigenen Gerät) eines ihrer Attribute,
+    // während man hier zusieht, taucht das ohne erneutes Öffnen des Profils auf.
+    replaceAttrsSub(qu.onProfileAttrsChange(fp, () => renderViewAttrs()));
   }
 
   // Erste Route rendern — dieselbe Direktlink-Normalisierung wie
