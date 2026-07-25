@@ -147,22 +147,51 @@ button { font-family: inherit; }
 .icon-btn:disabled, .avatar:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
 .contact-list { list-style: none; margin: 0; padding: 0.4rem; overflow-y: auto; flex: 1; min-height: 0; }
+/* Grid statt Flex, seit ein DM sein Avatar+Alias über <qu-profile-card>
+   bezieht (siehe renderRoomList(), examples/chat/app.mjs): die Komponente
+   selbst UND ihr innerer Wrapper laufen hier `display: contents` (siehe
+   unten) — Bild und Name landen dadurch als eigene Grid-Kinder direkt in
+   dieser Zeile, genau wie bei einer Gruppe (dort weiterhin ein einfaches
+   .avatar-Element). Beide Fälle teilen sich dieselben Grid-Bereiche. */
 .contact {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "avatar name time" "avatar last last";
   align-items: center;
-  gap: 0.7rem;
+  column-gap: 0.7rem;
+  row-gap: 0.1rem;
   padding: 0.6rem 0.6rem;
   border-radius: 12px;
   cursor: pointer;
+  position: relative; /* Anker für .dot, siehe unten */
 }
 .contact:hover { background: var(--panel-2); }
 .contact.active { background: var(--panel-2); }
-.contact-body { flex: 1; min-width: 0; }
-.contact-top { display: flex; justify-content: space-between; gap: 0.5rem; }
-.contact-name { font-weight: 600; font-size: 0.92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.contact-time { font-size: 0.72rem; color: var(--muted); flex-shrink: 0; }
-.contact-preview { display: flex; justify-content: space-between; gap: 0.5rem; margin-top: 0.1rem; }
+.contact .avatar.sm { grid-area: avatar; }
+.contact qu-profile-card, .contact qu-profile-card .qu-profile-card { display: contents; }
+.contact .qu-profile-avatar { grid-area: avatar; width: 2rem; height: 2rem; border-radius: 50%; object-fit: cover; background: linear-gradient(135deg, var(--accent), #6366f1); }
+.contact .qu-profile-alias, .contact-name { grid-area: name; font-weight: 600; font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contact-time { grid-area: time; font-size: 0.72rem; color: var(--muted); justify-self: end; }
+.contact-preview { grid-area: last; display: flex; justify-content: space-between; gap: 0.5rem; margin-top: 0.1rem; }
 .contact-last { font-size: 0.82rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Online-Punkt: bei einer Gruppe innerhalb von .avatar (bestehende
+   .avatar .dot-Regel oben), bei einem DM ein direktes Kind von
+   <qu-profile-card> selbst (siehe renderRoomList()) — `display: contents`
+   oben lässt ihn ebenfalls "durchfallen", er braucht daher hier seine
+   eigene absolute Positionierung relativ zu .contact statt zu .avatar.
+   `qu-profile-card > .dot` grenzt das gezielt auf den DM-Fall ein, damit
+   es die bestehende `.avatar .dot`-Regel der Gruppe nicht überschreibt. */
+.contact qu-profile-card > .dot {
+  position: absolute;
+  left: 1.35rem;
+  top: 1.35rem;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--muted);
+  border: 2px solid var(--panel);
+}
+.contact qu-profile-card > .dot.online { background: var(--online); }
 .contact-unread {
   background: var(--accent-strong);
   color: #06202b;

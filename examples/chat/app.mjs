@@ -1509,43 +1509,44 @@ async function main() {
     for (const r of sorted) {
       const li = el('li', `contact${activeRoomId === r.id ? ' active' : ''}`);
       li.dataset.room = r.id;
-      const avatar = el('div', 'avatar sm');
-      setAvatar(avatar, r.alias, roomDisplayAvatar(r));
-      avatar.appendChild(el('span', 'dot'));
-      li.appendChild(avatar);
-      // Nur bei einem DM lohnt sich ein Nachladeversuch (roomDisplayAvatar()
-      // liest bei einer Gruppe schon `room.avatar` direkt, kein separater
-      // Netzwerk-Abruf nötig) — avatarFor() ist eine Pro-IDENTITÄT-Sache.
-      if (!isGroupRoom(r) && !roomDisplayAvatar(r)) {
-        avatarFor(r.members[0]).then((url) => { if (url) setAvatar(avatar, r.alias, url); });
+      // `li` MUSS ans Dokument angehängt sein, BEVOR ein <qu-profile-card>
+      // hineinkommt — Custom Elements feuern connectedCallback() erst beim
+      // tatsächlichen Verbinden mit dem Dokument, nicht schon beim Anhängen
+      // an ein noch loses `li`. Ein Kind, das VOR diesem Zeitpunkt manuell
+      // hinzugefügt wird (z. B. der .dot unten), würde von _mount()s
+      // `this.textContent = ''` beim späteren echten Connect sonst wieder
+      // gelöscht.
+      contactListEl.appendChild(li);
+      if (isGroupRoom(r)) {
+        // Eine Gruppe hat keine EINZELNE Identität (Name/Avatar sind
+        // raumeigen) — dafür bleibt der manuell gebaute Avatar, wie schon
+        // in renderRoomHeader().
+        const avatar = el('div', 'avatar sm');
+        setAvatar(avatar, r.alias, roomDisplayAvatar(r));
+        avatar.appendChild(el('span', 'dot')); // renderPresence() findet/aktualisiert ihn über [data-room] .dot
+        li.appendChild(avatar);
+        li.appendChild(el('div', 'contact-name', r.alias));
+      } else {
+        // Ein DM IST genau eine Identität — <qu-profile-card> (siehe
+        // renderRoomHeader()) übernimmt Avatar UND Alias komplett live,
+        // kein aliasFor()/avatarFor()-Nachladeweg mehr nötig. `display:
+        // contents` (style.css) lässt Avatar-Bild und Alias-Text direkt
+        // ins Grid-Layout dieser Zeile durch, statt in einer eigenen Box
+        // zu stecken.
+        const card = document.createElement('qu-profile-card');
+        card.setAttribute('fp', r.members[0]);
+        card.qu = qu;
+        li.appendChild(card); // li ist schon verbunden — connectedCallback()/_mount() laufen HIER, synchron
+        card.appendChild(el('span', 'dot')); // renderPresence() findet/aktualisiert ihn über [data-room] .dot
       }
-
-      const body = el('div', 'contact-body');
-      const top = el('div', 'contact-top');
-      const nameEl = el('div', 'contact-name', r.alias);
-      top.appendChild(nameEl);
-      top.appendChild(el('div', 'contact-time', r.lastTs ? fmtTime(r.lastTs) : ''));
-      body.appendChild(top);
-      // Derselbe Nachladeweg wie für den Avatar direkt darüber — der Alias
-      // ist beim allerersten Rendern (Kontakt gerade erst hinzugefügt, vor
-      // dem ersten Öffnen des Chats) evtl. noch nicht aus dem Netzwerk
-      // aufgelöst (isAliasUnresolved()); danach übernimmt ensureRoom()s
-      // Live-Abo. Aktualisiert gezielt nur dieses Element statt eines
-      // vollen renderRoomList()-Neurenderns (vermeidet Rekursion).
-      if (!isGroupRoom(r) && isAliasUnresolved(r.members[0], r.alias)) {
-        aliasFor(r.members[0]).then((name) => {
-          if (name && !isAliasUnresolved(r.members[0], name)) { nameEl.textContent = name; setAvatar(avatar, name, roomDisplayAvatar(r)); }
-        });
-      }
+      li.appendChild(el('div', 'contact-time', r.lastTs ? fmtTime(r.lastTs) : ''));
       const previewRow = el('div', 'contact-preview');
       const previewText = r.lastTs ? `${r.lastMine ? 'Du: ' : ''}${r.lastPreview ?? ''}` : 'Noch keine Nachrichten';
       previewRow.appendChild(el('div', 'contact-last', previewText));
       if (r.unread) previewRow.appendChild(el('div', 'contact-unread', String(r.unread)));
-      body.appendChild(previewRow);
-      li.appendChild(body);
+      li.appendChild(previewRow);
 
       li.addEventListener('click', () => navigate(r.id));
-      contactListEl.appendChild(li);
     }
   }
 
@@ -2965,11 +2966,10 @@ async function main() {
   // --- Start ---
   renderRoomList();
   for (const r of rooms) {
-    ensureRoom(r.id)
-      .then(() => {
-        if (!isGroupRoom(r) && !roomDisplayAvatar(r)) avatarFor(r.members[0]).then((url) => { if (url) renderRoomList(); });
-      })
-      .catch((e) => console.error('[chat] ensureRoom failed:', r.id, e));
+    // Avatar/Alias eines DMs muss hier nicht mehr nachgeladen/neu gerendert
+    // werden — <qu-profile-card> in renderRoomList() aktualisiert sich für
+    // jede Zeile bereits selbst, sobald die Werte eintreffen.
+    ensureRoom(r.id).catch((e) => console.error('[chat] ensureRoom failed:', r.id, e));
   }
   window.addEventListener('beforeunload', () => { for (const stop of stopHeartbeatByRoom.values()) stop(); });
   // Zusätzlich zu 'beforeunload' — das feuert auf Mobile-Browsern oft gar
