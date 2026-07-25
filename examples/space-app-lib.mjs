@@ -40,6 +40,21 @@
 // (ui/bindings.js vs. ui/components.js, cms-lib.mjs vs. cms-router.js):
 // diese Datei bleibt vollständig ohne Browser mit `node --test` prüfbar.
 
+/**
+ * Space erzeugen + wirklich auf das Manifest warten (nicht nur `await
+ * space` — das ist nur ein Read und kann dem Write vorauslaufen), dann die
+ * reine Space-ID zurückgeben — der identische Rumpf, den todo-lib.mjs
+ * (createTodoList()) und forum-lib.mjs (createBoard()) vorher unabhängig
+ * voneinander dupliziert hatten. Rückgabe bewusst der reine String, nicht
+ * das QuSpace-Handle: die Funktionen oben (getManifest() etc.) nehmen
+ * überall `spaceId` als plain string entgegen.
+ */
+export async function createSpaceApp(qu, { writers = [qu.fingerprint], readers = ['*'], ...rest } = {}) {
+  const space = qu.createSpace({ writers, readers, ...rest }); // synchron — siehe modules/spaces.js
+  await space.ready;
+  return space.id;
+}
+
 /** Das Space-Manifest (writers/readers/admins/createdAt) — `null`, falls der Space (für diesen Client) noch nicht sichtbar ist. */
 export async function getManifest(qu, spaceId) {
   const q = await qu.get(spaceId);

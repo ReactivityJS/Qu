@@ -9,12 +9,18 @@
 // mit wenig Traffic könnte genauso gut `currentBucket = () =>
 // new Date().getFullYear().toString()` (Jahres-Buckets) verwenden, ohne
 // dass sich sonst irgendetwas hier ändern müsste.
+//
+// Nutzerverwaltung (wer darf posten) ist wie bei todo-lib.mjs/cms-lib.mjs
+// aus space-app-lib.mjs importiert, nicht hier eigenständig dupliziert.
+import { createSpaceApp, getManifest, canWrite, grantWriteAccess, revokeWriteAccess } from './space-app-lib.mjs';
+
+export { canWrite, grantWriteAccess, revokeWriteAccess };
+/** Alias für space-app-lib.mjs's getManifest() — hier unter dem in diesem Modul etablierten Namen. */
+export const getBoardManifest = getManifest;
 
 /** Erstellt ein neues, leeres Board. Rückgabe: die Space-ID (für den Link). */
 export async function createBoard(qu, opts = {}) {
-  const space = qu.createSpace({ writers: [qu.fingerprint], readers: ['*'], ...opts }); // synchron — siehe modules/spaces.js
-  await space.ready; // wirklich auf das Manifest warten, bevor die ID weitergegeben wird
-  return space.id;
+  return createSpaceApp(qu, opts);
 }
 
 /** "YYYY-MM" — lexikographisch sortierbar, also gleichzeitig chronologisch sortierbar (kein Datums-Parsing für den Bucket-Index nötig). */
