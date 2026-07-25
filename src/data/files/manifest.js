@@ -3,7 +3,18 @@ import { debug } from '../../core/debug.js';
 import { assertFileStorageAdapter } from './contract.js';
 import { encryptFor as encryptValueFor, decryptWith, encryptBytesFor, decryptBytesWith } from '../../core/crypto.js';
 
-const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64 KiB
+// 256 KiB, nicht 64 KiB (frühere Default) — jede Chunk-Übertragung ist ein
+// eigener Request/Response-Roundtrip (transfer.js's requestFile()); bei
+// einer großen Datei (z. B. 200 MB) dominiert bei 64 KiB die reine
+// Roundtrip-Anzahl (~3200 Roundtrips) über eine vorhandene Relay-
+// Mobilfunk-/WLAN-Bandbreite die tatsächliche Übertragungsdauer, nicht
+// Bandbreite selbst. Die 4-fache Chunk-Größe braucht nur ein Viertel so
+// viele Roundtrips (und Hash-/Verschlüsselungs-Operationen) für dieselbe
+// Datei, bleibt aber weit unter ws-server.mjs's MAX_MESSAGE_BYTES (32 MiB)
+// selbst nach Base64-Kodierung. Rein die Voreinstellung für NEUE Uploads —
+// bereits veröffentlichte Manifeste tragen ihre eigene `chunkSize` und
+// bleiben davon unberührt.
+const DEFAULT_CHUNK_SIZE = 256 * 1024; // 256 KiB
 const YIELD_EVERY_N_CHUNKS = 8; // give the event loop (and the WebSocket connection's own housekeeping) room to breathe on a long file
 // See adapters/indexeddb-file-storage.js's putChunks() doc — this is how
 // many chunks share one storage transaction. Exported so transfer.js's

@@ -73,6 +73,17 @@ const ALIAS_KEY = 'qu-chat-alias';
 // WELCHE Chats man hat. Ein Kontakt kann in mehreren Räumen vorkommen
 // (ein 1:1 UND mehreren Gruppen mit derselben Person drin); die eigentliche
 // Chat-Liste ist ROOMS (siehe ROOMS_KEY unten), nicht diese hier.
+//
+// Beide sind seit Kurzem ECHTE QU-Spaces unter der eigenen Identität
+// (`qu.own.get('contacts')`/`get('rooms')`, siehe main()) — nur privat
+// (Core-Default-ACL: ausschließlich der Besitzer selbst lesbar/schreibbar,
+// src/core/identity-acl.js), damit Änderungen reaktiv sind (eine zentrale
+// Subscription statt verstreuter manueller renderRoomList()-Aufrufe nach
+// jedem upsertRoom()/upsertContact()) UND automatisch über mehrere Geräte
+// derselben Identität synchronisieren. CONTACTS_KEY/ROOMS_KEY bleiben
+// trotzdem bestehen — als lokaler, sofort verfügbarer Cache (Local-First:
+// die Chat-Liste soll auch komplett offline sofort erscheinen, nicht erst
+// nachdem eine Relay-Verbindung steht und synchronisiert hat).
 const CONTACTS_KEY = 'qu-chat-contacts';
 // ROOMS: die eigentliche Chat-Liste — ein Eintrag pro Space, an dem dieses
 // Gerät teilnimmt. Ein "Chat" ist technisch nichts anderes als ein Space
@@ -83,15 +94,11 @@ const CONTACTS_KEY = 'qu-chat-contacts';
 // eine Gruppe (groupRoomId()) der allgemeine Fall mit einem eigenen Namen.
 // Jeder Eintrag: `{ id (roomId), name (nur Gruppen — bei einem DM kommt
 // der Anzeigename aus dem einzigen anderen Mitglieds-Kontakt), members
-// (Fingerprints AUSSER einem selbst), lastTs, unread, lastPreview, lastMine }`.
+// (Fingerprints AUSSER einem selbst), lastTs, unread, lastPreview, lastMine,
+// muted, encrypted }`.
 const ROOMS_KEY = 'qu-chat-rooms';
-// Stumm-/Verschlüsselungs-Einstellungen sind bewusst pro CHAT (roomId),
-// nicht pro Kontakt (fp) — ein Kontakt kann in mehreren Räumen vorkommen,
-// jeder davon soll unabhängig einstellbar sein.
-const MUTED_ROOMS_KEY = 'qu-chat-muted-rooms';
 const SOUND_MESSAGES_KEY = 'qu-chat-sound-messages';
 const SOUND_CALLS_KEY = 'qu-chat-sound-calls';
-const UNENCRYPTED_ROOMS_KEY = 'qu-chat-unencrypted-rooms'; // siehe isRoomEncrypted() weiter unten
 const PENDING_DELIVERY_KEY = 'qu-chat-pending-delivery'; // siehe confirmDelivery() weiter unten
 // Default AN (bisheriges Verhalten unverändert) — siehe renderAttachment()
 // weiter unten für den Ein-Klick-statt-automatisch-Fall bei AUS.
@@ -326,79 +333,14 @@ function closeLightbox() {
   lightboxImg.src = '';
 }
 
-// --- Adressbuch (StorageAdapter, per Fingerprint gepflegt — WER man kennt) ---
-async function loadContacts() {
-  return (await storage.get(CONTACTS_KEY)) ?? [];
-}
-async function saveContacts(contacts) {
-  await storage.put(CONTACTS_KEY, contacts);
-}
-// Top-level await — dieses Modul läuft als <script type="module">, das
-// unterstützt das nativ. LocalStorageAdapter ist unter der Haube synchron
-// (Web Storage selbst ist es), das await hier löst also praktisch sofort
-// auf, im allerersten Mikrotask nach dem Import — kein spürbarer
-// Unterschied zum vorherigen rein synchronen `loadContacts()`-Aufruf.
-let contacts = await loadContacts();
-function upsertContact(fp, patch) {
-  const i = contacts.findIndex((c) => c.fp === fp);
-  if (i === -1) contacts.push({ fp, alias: shortFp(fp), ...patch });
-  else contacts[i] = { ...contacts[i], ...patch };
-  saveContacts(contacts); // fire-and-forget ist hier sicher — der eigentliche Schreibvorgang läuft synchron innerhalb von put(), bevor dessen erstes (hier gar nicht vorhandenes) await; die zurückgegebene Promise ist nur Formsache
-}
-function contactByFp(fp) {
-  return contacts.find((c) => c.fp === fp) ?? null;
-}
-
-// --- Chat-/Raumliste (StorageAdapter, siehe ROOMS_KEY oben — die
-// eigentliche Chat-Liste, unabhängig vom Adressbuch) ---
-async function loadRooms() {
-  return (await storage.get(ROOMS_KEY)) ?? [];
-}
-async function saveRooms(rooms) {
-  await storage.put(ROOMS_KEY, rooms);
-}
-let rooms = await loadRooms();
-function roomById(id) {
-  return rooms.find((r) => r.id === id) ?? null;
-}
-function upsertRoom(id, patch) {
-  const i = rooms.findIndex((r) => r.id === id);
-  if (i === -1) rooms.push({ id, name: null, members: [], lastTs: 0, unread: 0, ...patch });
-  else rooms[i] = { ...rooms[i], ...patch };
-  saveRooms(rooms); // fire-and-forget — siehe upsertContact()'s Doku oben
-}
-function removeRoomEntry(id) {
-  rooms = rooms.filter((r) => r.id !== id);
-  saveRooms(rooms); // fire-and-forget — siehe upsertContact()'s Doku oben
-}
-/** Ein DM (genau ein anderes Mitglied) oder eine Gruppe (mehrere)? */
-function isGroupRoom(room) {
-  return (room?.members?.length ?? 0) > 1;
-}
-/** Anzeigename: bei einer Gruppe ihr eigener Name, bei einem DM der Alias des einzigen anderen Mitglieds — nie leer, fällt am Ende auf eine gekürzte Fingerprint-Anzeige zurück. */
-function roomDisplayName(room) {
-  if (!room) return '';
-  if (isGroupRoom(room)) return room.name || 'Gruppe';
-  const peerFp = room.members[0];
-  return contactByFp(peerFp)?.alias ?? shortFp(peerFp);
-}
-/** Avatar-Bild-URL fürs Rendern: bei einer Gruppe ihr eigenes (optionales) Bild, bei einem DM das des einzigen anderen Mitglieds. */
-function roomDisplayAvatar(room) {
-  if (!room) return null;
-  if (isGroupRoom(room)) return room.avatar ?? null;
-  return contactByFp(room.members[0])?.avatar ?? null;
-}
-
-// --- Stumm-Schaltung pro Chat (siehe MUTED_ROOMS_KEY oben) ---
-async function loadMutedRooms() {
-  return new Set((await storage.get(MUTED_ROOMS_KEY)) ?? []);
-}
-const mutedRooms = await loadMutedRooms();
-function isRoomMuted(roomId) { return mutedRooms.has(roomId); }
-function setRoomMuted(roomId, muted) {
-  if (muted) mutedRooms.add(roomId); else mutedRooms.delete(roomId);
-  storage.put(MUTED_ROOMS_KEY, [...mutedRooms]); // fire-and-forget — siehe upsertContact()'s Doku
-}
+// Adressbuch/Chat-Liste/Mute sind jetzt echte QU-Spaces unter der eigenen
+// Identität, nicht mehr nur lokales StorageAdapter-Array — siehe deren
+// Aufbau weiter unten in main() (dort steht auch, warum: qu.own setzt
+// eine Identität voraus, die vor main() noch nicht existiert, kein reines
+// Top-Level-await möglich). upsertContact()/upsertRoom()/roomById()/
+// contactByFp()/isGroupRoom()/roomDisplayName()/roomDisplayAvatar()/
+// isRoomMuted()/setRoomMuted()/isRoomEncrypted()/setRoomEncrypted() sind
+// entsprechend jetzt dort definiert.
 
 // --- Verschlüsselung pro Chat (Default: AN) ---
 // core/session.js's Session#publish() verschlüsselt automatisch für
@@ -423,15 +365,10 @@ function setRoomMuted(roomId, muted) {
 // Gilt NUR für die eigenen, künftigen Nachrichten dieses Geräts — jede
 // Seite entscheidet für ihre eigenen Schreibvorgänge unabhängig, und
 // bereits gesendete Nachrichten bleiben, wie sie geschrieben wurden.
-async function loadUnencryptedRooms() {
-  return new Set((await storage.get(UNENCRYPTED_ROOMS_KEY)) ?? []);
-}
-const unencryptedRooms = await loadUnencryptedRooms();
-function isRoomEncrypted(roomId) { return !unencryptedRooms.has(roomId); }
-function setRoomEncrypted(roomId, encrypted) {
-  if (encrypted) unencryptedRooms.delete(roomId); else unencryptedRooms.add(roomId);
-  storage.put(UNENCRYPTED_ROOMS_KEY, [...unencryptedRooms]); // fire-and-forget — siehe upsertContact()'s Doku
-}
+// isRoomEncrypted()/setRoomEncrypted() sind jetzt Teil des Raum-Objekts
+// (siehe main()) statt eines eigenen Sets/Storage-Keys, aus demselben
+// Grund wie isRoomMuted()/setRoomMuted() dort — beides "pro Chat"-
+// Metadaten, die jetzt im selben QuBit wie der Rest des Raums leben.
 
 // --- "Beim Relay angekommen?"-Status eigener Nachrichten (siehe
 // confirmDelivery() weiter unten) ---
@@ -452,8 +389,9 @@ async function savePendingDeliveries(list) {
 // nötig, funktioniert also ohne jeden zusätzlichen Download/Lizenzfrage) ---
 // Ein/Aus je Ereignistyp global (SOUND_MESSAGES_KEY/SOUND_CALLS_KEY,
 // Default "an" bei fehlendem Eintrag), zusätzlich pro Chat stumm
-// schaltbar (mutedRooms oben) — beides zusammen ergibt "Nachrichtenton
-// an, aber dieser eine Chat stumm" ODER "dieser Chat nicht stumm, aber
+// schaltbar (room.muted, siehe isRoomMuted()/setRoomMuted() in main())
+// — beides zusammen ergibt "Nachrichtenton an, aber dieser eine Chat
+// stumm" ODER "dieser Chat nicht stumm, aber
 // Töne insgesamt aus", unabhängig voneinander einstellbar.
 // Werte hier sind bewusst KEIN JSON (nur '0'/'1') — get()/put() unten
 // gehen trotzdem über denselben Adapter wie alles andere, JSON.stringify('1')
@@ -533,6 +471,143 @@ async function main() {
   const localFileStorage = new IndexedDBFileStorageAdapter({ dbName: 'qu-chat-files' });
   qu.use(createFileHandlerPlugin({ fileStorage: localFileStorage }));
 
+  // Vor die Raum-/Kontakt-Subscription unten gezogen (stand früher weiter
+  // unten, bei den anderen Pro-Sitzung-Maps) — deren `.map(..., {initial:
+  // true})`-Erstbefüllung läuft zwar erst einen Mikrotask später, aber
+  // eben NUR einen — nicht garantiert NACH allen weiteren synchronen
+  // Deklarationen dieser Funktion. `activeRoomId` muss also VOR dieser
+  // Subscription initialisiert sein, sonst ein "Cannot access before
+  // initialization" (TDZ), sobald bereits ein Raum/Kontakt lokal bekannt
+  // ist und sofort ausgeliefert wird.
+  let activeRoomId = null;
+
+  // --- Adressbuch + Chat-Liste: private QU-Spaces unter der eigenen
+  // Identität (siehe CONTACTS_KEY/ROOMS_KEY-Doku oben) ---
+  // `qu.own` setzt eine bereits existierende Identität voraus — deshalb
+  // erst HIER (nicht als Top-Level-await wie vor diesem Umbau) und nicht
+  // mehr rein StorageAdapter-basiert. `rooms`/`contacts` bleiben trotzdem
+  // simple, synchron lesbare Arrays (fast jeder Aufrufer im Rest dieser
+  // Datei erwartet genau das, u. a. ensureRoom()s `roomById(roomId)`
+  // DIREKT nach upsertRoom() — kein "erst noch auf die Subscription
+  // warten" möglich, ohne jeden Aufrufer async umzubauen).
+  //
+  // applyRoomChange()/applyContactChange() sind die EINZIGE Stelle, die
+  // `rooms`/`contacts` mutiert und Rendering anstößt — aufgerufen sowohl
+  // SOFORT/synchron von upsertRoom()/upsertContact() (optimistisch, für
+  // den eigenen, gerade ausgelösten Schreibvorgang) ALS AUCH später,
+  // erneut, von der `.map()`-Subscription unten (für alles, was NICHT von
+  // hier kam: ein zweites Gerät derselben Identität, oder ein aus dem
+  // lokalen Cache/Relay nachgeladener älterer Stand). Ein zweites Mal mit
+  // identischem Inhalt anzuwenden ist ein reines No-Op fürs Rendering,
+  // kein Sonderfall nötig.
+  const roomsSpace = qu.own.get('rooms');
+  const contactsSpace = qu.own.get('contacts');
+  const rooms = (await storage.get(ROOMS_KEY)) ?? []; // lokaler Cache, sofort verfügbar — auch komplett offline, bevor irgendeine Relay-Sync gelaufen ist
+  const contacts = (await storage.get(CONTACTS_KEY)) ?? [];
+
+  /**
+   * `renderRoomList()`/`renderRoomHeader()`/`renderPresence()` sowie
+   * mehrere `const`/`let`-Zustände, die sie selbst lesen (u. a.
+   * `activeRoomId`, `presenceStaleTimerByRoom`), sind erst WEITER UNTEN in
+   * main() deklariert — hier nur referenziert, nicht aufgerufen. Function-
+   * Deklarationen sind innerhalb von main() zwar vollständig gehoben
+   * (aufrufbar ab der allerersten Zeile), aber die `const`/`let`-Bindungen,
+   * die ihr KÖRPER liest, haben eine echte TDZ. Deshalb unten bewusst
+   * `initial: false` (statt map()s Default `initial: true`) — die
+   * Erstbefüllung EINES bereits vorhandenen QuBits liefe sonst asynchron,
+   * aber eben nicht garantiert NACH allen weiteren synchronen
+   * Deklarationen dieser Funktion (subscribe-with-options.js's `initial`-
+   * Pfad braucht nur EINEN Mikrotask, main()s eigener Rest kann durchaus
+   * länger brauchen — ein "Cannot access before initialization" wäre die
+   * Folge). Kein Funktionsverlust: der lokale Store ist an dieser frühen
+   * Stelle ohnehin noch leer (MemoryAdapter, frisch bei jedem Reload) —
+   * nichts Relevantes existiert schon VOR dieser Subscription, alles
+   * Künftige (eigene Schreibvorgänge, ein zweites Gerät derselben
+   * Identität über repl.sync()) kommt über denselben `ingest()`-Pfad
+   * herein wie jede andere Netzwerk-Zustellung auch und wird von einer
+   * bereits AKTIVEN Subscription genauso zuverlässig geliefert.
+   */
+  function applyRoomChange(id, value) {
+    const i = rooms.findIndex((r) => r.id === id);
+    if (value === null) { if (i !== -1) rooms.splice(i, 1); }
+    else if (i === -1) rooms.push(value);
+    else rooms[i] = value;
+    storage.put(ROOMS_KEY, rooms); // Cache für den nächsten (evtl. offline) Start aktuell halten
+    renderRoomList();
+    if (activeRoomId === id) { renderRoomHeader(roomById(id)); renderPresence(id); }
+  }
+  function applyContactChange(fp, value) {
+    const i = contacts.findIndex((c) => c.fp === fp);
+    if (value === null) { if (i !== -1) contacts.splice(i, 1); }
+    else if (i === -1) contacts.push(value);
+    else contacts[i] = value;
+    storage.put(CONTACTS_KEY, contacts);
+    renderRoomList();
+    const activeRoom = activeRoomId ? roomById(activeRoomId) : null;
+    if (activeRoom && !isGroupRoom(activeRoom) && activeRoom.members[0] === fp) renderRoomHeader(activeRoom);
+  }
+  // `raw: true` (roher Vergleich statt key://-Auflösung) genügt hier — wir
+  // zeigen nie auf einen anderen Space um, siehe core/space-handle.js's
+  // map()-Doku. Vermeidet den sonst eingebauten Mikrotask-Umweg über
+  // resolveDispatch()/subscribeDispatch(), unnötig für ein rein lokales
+  // `qu.own`-Unterverzeichnis. `initial: false` — siehe applyRoomChange()s
+  // Doku oben für das Warum.
+  roomsSpace.map((q) => applyRoomChange(q.id.slice(roomsSpace.id.length + 1), q.value), { initial: false, raw: true });
+  contactsSpace.map((q) => applyContactChange(q.id.slice(contactsSpace.id.length + 1), q.value), { initial: false, raw: true });
+
+  function contactByFp(fp) {
+    return contacts.find((c) => c.fp === fp) ?? null;
+  }
+  /**
+   * Aktualisiert `contacts` SOFORT/synchron (applyContactChange()) UND
+   * schreibt fire-and-forget über den Space, damit der Wert dauerhaft ist
+   * und auf andere Geräte derselben Identität synct. Ohne den sofortigen
+   * Teil würde z. B. `ensureRoom()`s `roomById(roomId)` (das direkte
+   * Aufrufer wie startDm() sofort danach erwarten) bis zum Eintreffen der
+   * Subscription — mehrere Mikrotasks später — `null` liefern.
+   */
+  function upsertContact(fp, patch) {
+    const value = { fp, alias: shortFp(fp), ...contactByFp(fp), ...patch };
+    applyContactChange(fp, value);
+    contactsSpace.get(fp).put(value, { raw: true });
+  }
+
+  function roomById(id) {
+    return rooms.find((r) => r.id === id) ?? null;
+  }
+  /** Dasselbe Muster wie upsertContact() — siehe dessen Doku. */
+  function upsertRoom(id, patch) {
+    const value = { id, name: null, members: [], lastTs: 0, unread: 0, muted: false, encrypted: true, ...roomById(id), ...patch };
+    applyRoomChange(id, value);
+    roomsSpace.get(id).put(value, { raw: true });
+  }
+  /** Kein echtes Löschen (QuBits sind unveränderlich) — ein Tombstone (`put(null)`), dasselbe Muster wie todo-lib.mjs's deleteItem()/profiles.js's deleteProfileAttr(). */
+  function removeRoomEntry(id) {
+    applyRoomChange(id, null);
+    roomsSpace.get(id).put(null, { raw: true });
+  }
+  /** Ein DM (genau ein anderes Mitglied) oder eine Gruppe (mehrere)? */
+  function isGroupRoom(room) {
+    return (room?.members?.length ?? 0) > 1;
+  }
+  /** Anzeigename: bei einer Gruppe ihr eigener Name, bei einem DM der Alias des einzigen anderen Mitglieds — nie leer, fällt am Ende auf eine gekürzte Fingerprint-Anzeige zurück. */
+  function roomDisplayName(room) {
+    if (!room) return '';
+    if (isGroupRoom(room)) return room.name || 'Gruppe';
+    const peerFp = room.members[0];
+    return contactByFp(peerFp)?.alias ?? shortFp(peerFp);
+  }
+  /** Avatar-Bild-URL fürs Rendern: bei einer Gruppe ihr eigenes (optionales) Bild, bei einem DM das des einzigen anderen Mitglieds. */
+  function roomDisplayAvatar(room) {
+    if (!room) return null;
+    if (isGroupRoom(room)) return room.avatar ?? null;
+    return contactByFp(room.members[0])?.avatar ?? null;
+  }
+  function isRoomMuted(roomId) { return roomById(roomId)?.muted ?? false; }
+  function setRoomMuted(roomId, muted) { upsertRoom(roomId, { muted }); }
+  function isRoomEncrypted(roomId) { return roomById(roomId)?.encrypted ?? true; }
+  function setRoomEncrypted(roomId, encrypted) { upsertRoom(roomId, { encrypted }); }
+
   registerServiceWorker(); // so früh wie möglich, unabhängig von der restlichen Chat-Initialisierung — siehe dessen Doku oben
 
   meFpShortEl.textContent = shortFp(qu.fingerprint, 10) + '…';
@@ -542,6 +617,29 @@ async function main() {
   let myAvatar = null;
   meNameEl.textContent = myAlias;
   setAvatar(meAvatarBtn, myAlias);
+
+  // --- Pro-Raum-Zustand (alle Maps roomId-geschlüsselt — EIN Raum kann
+  // 1:1 ODER Gruppe sein, siehe ROOMS_KEY oben; der Code hier unterscheidet
+  // beide nicht mehr) ---
+  // VOR ensureAlias()/connectToRelay() (unten) deklariert, nicht erst
+  // danach: renderPresence()/renderRoomHeader() (von applyRoomChange()/
+  // applyContactChange() oben aufgerufen, sobald irgendeine Raum-/Kontakt-
+  // Änderung ankommt) lesen presenceStaleTimerByRoom u. a. — ensureAlias()
+  // ruft bereits repl.sync({ topic: qu.userSpaceId }) auf, was (bei einer
+  // wiederkehrenden Identität mit bereits vorhandenen rooms/contacts auf
+  // dem Relay) die Raum-/Kontakt-Subscription oben schon auslösen kann,
+  // BEVOR diese Maps sonst existiert hätten — dieselbe TDZ-Falle wie bei
+  // `activeRoomId` oben, nur eine Ebene tiefer.
+  const messagesByRoom = new Map(); // roomId -> QuBit[]
+  const seenIdsByRoom = new Map(); // roomId -> Set<id>  (Reconnect-Redelivery-sicher)
+  const receiptsByRoom = new Map(); // roomId -> { [fingerprint]: upToTs }
+  const stopHeartbeatByRoom = new Map(); // roomId -> stop()
+  const presenceStaleTimerByRoom = new Map(); // roomId -> Timeout, siehe renderPresence()
+  const unsubsByRoom = new Map(); // roomId -> Array<() => void>, siehe ensureRoom()/deleteRoom()
+  // Pro-IDENTITÄT (nicht pro Raum) — bleibt fp-geschlüsselt, ein Alias/
+  // Avatar gehört zur Person, nicht zu einem bestimmten Chat mit ihr.
+  const aliasCache = new Map([[qu.fingerprint, myAlias]]);
+  const avatarCache = new Map(); // fp -> dataUrl | null (null = bekannt abwesend, nicht "noch nicht geprüft")
 
   // Profil (alias/pub/epub) erst NACH dem Verbinden veröffentlichen, dann
   // sofort selbst syncen (`repl.sync({ topic: qu.userSpaceId })`) — sync()
@@ -643,14 +741,51 @@ async function main() {
     tickBus.dispatchEvent(new CustomEvent('tick-change', { detail: { roomId } }));
   }
 
+  /**
+   * Hält den Bildschirm wach (Screen Wake Lock API), SOLANGE mindestens
+   * eine Anhang-Übertragung läuft (eigener Upload-Sync via
+   * confirmDelivery() unten, oder ein Download via renderAttachment()s
+   * reveal()) — ein großer Video-Anhang über eine schwache Verbindung
+   * kann Minuten brauchen; schaltet sich das Display währenddessen ab,
+   * pausiert (je nach Gerät/Browser) oft auch die laufende Übertragung
+   * selbst. Referenzgezählt (`activeTransfers`), nicht ein einfaches
+   * Ja/Nein-Flag — mehrere gleichzeitige Übertragungen (z. B. Senden UND
+   * gleichzeitig einen anderen Anhang laden) dürfen sich nicht gegenseitig
+   * das Lock vorzeitig freigeben. Kein Fehler, wenn die API fehlt (ältere
+   * Safari-Versionen) — dann bleibt es schlicht wirkungslos, wie bisher.
+   */
+  let wakeLock = null;
+  let activeTransfers = 0;
+  async function beginTransfer() {
+    activeTransfers++;
+    if (activeTransfers === 1 && 'wakeLock' in navigator) {
+      try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { console.warn('[chat] Screen Wake Lock nicht verfügbar:', e.message); }
+    }
+  }
+  function endTransfer() {
+    activeTransfers = Math.max(0, activeTransfers - 1);
+    if (activeTransfers === 0 && wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  }
+  // Ein Wake Lock wird vom Browser automatisch freigegeben, sobald der Tab
+  // in den Hintergrund wechselt (Spezifikation) — kommt er zurück, während
+  // noch eine Übertragung läuft, muss es explizit neu angefordert werden,
+  // sonst bliebe das Display ab hier dauerhaft ungeschützt, obwohl
+  // `activeTransfers` weiterhin > 0 ist.
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && activeTransfers > 0 && !wakeLock && 'wakeLock' in navigator) {
+      try { wakeLock = await navigator.wakeLock.request('screen'); } catch { /* z. B. Tab doch nicht wirklich sichtbar — nächster Wechsel versucht es erneut */ }
+    }
+  });
+
   async function confirmDelivery(entry) {
     if (deliveredMsgIds.has(entry.id) || confirmInFlight.has(entry.id)) return;
     if (!channel?.isOpen()) return; // nichts zu prüfen gerade — nächster Reconnect/Sweep versucht es erneut
     confirmInFlight.add(entry.id);
+    const refs = entry.refs ?? [];
+    if (refs.length) await beginTransfer(); // nur bei einem echten Anhang wach halten — eine reine Text-Nachricht synct praktisch sofort
     try {
       const msgOk = await repl.waitUntilReplicated(entry.id, { ts: entry.ts, maxWaitMs: 20000 });
       if (!msgOk) return;
-      const refs = entry.refs ?? [];
       for (let i = 0; i < refs.length; i++) {
         const ready = await fileTransfer.waitUntilReady(refs[i], {
           maxWaitMs: 20000,
@@ -667,6 +802,7 @@ async function main() {
       return;
     } finally {
       confirmInFlight.delete(entry.id);
+      if (refs.length) endTransfer();
     }
     syncProgressByMsgId.delete(entry.id);
     deliveredMsgIds.add(entry.id);
@@ -877,21 +1013,6 @@ async function main() {
   });
   window.addEventListener('online', () => { if (!reconnecting && !channel.isOpen()) scheduleReconnect(); });
 
-  // --- Pro-Raum-Zustand (alle Maps roomId-geschlüsselt — EIN Raum kann
-  // 1:1 ODER Gruppe sein, siehe ROOMS_KEY oben; der Code hier unterscheidet
-  // beide nicht mehr) ---
-  const messagesByRoom = new Map(); // roomId -> QuBit[]
-  const seenIdsByRoom = new Map(); // roomId -> Set<id>  (Reconnect-Redelivery-sicher)
-  const receiptsByRoom = new Map(); // roomId -> { [fingerprint]: upToTs }
-  const stopHeartbeatByRoom = new Map(); // roomId -> stop()
-  const presenceStaleTimerByRoom = new Map(); // roomId -> Timeout, siehe renderPresence()
-  const unsubsByRoom = new Map(); // roomId -> Array<() => void>, siehe ensureRoom()/deleteRoom()
-  // Pro-IDENTITÄT (nicht pro Raum) — bleibt fp-geschlüsselt, ein Alias/
-  // Avatar gehört zur Person, nicht zu einem bestimmten Chat mit ihr.
-  const aliasCache = new Map([[qu.fingerprint, myAlias]]);
-  const avatarCache = new Map(); // fp -> dataUrl | null (null = bekannt abwesend, nicht "noch nicht geprüft")
-  let activeRoomId = null;
-
   // --- Router ---
   // EIN Ort übersetzt `location.hash` in "welcher Screen ist offen"
   // (renderRoute()), EIN Ort navigiert dorthin (navigate()) — nirgendwo
@@ -1089,9 +1210,7 @@ async function main() {
     // (roomDisplayName() liest den Namen dort ohnehin nie für einen DM).
     unsubs.push(qu.get(roomId).get('meta').on((q) => {
       if (typeof q?.value?.name !== 'string') return;
-      upsertRoom(roomId, { name: q.value.name });
-      if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
-      renderRoomList();
+      upsertRoom(roomId, { name: q.value.name }); // löst renderRoomList()/renderRoomHeader() selbst über die zentrale rooms-Subscription aus (siehe main())
     }));
 
     // JEDES andere Mitglieds Userspace (pub/epub/alias, immer öffentlich
@@ -1114,9 +1233,7 @@ async function main() {
       unsubs.push(qu.get(`~${memberFp}`).get('avatar').on((q) => {
         const url = q?.value ?? null;
         avatarCache.set(memberFp, url);
-        upsertContact(memberFp, { avatar: url });
-        if (activeRoomId === roomId) renderRoomHeader(room);
-        renderRoomList();
+        upsertContact(memberFp, { avatar: url }); // löst renderRoomList()/renderRoomHeader() selbst über die zentrale contacts-Subscription aus (siehe main())
       }));
       // Ein explizit vom User gesetzter Alias (aliasCustom, siehe
       // add-contact-Formular) ist ein bewusstes lokales Override und wird
@@ -1127,9 +1244,7 @@ async function main() {
         if (contactByFp(memberFp)?.aliasCustom) return;
         const name = q?.value ?? shortFp(memberFp);
         aliasCache.set(memberFp, name);
-        upsertContact(memberFp, { alias: name });
-        if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
-        renderRoomList();
+        upsertContact(memberFp, { alias: name }); // löst renderRoomList()/renderRoomHeader() selbst über die zentrale contacts-Subscription aus (siehe main())
       }));
     }
     await repl.ensureSynced(roomId);
@@ -1213,7 +1328,7 @@ async function main() {
     // see ensureRoom()s Doku); we only add the local rooms-list/contact/
     // avatar-subscription bookkeeping specific to this app on top.
     const updatedMembers = await qu.addSpaceMember(roomId, room.members, newFp, { alias: myAlias, name: room.name ?? null });
-    upsertRoom(roomId, { members: updatedMembers });
+    upsertRoom(roomId, { members: updatedMembers }); // löst renderRoomList()/renderRoomHeader()/renderPresence() selbst über die zentrale rooms-Subscription aus (siehe main())
 
     await repl.sync({ topic: `~${newFp}` }).catch((e) => console.error('[chat] peer profile sync failed:', newFp, e));
     if (!contactByFp(newFp)) {
@@ -1225,21 +1340,14 @@ async function main() {
     unsubs.push(qu.get(`~${newFp}`).get('avatar').on((q) => {
       const url = q?.value ?? null;
       avatarCache.set(newFp, url);
-      upsertContact(newFp, { avatar: url });
-      if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
-      renderRoomList();
+      upsertContact(newFp, { avatar: url }); // löst renderRoomList()/renderRoomHeader() selbst über die zentrale contacts-Subscription aus (siehe main())
     }));
     unsubs.push(qu.get(`~${newFp}`).get('alias').on((q) => {
       if (contactByFp(newFp)?.aliasCustom) return;
       const name = q?.value ?? shortFp(newFp);
       aliasCache.set(newFp, name);
-      upsertContact(newFp, { alias: name });
-      if (activeRoomId === roomId) renderRoomHeader(roomById(roomId));
-      renderRoomList();
+      upsertContact(newFp, { alias: name }); // löst renderRoomList()/renderRoomHeader() selbst über die zentrale contacts-Subscription aus (siehe main())
     }));
-
-    renderRoomList();
-    if (activeRoomId === roomId) { renderRoomHeader(roomById(roomId)); renderPresence(roomId); }
   }
 
   /**
@@ -1257,9 +1365,7 @@ async function main() {
     const room = roomById(roomId);
     if (!room || !room.members.includes(fp)) return;
     const updatedMembers = await qu.removeSpaceMember(roomId, room.members, fp);
-    upsertRoom(roomId, { members: updatedMembers });
-    renderRoomList();
-    if (activeRoomId === roomId) { renderRoomHeader(roomById(roomId)); renderPresence(roomId); }
+    upsertRoom(roomId, { members: updatedMembers }); // löst renderRoomList()/renderRoomHeader()/renderPresence() selbst über die zentrale rooms-Subscription aus (siehe main())
   }
 
   /** Reagiert auf einen eingehenden Briefkasten-Eintrag (siehe ensureRoom() oben) — legt den Raum (und ggf. den Absender als Kontakt) bei Bedarf lokal an, ganz ohne dass die Nutzerin ihn vorher selbst hinzugefügt haben muss. Funktioniert identisch für einen neuen DM UND eine neue/erweiterte Gruppe. */
@@ -1270,9 +1376,8 @@ async function main() {
     if (!contactByFp(fromFp)) upsertContact(fromFp, { alias: q.value.alias || shortFp(fromFp) });
     if (!roomById(roomId)) {
       const members = Array.isArray(q.value.members) && q.value.members.length ? q.value.members : [fromFp];
-      upsertRoom(roomId, { name: q.value.name ?? null, members });
+      upsertRoom(roomId, { name: q.value.name ?? null, members }); // löst renderRoomList() selbst über die zentrale rooms-Subscription aus (siehe main())
     }
-    renderRoomList();
     ensureRoom(roomId).catch((e) => console.error('[chat] ensureRoom (inbox) failed:', roomId, e));
   }
 
@@ -1288,8 +1393,7 @@ async function main() {
     const mine = q.writer === qu.fingerprint;
     const preview = q.value?.text || (q.refs?.length ? '📎 Anhang' : '');
     const unread = mine || activeRoomId === roomId ? 0 : (room?.unread ?? 0) + 1;
-    upsertRoom(roomId, { lastTs: q.ts, lastPreview: preview, lastMine: mine, unread });
-    renderRoomList();
+    upsertRoom(roomId, { lastTs: q.ts, lastPreview: preview, lastMine: mine, unread }); // löst renderRoomList() selbst über die zentrale rooms-Subscription aus (siehe main())
 
     if (activeRoomId === roomId) {
       appendLiveMessage(q, roomId);
@@ -1571,12 +1675,70 @@ async function main() {
     if (isNearBottom()) messageListEl.scrollTop = messageListEl.scrollHeight;
   }
 
+  /**
+   * Baut sofort/synchron nur den Platzhalter (`wrap`) und gibt ihn direkt
+   * zurück — der eigentliche Aufbau (Manifest abwarten, dann Anhang selbst)
+   * läuft asynchron im Hintergrund und füllt dieselbe `wrap`-Node später.
+   * Genau das erlaubt buildMessageItem()/appendLiveMessage() weiterhin
+   * `await renderAttachment(refId)` zu schreiben, ohne dass das komplette
+   * Rendern der Nachrichtenliste auf einen unter Umständen mehrere Sekunden
+   * dauernden Manifest-Sync warten müsste.
+   */
   async function renderAttachment(refId) {
-    const manifestQ = await qu.get(refId);
-    if (!manifestQ) return el('div', 'attachment-progress', 'Anhang nicht gefunden');
-    const manifest = manifestQ.value;
     const wrap = el('div', 'attachment');
-    let status = el('div', 'attachment-progress', 'wird geladen …');
+    const status = el('div', 'attachment-progress', 'wird geladen …');
+    wrap.appendChild(status);
+    waitForManifestThenRender(refId, wrap, status);
+    return wrap;
+  }
+
+  /**
+   * Der Anhangs-Verweis (`refId`) und die Nachricht, die ihn trägt, sind
+   * ZWEI unabhängige QuBits — eine Live-Zustellung kann die Nachricht
+   * liefern, bevor ihr Manifest lokal angekommen ist (der Sender
+   * veröffentlicht zwar immer erst das Manifest, dann die Nachricht, aber
+   * die NETZWERK-Zustellung beider ist unabhängig, keine garantierte
+   * Reihenfolge). Ein einmaliges `qu.get(refId) === null` ist also meist
+   * ein VORÜBERGEHENDER Zustand ("noch nicht angekommen"), kein
+   * dauerhaftes "existiert nicht" — mit Backoff mehrfach erneut versuchen,
+   * statt sofort aufzugeben und dauerhaft "Anhang nicht gefunden"
+   * anzuzeigen (der eigentliche Bug: ein reiner Zeitpunkt-Schnappschuss,
+   * der nie erneut gerendert wurde, selbst wenn das Manifest kurz danach
+   * doch noch ankam). Gibt bei endgültigem Fehlschlag einen "Erneut
+   * versuchen"-Button statt einer Sackgasse.
+   */
+  async function waitForManifestThenRender(refId, wrap, status) {
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      const manifestQ = await qu.get(refId);
+      if (manifestQ) { await renderAttachmentBody(refId, manifestQ, wrap, status); return; }
+      // Erst NACH dem ersten await prüfbar (renderAttachment() hat `wrap`
+      // bis hierhin noch gar nicht an den Aufrufer zurückgegeben, geschweige
+      // denn dieser es schon ins DOM gehängt — ein Check VOR dem ersten
+      // await würde hier fälschlich immer "nicht verbunden" sehen).
+      if (!wrap.isConnected) return; // Nachricht/Raum inzwischen verlassen — nichts mehr zu tun
+      status.textContent = `Anhang wird synchronisiert … (${attempt}/8)`;
+      await new Promise((r) => setTimeout(r, 500 * attempt));
+    }
+    if (!wrap.isConnected) return;
+    wrap.textContent = '';
+    wrap.appendChild(el('div', 'attachment-progress', 'Anhang noch nicht verfügbar — der Absender synchronisiert möglicherweise noch.'));
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'attachment-btn';
+    retry.textContent = 'Erneut versuchen';
+    retry.addEventListener('click', () => {
+      wrap.textContent = '';
+      const newStatus = el('div', 'attachment-progress', 'wird geladen …');
+      wrap.appendChild(newStatus);
+      waitForManifestThenRender(refId, wrap, newStatus);
+    });
+    wrap.appendChild(retry);
+  }
+
+  /** Der eigentliche Anhang-Aufbau, sobald das Manifest lokal feststeht — befüllt die von renderAttachment() bereits ins DOM gehängte `wrap`-Node, statt eine neue zurückzugeben (die alte hat der Aufrufer schon angehängt). */
+  async function renderAttachmentBody(refId, manifestQ, wrap, status) {
+    const manifest = manifestQ.value;
+    wrap.textContent = '';
     wrap.appendChild(status);
 
     // name/mime/size stehen bei einem verschlüsselten Anhang NICHT direkt
@@ -1584,7 +1746,11 @@ async function main() {
     // entschlüsselt sie separat vom eigentlichen Dateiinhalt, damit Vorschau/
     // Download-Link auch VOR dem vollständigen Herunterladen möglich sind.
     const fileMeta = await readFileMeta(manifest, qu.identity);
-    if (!fileMeta) return el('div', 'attachment-progress', 'Anhang nicht zugänglich (nicht für dich verschlüsselt).');
+    if (!fileMeta) {
+      wrap.textContent = '';
+      wrap.appendChild(el('div', 'attachment-progress', 'Anhang nicht zugänglich (nicht für dich verschlüsselt).'));
+      return;
+    }
     const kind = mediaKind(fileMeta.mime);
 
     /** Zeigt einen Fehler + "Erneut versuchen"-Button statt eines kaputten Bild-/Player-Elements — z. B. wenn ein Chunk beim Absender/Relay (noch) nicht verfügbar ist. */
@@ -1605,9 +1771,15 @@ async function main() {
     }
 
     async function reveal() {
+      let holdingWakeLock = false;
       try {
         let complete = await fileTransfer.hasComplete(refId);
         if (!complete) {
+          // Nur ab hier wach halten — bereits vollständig lokal vorhandene
+          // Anhänge (eigener Versand, früher schon geladen) brauchen keinen
+          // Download, für die lohnt sich kein Wake Lock.
+          holdingWakeLock = true;
+          await beginTransfer();
           // waitUntilReady() fragt nur, ob der RELAY selbst inzwischen
           // alle Chunks hat (vom Absender gespiegelt, siehe relay/relay.mjs's
           // proaktives Mirroring) — überträgt dabei noch KEIN einziges Byte
@@ -1699,6 +1871,8 @@ async function main() {
       } catch (e) {
         showError(`Fehler beim Laden (${e.message})`);
         console.error('[chat] attachment failed:', e);
+      } finally {
+        if (holdingWakeLock) endTransfer();
       }
     }
 
@@ -1728,7 +1902,6 @@ async function main() {
     // ausstehender Download wird gegen "Medien automatisch laden" geprüft.
     if ((await fileTransfer.hasComplete(refId)) || (await autoLoadMedia())) reveal();
     else showLoadPlaceholder();
-    return wrap;
   }
 
   function renderMessageText(container, text) {
@@ -1867,8 +2040,7 @@ async function main() {
       });
     }
     renderPresence(roomId);
-    upsertRoom(roomId, { unread: 0 });
-    renderRoomList();
+    upsertRoom(roomId, { unread: 0 }); // löst renderRoomList() selbst über die zentrale rooms-Subscription aus (siehe main())
     await renderMessageList(roomId);
     await markActiveRead();
   }
@@ -2050,9 +2222,8 @@ async function main() {
     ensuredRooms.delete(roomId);
     clearTimeout(presenceStaleTimerByRoom.get(roomId));
     presenceStaleTimerByRoom.delete(roomId);
-    removeRoomEntry(roomId);
+    removeRoomEntry(roomId); // löst renderRoomList() selbst über die zentrale rooms-Subscription aus (siehe main())
     if (activeRoomId === roomId) navigate();
-    renderRoomList();
   }
 
   // --- Senden ---
@@ -2519,8 +2690,18 @@ async function main() {
   // --- Chat-Einstellungen — `/<roomId>/settings` (Router). Stumm/
   // Verschlüsselung/Löschen für JEDEN Chat, Umbenennen/Mitglieder nur für
   // eine Gruppe (chatSettingsGroupSection wird für einen DM versteckt). ---
-  function renderChatEncryptionHint(roomId) {
-    chatEncryptionHint.textContent = isRoomEncrypted(roomId)
+  /**
+   * `encrypted` optional übergebbar (statt aus `isRoomEncrypted(roomId)`
+   * gelesen) — setRoomEncrypted() schreibt jetzt asynchron über den
+   * Raum-Space (siehe dessen Doku); direkt danach `isRoomEncrypted(roomId)`
+   * erneut zu lesen, würde für einen kurzen Moment noch den ALTEN Wert
+   * liefern (die zentrale rooms-Subscription hat ihn noch nicht
+   * aktualisiert). Der Aufrufer, der den neuen Wert gerade selbst gesetzt
+   * hat, kennt ihn aber ohnehin schon — direkt übergeben vermeidet diesen
+   * kurzen Anzeige-Bug.
+   */
+  function renderChatEncryptionHint(roomId, encrypted = isRoomEncrypted(roomId)) {
+    chatEncryptionHint.textContent = encrypted
       ? 'Deine künftigen Nachrichten sind Ende-zu-Ende verschlüsselt — lesbar nur für die Mitglieder dieses Chats, nicht für den Relay-Betreiber.'
       : 'Deine künftigen Nachrichten werden im Klartext übertragen und gespeichert — lesbar für den Relay-Betreiber und für jeden mit Lesezugriff auf diesen Raum. Bereits gesendete Nachrichten bleiben unverändert. Gilt nur für DEINE Seite.';
   }
@@ -2593,7 +2774,7 @@ async function main() {
       if (!confirmed) { chatEncryptionToggle.checked = true; return; }
     }
     setRoomEncrypted(roomId, chatEncryptionToggle.checked);
-    renderChatEncryptionHint(roomId);
+    renderChatEncryptionHint(roomId, chatEncryptionToggle.checked);
   });
   chatDeleteBtn.addEventListener('click', () => {
     if (!activeRoomId) return;

@@ -16,7 +16,7 @@ test('a file is chunked, transferred, and reassembles byte-for-byte identical to
   const storageB = new MemoryFileStorageAdapter();
   const original = randomBytes(200_000); // forces multiple, content-distinct 64 KiB chunks
 
-  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f1', original, { name: 'test.bin', fileStorage: storageA });
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f1', original, { name: 'test.bin', fileStorage: storageA, chunkSize: 64 * 1024 }); // explicit — decouple this test's chunk-count assumptions from manifest.js's actual DEFAULT_CHUNK_SIZE
 
   const { a: chA, b: chB } = createLoopbackChannelPair();
   const xferA = new DefaultFileTransfer(rtA, chA, storageA);
@@ -61,7 +61,7 @@ test('requestFile() fetches chunks concurrently, not strictly one at a time', as
     },
   };
 
-  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f-concurrent', original, { name: 'concurrent.bin', fileStorage: real });
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f-concurrent', original, { name: 'concurrent.bin', fileStorage: real, chunkSize: 64 * 1024 }); // explicit — see first test's doc
   const manifest = (await rtA.get(manifestId)).value;
   assert.ok(manifest.chunks.length >= 8, 'test fixture should span enough chunks to make concurrency observable');
 
@@ -86,7 +86,7 @@ test('requestFile() batches receive-side writes via putChunks() when the adapter
   const storageA = new MemoryFileStorageAdapter();
   const original = randomBytes(2_500_000); // enough chunks to force multiple WRITE_BATCH_SIZE-sized flushes plus a trailing partial batch
 
-  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f-batched', original, { name: 'batched.bin', fileStorage: storageA });
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f-batched', original, { name: 'batched.bin', fileStorage: storageA, chunkSize: 64 * 1024 }); // explicit — see first test's doc
   const manifest = (await rtA.get(manifestId)).value;
   assert.ok(manifest.chunks.length > 32, 'test fixture should span more than one write batch (WRITE_BATCH_SIZE = 32)');
 
@@ -137,7 +137,7 @@ test('requestFile() fetches a hash that appears at multiple manifest positions o
   original.set(block, 0);
   original.set(block, block.length);
 
-  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f-dup', original, { name: 'dup.bin', fileStorage: storageA });
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f-dup', original, { name: 'dup.bin', fileStorage: storageA, chunkSize: 65536 }); // explicit — this test relies on splitting into EXACTLY two 64 KiB blocks
   const manifest = (await rtA.get(manifestId)).value;
   assert.equal(manifest.chunks.length, 2, 'test fixture should produce exactly two chunk entries');
   assert.equal(manifest.chunks[0], manifest.chunks[1], 'both entries must share the same hash — that is the whole point of this test');
@@ -170,7 +170,7 @@ test('resuming a transfer only requests chunks that are actually still missing',
   const storageB = new MemoryFileStorageAdapter();
   const original = randomBytes(200_000);
 
-  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f2', original, { name: 'test2.bin', fileStorage: storageA });
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f2', original, { name: 'test2.bin', fileStorage: storageA, chunkSize: 64 * 1024 }); // explicit — see first test's doc
   const manifestQubit = await rtA.get(manifestId);
   await rtB.ingest(manifestQubit); // simulate the manifest having already synced earlier
   await storageB.putChunk(manifestQubit.value.chunks[0], await storageA.getChunk(manifestQubit.value.chunks[0])); // one chunk already present
@@ -266,7 +266,7 @@ test('waitUntilReady(): onProgress reports real have/total chunk counts, not jus
   const storageB = new MemoryFileStorageAdapter();
   const original = randomBytes(200_000); // forces multiple chunks, same fixture as the first test above
 
-  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f6', original, { name: 'f6.bin', fileStorage: storageA });
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f6', original, { name: 'f6.bin', fileStorage: storageA, chunkSize: 64 * 1024 }); // explicit — see first test's doc
   const manifest = (await rtA.get(manifestId)).value;
   assert.ok(manifest.chunks.length > 1, 'test fixture should span multiple chunks');
   await storageA.deleteChunk(manifest.chunks[manifest.chunks.length - 1]); // one chunk still "in flight" — not ready yet
