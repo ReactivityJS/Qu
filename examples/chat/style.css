@@ -303,6 +303,8 @@ button { font-family: inherit; }
 .attachment-file .file-ic { font-size: 1.4rem; }
 .attachment-file .file-meta { font-size: 0.72rem; color: var(--muted); }
 .attachment-progress { font-size: 0.72rem; color: var(--muted); font-style: italic; }
+.attachment-load-btn { border: none; width: 100%; text-align: left; cursor: pointer; font: inherit; }
+.attachment-load-btn:hover { background: #00000060; }
 
 /* --- Composer --- */
 .composer {

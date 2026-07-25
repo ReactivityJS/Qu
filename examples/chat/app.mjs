@@ -93,6 +93,9 @@ const SOUND_MESSAGES_KEY = 'qu-chat-sound-messages';
 const SOUND_CALLS_KEY = 'qu-chat-sound-calls';
 const UNENCRYPTED_ROOMS_KEY = 'qu-chat-unencrypted-rooms'; // siehe isRoomEncrypted() weiter unten
 const PENDING_DELIVERY_KEY = 'qu-chat-pending-delivery'; // siehe confirmDelivery() weiter unten
+// Default AN (bisheriges Verhalten unverändert) — siehe renderAttachment()
+// weiter unten für den Ein-Klick-statt-automatisch-Fall bei AUS.
+const AUTO_LOAD_MEDIA_KEY = 'qu-chat-auto-load-media';
 // Enger als modules/chat.js's eigene Defaults (8s/20s) — ein Kontakt soll
 // sichtbar zügig als "offline" erkannt werden, nicht erst nach bis zu 20s
 // Unschärfe. 3x Heartbeat als Stale-Schwelle lässt trotzdem genug
@@ -166,6 +169,7 @@ const audioCallBtn = $('audio-call-btn');
 const videoCallBtn = $('video-call-btn');
 const soundMessagesToggle = $('sound-messages-toggle');
 const soundCallsToggle = $('sound-calls-toggle');
+const autoLoadMediaToggle = $('auto-load-media-toggle');
 
 // --- Screens/Modals — jeder ist ein eigener Router-Pfad, siehe main()s
 // navigate()/renderRoute() weiter unten für das vollständige Pfadschema. ---
@@ -457,6 +461,16 @@ async function savePendingDeliveries(list) {
 // sparen sich hier aber keine eigene Sonderbehandlung.
 async function soundEnabled(key) { return (await storage.get(key)) !== '0'; }
 async function setSoundEnabled(key, enabled) { await storage.put(key, enabled ? '1' : '0'); }
+
+// --- Medien automatisch laden (Bandbreite/mobiles Datenvolumen schonen) ---
+// Default AN — bisheriges Verhalten bleibt Standard; abschaltbar für alle,
+// die lieber selbst entscheiden, wann ein Anhang tatsächlich heruntergeladen
+// wird. Gilt für JEDEN Anhang-Typ (nicht nur Bild/Video) — reveal() lädt für
+// Audio/generische Dateien exakt denselben vollen Byte-Download, nur die
+// Darstellung danach unterscheidet sich; diese Einstellung schont also
+// tatsächliches Datenvolumen, nicht nur Bild-/Videowiedergabe.
+async function autoLoadMedia() { return (await storage.get(AUTO_LOAD_MEDIA_KEY)) !== '0'; }
+async function setAutoLoadMedia(enabled) { await storage.put(AUTO_LOAD_MEDIA_KEY, enabled ? '1' : '0'); }
 
 let audioCtx = null;
 function getAudioCtx() {
@@ -1642,7 +1656,33 @@ async function main() {
         console.error('[chat] attachment failed:', e);
       }
     }
-    reveal();
+
+    /** Platzhalter statt eines automatischen Downloads — Dateiname/-typ/-größe kommen aus fileMeta, das schon VOR jedem Byte-Download verfügbar ist (s. o.), ein Klick löst den eigentlichen reveal() erst aus. */
+    function showLoadPlaceholder() {
+      wrap.textContent = '';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'attachment-file attachment-load-btn';
+      btn.appendChild(el('span', 'file-ic', kind === 'image' ? '🖼️' : kind === 'video' ? '🎬' : kind === 'audio' ? '🎵' : '📄'));
+      const metaEl = el('div');
+      metaEl.appendChild(el('div', '', fileMeta.name));
+      metaEl.appendChild(el('div', 'file-meta', `${fileMeta.mime} · ${fmtBytes(fileMeta.size ?? 0)} · zum Laden tippen`));
+      btn.appendChild(metaEl);
+      btn.addEventListener('click', () => {
+        wrap.textContent = '';
+        status = el('div', 'attachment-progress', 'wird geladen …');
+        wrap.appendChild(status);
+        reveal();
+      });
+      wrap.appendChild(btn);
+    }
+
+    // Schon vollständig lokal vorhanden (eigener Versand, oder früher schon
+    // heruntergeladen) — dann gibt es nichts zu sparen, immer sofort
+    // anzeigen, unabhängig von der Einstellung. Nur ein WIRKLICH noch
+    // ausstehender Download wird gegen "Medien automatisch laden" geprüft.
+    if ((await fileTransfer.hasComplete(refId)) || (await autoLoadMedia())) reveal();
+    else showLoadPlaceholder();
     return wrap;
   }
 
@@ -2144,12 +2184,14 @@ async function main() {
     refreshPushUI();
     soundMessagesToggle.checked = await soundEnabled(SOUND_MESSAGES_KEY);
     soundCallsToggle.checked = await soundEnabled(SOUND_CALLS_KEY);
+    autoLoadMediaToggle.checked = await autoLoadMedia();
   }
   settingsBtn.addEventListener('click', () => navigate('settings'));
   $('app-settings-close-btn').addEventListener('click', closeScreen);
   appSettingsModal.addEventListener('click', (ev) => { if (ev.target === appSettingsModal) closeScreen(); });
   soundMessagesToggle.addEventListener('change', () => setSoundEnabled(SOUND_MESSAGES_KEY, soundMessagesToggle.checked));
   soundCallsToggle.addEventListener('change', () => setSoundEnabled(SOUND_CALLS_KEY, soundCallsToggle.checked));
+  autoLoadMediaToggle.addEventListener('change', () => setAutoLoadMedia(autoLoadMediaToggle.checked));
 
   /**
    * "App zurücksetzen" — für den Fall, dass ein Update (Anruf-Code, ein
