@@ -582,6 +582,16 @@ async function main() {
   // laufenden zu warten.
   const confirmInFlight = new Set();
 
+  // Chunk-genauer Fortschritt "x/y" pro eigener Nachricht, solange sie noch
+  // in pendingDeliveries steht — gefüllt aus fileTransfer.waitUntilReady()s
+  // `onProgress` (have/total, siehe data/files/transfer.js's readiness-
+  // Protokoll-Erweiterung) und von renderTicks() ins Sync-Badge geschrieben.
+  // Bei MEHREREN Anhängen zeigt das Badge den GERADE laufenden (Index unter
+  // `ref`), nicht eine über alle Anhänge aggregierte Zahl — Chunks
+  // unterschiedlicher Anhänge zu einer einzigen Prozentzahl zu addieren
+  // würde nur vortäuschen, hier stünde eine echte Gesamtgröße dahinter.
+  const syncProgressByMsgId = new Map(); // msgId -> { refIndex, refCount, have, total }
+
   async function confirmDelivery(entry) {
     if (deliveredMsgIds.has(entry.id) || confirmInFlight.has(entry.id)) return;
     if (!channel?.isOpen()) return; // nichts zu prüfen gerade — nächster Reconnect/Sweep versucht es erneut
@@ -589,8 +599,16 @@ async function main() {
     try {
       const msgOk = await repl.waitUntilReplicated(entry.id, { ts: entry.ts, maxWaitMs: 20000 });
       if (!msgOk) return;
-      for (const ref of entry.refs ?? []) {
-        const ready = await fileTransfer.waitUntilReady(ref, { maxWaitMs: 20000 });
+      const refs = entry.refs ?? [];
+      for (let i = 0; i < refs.length; i++) {
+        const ready = await fileTransfer.waitUntilReady(refs[i], {
+          maxWaitMs: 20000,
+          onProgress: ({ have, total }) => {
+            if (!total) return; // 0/0 heißt hier "Anfrage fehlgeschlagen", nicht "0 von 0 Chunks" — nichts Sinnvolles zum Anzeigen
+            syncProgressByMsgId.set(entry.id, { refIndex: i, refCount: refs.length, have, total });
+            if (activeRoomId === entry.roomId) renderTicks(entry.roomId);
+          },
+        });
         if (!ready) return;
       }
     } catch (e) {
@@ -599,6 +617,7 @@ async function main() {
     } finally {
       confirmInFlight.delete(entry.id);
     }
+    syncProgressByMsgId.delete(entry.id);
     deliveredMsgIds.add(entry.id);
     pendingDeliveries = pendingDeliveries.filter((p) => p.id !== entry.id);
     savePendingDeliveries(pendingDeliveries);
@@ -1314,6 +1333,15 @@ async function main() {
     }).catch(() => {});
   }
 
+  /** Badge-Text für EINE eigene Nachricht mit Anhang — mit echtem Chunk-Fortschritt, sobald syncProgressByMsgId etwas für sie weiß, sonst der generische Text (z. B. bevor die erste readiness-Antwort überhaupt eintraf). Gemeinsam genutzt von buildMessageItem() (Anfangszustand) und renderTicks() (laufende Aktualisierung), damit beide garantiert denselben Text erzeugen. */
+  function syncBadgeText(msgId) {
+    const p = syncProgressByMsgId.get(msgId);
+    if (!p) return '📤 Wird noch mit dem Server synchronisiert — bitte online bleiben, bis dies verschwindet.';
+    const percent = Math.round((p.have / p.total) * 100);
+    const label = p.refCount > 1 ? ` (Anhang ${p.refIndex + 1}/${p.refCount})` : '';
+    return `📤 Wird synchronisiert${label}: Chunk ${p.have}/${p.total} (${percent}%) — bitte online bleiben, bis dies verschwindet.`;
+  }
+
   function renderTicks(roomId) {
     const receipts = receiptsByRoom.get(roomId) ?? {};
     const pendingIds = new Set(pendingDeliveries.map((p) => p.id));
@@ -1343,7 +1371,10 @@ async function main() {
       // zu erzeugen — buildMessageItem() legt es für jede eigene Nachricht
       // MIT Anhang von Anfang an (leer) an.
       const badge = li.querySelector('.sync-badge');
-      if (badge) badge.hidden = !stillPending;
+      if (badge) {
+        badge.hidden = !stillPending;
+        if (stillPending) badge.textContent = syncBadgeText(id);
+      }
     }
   }
 
@@ -1643,10 +1674,11 @@ async function main() {
       bubble.appendChild(await renderAttachment(refId));
     }
     if (mine && q.refs?.length) {
-      // Anfangszustand hier direkt aus pendingDeliveries — renderTicks()
-      // (bei jedem Reconnect/jeder Bestätigung aufgerufen) übernimmt ab
-      // hier laufend die Aktualisierung; siehe dessen eigene Doku.
-      const badge = el('div', 'sync-badge', '📤 Wird noch mit dem Server synchronisiert — bitte online bleiben, bis dies verschwindet.');
+      // Anfangszustand hier direkt aus pendingDeliveries/syncProgressByMsgId
+      // — renderTicks() (bei jedem Reconnect/jeder Bestätigung/jedem
+      // Fortschritts-Tick aufgerufen) übernimmt ab hier laufend die
+      // Aktualisierung; siehe dessen eigene Doku und syncBadgeText().
+      const badge = el('div', 'sync-badge', syncBadgeText(q.id));
       badge.hidden = !(pendingDeliveries.some((p) => p.id === q.id) && !deliveredMsgIds.has(q.id));
       bubble.appendChild(badge);
     }

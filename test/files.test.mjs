@@ -130,6 +130,37 @@ test('clicking "download" before the sender has the chunk ready retries with bac
   xferB.close();
 });
 
+test('waitUntilReady(): onProgress reports real have/total chunk counts, not just "not ready yet"', async () => {
+  const rtA = makeRuntime();
+  const rtB = makeRuntime();
+  const alice = await QuIdentity.generate();
+  const sessA = new QuSession(rtA, { identity: alice });
+  const storageA = new MemoryFileStorageAdapter();
+  const storageB = new MemoryFileStorageAdapter();
+  const original = randomBytes(200_000); // forces multiple chunks, same fixture as the first test above
+
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f6', original, { name: 'f6.bin', fileStorage: storageA });
+  const manifest = (await rtA.get(manifestId)).value;
+  assert.ok(manifest.chunks.length > 1, 'test fixture should span multiple chunks');
+  await storageA.deleteChunk(manifest.chunks[manifest.chunks.length - 1]); // one chunk still "in flight" — not ready yet
+
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+  const xferA = new DefaultFileTransfer(rtA, chA, storageA);
+  const xferB = new DefaultFileTransfer(rtB, chB, storageB);
+
+  const progressSeen = [];
+  const ready = await xferB.waitUntilReady(manifestId, { intervalMs: 50, maxWaitMs: 200, onProgress: (p) => progressSeen.push(p) });
+  assert.equal(ready, false);
+  assert.ok(progressSeen.length >= 1, 'at least one progress tick expected');
+  for (const p of progressSeen) {
+    assert.equal(p.total, manifest.chunks.length, 'total must be the real chunk count, known from the very first check');
+    assert.equal(p.have, manifest.chunks.length - 1, 'have must reflect exactly the chunks actually present on the peer, not just a boolean');
+  }
+
+  xferA.close();
+  xferB.close();
+});
+
 test('waitUntilReady(): resolves true once the peer actually has every chunk, without transferring any bytes itself', async () => {
   const rtA = makeRuntime();
   const rtB = makeRuntime();
