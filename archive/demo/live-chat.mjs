@@ -1,9 +1,6 @@
 import { Qu, createWebSocketChannel, MemoryFileStorageAdapter, reassembleFile, onDebug, createNetworkPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
-import {
-  sendMessage, listMessages, onMessage, createChatRoom,
-  markRead, getReadReceipts, onReadReceipt,
-  getPresence, onPresenceChange, startHeartbeat,
-} from '../src/modules/chat.js';
+import { sendMessage, listMessages, onMessage, createChatRoom } from '../src/modules/chat.js';
+import { markRead, getReadReceipts, onReadReceipt, getPresence, onPresenceChange, startHeartbeat } from '../src/modules/presence.js';
 
 const ROOM_ID = 'qu-demo-room'; // fixed, unmanifested (permanently bootstrap-open) — a real app would discover/create rooms instead
 const IDENTITY_KEY = 'qu-demo-identity-keys';

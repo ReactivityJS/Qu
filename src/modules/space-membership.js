@@ -17,8 +17,9 @@
 // (localStorage, IndexedDB, whatever the app uses), rendering, and any
 // content-shape decisions (messages, todos, pages) — this module only
 // gets a Space bootstrapped, its membership discoverable, and its members
-// notified. Presence/heartbeat stay in modules/chat.js, unmoved — they're
-// already generic there and not membership/discovery-specific.
+// notified. Presence/read-receipts live in modules/presence.js, a
+// separate Space-neutral module for the same reason this one is — neither
+// is membership/discovery-specific, so neither belongs here.
 
 /**
  * Every member's own "letterbox" — a manifestless Space (see below) that

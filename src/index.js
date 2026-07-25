@@ -99,12 +99,12 @@ export {
   DIRECTORY_ID, ensureDirectory, setDirectoryVisible, listDirectory, onDirectoryChange, createProfilesPlugin,
 } from './modules/profiles.js';
 export { exportIdentity, importIdentity } from './modules/identity-transfer.js';
+export { sendMessage, listMessages, onMessage, createChatRoom, createChatPlugin } from './modules/chat.js';
 export {
-  sendMessage, listMessages, onMessage, createChatRoom,
   markRead, getReadReceipts, onReadReceipt,
   setPresence, getPresence, onPresenceChange, startHeartbeat,
-  createChatPlugin,
-} from './modules/chat.js';
+  createPresencePlugin,
+} from './modules/presence.js';
 
 // UI bindings — reactive view/binding primitives (viewKey/viewObject are
 // one-way, bindKey/bindObject add local edit write-back). DOM-library-
