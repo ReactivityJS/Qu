@@ -1,39 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { Qu, createNetworkPlugin, createSpacesPlugin } from '../src/index.js';
-import { createRelay } from '../relay/relay.mjs';
-import { bridgeWebSocketServer } from '../relay/node-ws-bridge.mjs';
 import { connectToRelay, openAppSpace, restrictedAppSpace, postEntry, listEntries, onEntry } from './app-space-lib.mjs';
+import { startTestRelayServer, stopTestRelayServer } from '../test/helpers.mjs';
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 /** A real relay over a real WebSocket server on an ephemeral port — not a loopback channel, the same infrastructure test/relay.test.mjs uses, because this example is specifically about "over the wire", not just "in one process". */
-async function startTestRelay(pushTopics) {
-  const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
-  const relayApi = await createRelay({ pushTopics });
-  bridgeWebSocketServer(server, relayApi, { path: '/relay' });
-  return { server, url: `ws://127.0.0.1:${port}/relay` };
+function startTestRelay(pushTopics) {
+  return startTestRelayServer({ pushTopics });
 }
 
-// `server.closeAllConnections()` does NOT reach a WebSocket-upgraded socket
-// — the upgrade hijacks it out of http.Server's normal connection tracking
-// (see test/ws-fragmentation.test.mjs's closeQuietly() doc for the same
-// fact from the server side). So `server.close()` below only ever resolves
-// once every CLIENT has already closed its own channel — chXxx.close()
-// must run, and complete, before this is called, not after and not
-// concurrently, or the awaited close() callback never fires and the whole
-// test hangs forever (confirmed the hard way: an earlier version of this
-// file's cleanup used one t.after() per resource, and node:test runs
-// t.after() hooks in REGISTRATION order — with the server's hook
-// registered first, for safety against a throw before any channel exists,
-// it ran BEFORE the channel-close hooks and deadlocked exactly like this).
-async function stopTestRelay(server) {
-  server.closeAllConnections?.();
-  await new Promise((resolve) => server.close(resolve));
-}
+// `stopTestRelayServer()` (test/helpers.mjs) only ever resolves once every
+// CLIENT has already closed its own channel — chXxx.close() must run, and
+// complete, before this is called, not after and not concurrently, or the
+// awaited close() callback never fires and the whole test hangs forever
+// (confirmed the hard way: an earlier version of this file's cleanup used
+// one t.after() per resource, and node:test runs t.after() hooks in
+// REGISTRATION order — with the server's hook registered first, for
+// safety against a throw before any channel exists, it ran BEFORE the
+// channel-close hooks and deadlocked exactly like this).
+const stopTestRelay = stopTestRelayServer;
 
 test('two independent app instances exchange data through a shared, open App-Space over a real relay', async (t) => {
   const APP_SPACE = 'my-app';

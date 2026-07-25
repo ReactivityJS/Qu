@@ -1,15 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { Qu, sendMessage, listMessages, createWebSocketChannel, MemoryFileStorageAdapter, reassembleFile, createNetworkPlugin, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
-import { createRelay } from '../relay/relay.mjs';
-import { bridgeWebSocketServer } from '../relay/node-ws-bridge.mjs';
 import { QuStore, NullAdapter } from '../src/index.js';
 import { FileSystemStorageAdapter } from '../src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from '../src/adapters/node-fs-file-storage.js';
+import { startTestRelayServer, stopTestRelayServer } from './helpers.mjs';
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -19,11 +17,7 @@ async function tmpDir(name) {
   return dir;
 }
 
-async function startTestServer({ dataDir, pushTopics = ['qu-demo-room/'] } = {}) {
-  const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
-
+function startTestServer({ dataDir, pushTopics = ['qu-demo-room/'] } = {}) {
   const relayOpts = { pushTopics };
   if (dataDir) {
     relayOpts.store = new QuStore([
@@ -32,15 +26,12 @@ async function startTestServer({ dataDir, pushTopics = ['qu-demo-room/'] } = {})
     ]);
     relayOpts.fileStorage = new FileSystemFileStorageAdapter(path.join(dataDir, 'files'));
   }
-  const relayApi = await createRelay(relayOpts);
-  bridgeWebSocketServer(server, relayApi, { path: '/relay' });
-  return { server, port, ...relayApi };
+  return startTestRelayServer(relayOpts);
 }
 
 async function closeAll(server, ...channels) {
   for (const ch of channels) await ch?.close();
-  server.closeAllConnections?.();
-  await new Promise((resolve) => server.close(resolve));
+  await stopTestRelayServer(server);
 }
 
 test('a file survives the uploader disconnecting: the relay mirrors it and serves it to a later client', async (t) => {
@@ -192,8 +183,6 @@ test('sending a large multi-chunk image through the real relay does not break su
   xferAlice.close();
   await chA.close();
   await chB.close();
-  server.closeAllConnections?.();
-  await new Promise((resolve) => server.close(resolve));
 });
 
 test('a mirror that failed while the uploader had no fileTransfer to answer retries automatically once they reconnect with one', async (t) => {

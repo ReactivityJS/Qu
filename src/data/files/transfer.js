@@ -84,17 +84,28 @@ export class DefaultFileTransfer {
       // receiver ask "is this fully downloadable yet?" (e.g. right after
       // the relay started mirroring a large file) without spending any
       // transfer bandwidth on the check itself.
+      //
+      // `have`/`total` (chunk counts, not just the boolean `ready`) let a
+      // caller show real "x/y chunks synced" progress instead of a single
+      // "not ready yet" — deliberately counted here (not derived from
+      // `ready` alone), so a caller never needs a SEPARATE round trip just
+      // to learn how far along an in-progress mirror actually is. Both
+      // fields are optional/additive on the wire — an older peer that only
+      // reads `ready` keeps working unchanged.
       const manifestQ = await this.#runtime.get(msg.manifestId);
       const visible = await this.#isManifestVisible(manifestQ);
       let ready = false;
+      let have = 0;
+      let total = 0;
       if (visible && manifestQ) {
-        ready = true;
+        total = manifestQ.value.chunks.length;
         for (const hash of manifestQ.value.chunks) {
-          if (!(await this.#fileStorage.hasChunk(hash))) { ready = false; break; }
+          if (await this.#fileStorage.hasChunk(hash)) have++;
         }
+        ready = have === total;
       }
-      debug('files', 'readiness-request', { manifestId: msg.manifestId, visible, ready });
-      await this.#channel.send({ type: 'qu.file.readiness.response', reqId: msg.reqId, ready });
+      debug('files', 'readiness-request', { manifestId: msg.manifestId, visible, ready, have, total });
+      await this.#channel.send({ type: 'qu.file.readiness.response', reqId: msg.reqId, ready, have, total });
       return;
     }
     const resolver = this.#pending.get(msg.reqId);
@@ -176,14 +187,24 @@ export class DefaultFileTransfer {
     while (Date.now() - start < maxWaitMs) {
       attempt++;
       let ready = false;
+      let have = 0;
+      let total = 0;
       try {
         const resp = await this.#request({ type: 'qu.file.readiness.request', manifestId });
         ready = !!resp.ready;
+        have = resp.have ?? 0;
+        total = resp.total ?? 0;
       } catch (e) {
         debug('files', 'readiness-check-failed', { manifestId, attempt, error: e.message });
       }
       if (ready) { debug('files', 'ready', { manifestId, attempt }); return true; }
-      onProgress?.({ attempt, elapsedMs: Date.now() - start });
+      // `have`/`total` — real "x/y Chunks" progress for a UI, not just
+      // "still waiting" (see qu.file.readiness.response's own doc above).
+      // Both 0 on a failed/errored request attempt itself, not on a
+      // legitimate "0 of N chunks synced yet" — a caller can't tell those
+      // apart from this shape alone, which is fine: both render the same
+      // "no progress to show yet" either way.
+      onProgress?.({ attempt, elapsedMs: Date.now() - start, have, total });
       await new Promise((r) => setTimeout(r, intervalMs));
     }
     return false;

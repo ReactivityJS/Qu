@@ -217,8 +217,16 @@ export async function createRelay({
   // schedule, just "try again the next time we plausibly can."
   const pendingMirrors = new Map(); // fingerprint -> Set<qubit id>
   const MAX_PENDING_MIRRORS_PER_UPLOADER = 200; // bounded, same reasoning as maxDynamicTopics above — one uploader shouldn't be able to grow this forever
+  // Welche ids GERADE laufen — ein großer Anhang kann länger brauchen, als
+  // der periodische Sweep unten auseinander liegt (20s); ohne diese Sperre
+  // würde der Sweep für eine noch laufende id einen zweiten, redundanten
+  // requestFile()-Durchlauf parallel lostreten (dieselbe Absicherung wie
+  // examples/chat/app.mjs's confirmInFlight, hier serverseitig).
+  const mirrorInFlight = new Set();
 
   async function mirrorFile(id, writer, fileTransfer) {
+    if (mirrorInFlight.has(id)) return;
+    mirrorInFlight.add(id);
     debug('relay', 'mirror-start', { id, writer });
     try {
       await fileTransfer.requestFile(id);
@@ -230,6 +238,8 @@ export async function createRelay({
       if (pending.size < MAX_PENDING_MIRRORS_PER_UPLOADER) pending.add(id);
       debug('relay', 'mirror-failed', { id, error: e.message });
       console.error(`[Relay] failed to mirror ${id}:`, e.message);
+    } finally {
+      mirrorInFlight.delete(id);
     }
   }
 
@@ -245,6 +255,31 @@ export async function createRelay({
     }
     mirrorFile(q.id, q.writer, uploader.fileTransfer);
   });
+
+  // Periodischer Sicherheitsnetz-Sweep, dieselbe Lücke wie examples/chat/
+  // app.mjs's eigener confirmDelivery()-Sweep, nur serverseitig: attachChannel()
+  // unten retried pendingMirrors NUR bei einem NEUEN Verbindungsaufbau —
+  // scheitert mirrorFile() dagegen, WÄHREND der Uploader durchgehend
+  // verbunden bleibt (ein einzelner Chunk-Request timet aus, der Browser-
+  // Tab hängt kurz durch etc.), bleibt die id in pendingMirrors stehen und
+  // NICHTS versucht es je wieder — kein Reconnect-Event fällt an, das den
+  // Retry auslösen könnte. Dieses Intervall schließt genau diese Lücke:
+  // JEDE noch offene id wird erneut versucht, sooft ihr Uploader gerade
+  // verbunden ist, unabhängig von Reconnects. `.unref()` (nur in Node
+  // vorhanden, siehe createRelay()'s eigene Doku zu "läuft auch im
+  // Browser") — ein Timer, der den Prozess künstlich am Leben hält, ist
+  // genau der Fehler, der die CI vorher stundenlang hängen ließ (siehe
+  // Commit zu Node-20/WebSocket); ein Relay-Prozess soll natürlich am
+  // Leben bleiben, aber nicht DESHALB.
+  const mirrorRetryTimer = setInterval(() => {
+    for (const [fp, ids] of pendingMirrors) {
+      if (!ids.size) continue;
+      const uploader = connected.get(fp);
+      if (!uploader) continue;
+      for (const id of [...ids]) mirrorFile(id, fp, uploader.fileTransfer);
+    }
+  }, 20000);
+  if (typeof mirrorRetryTimer.unref === 'function') mirrorRetryTimer.unref();
 
   /** Authenticates and attaches one Channel. Returns its proven peerFingerprint (or null if anonymous) and its per-connection DefaultFileTransfer. */
   async function attachChannel(channel) {
@@ -342,7 +377,21 @@ export async function createRelay({
       debug('relay', 'channel-detached', { channelId: channel.id, peerFingerprint });
       offSignaling();
       fileTransfer.close();
-      if (peerFingerprint) connected.delete(peerFingerprint);
+      // NUR löschen, wenn `connected` für diese Fingerprint immer noch
+      // GENAU DIESEN Channel führt — nicht blind per Fingerprint. Zwei
+      // Verbindungen derselben Identität können sich kurz überlappen (ein
+      // Reconnect-Versuch baut schon eine neue Verbindung auf, bevor die
+      // alte serverseitig als geschlossen erkannt wurde; zwei offene Tabs
+      // derselben Identität sind ein weiterer, dauerhafter Fall). Ohne
+      // diesen Vergleich würde das VERSPÄTETE close-Event der alten
+      // Verbindung den frischen, noch lebenden Eintrag der neuen
+      // Verbindung aus `connected` werfen — mit zwei sichtbaren Folgen:
+      // mirrorFile() hält den Uploader danach fälschlich für offline
+      // (Datei landet nur noch im pendingMirrors-Fallback statt sofort
+      // gespiegelt zu werden), und ein an diese Fingerprint geroutetes
+      // qu.route-Ereignis (WebRTC-Signaling, Anruf-Einladung) verpufft
+      // ins Leere, obwohl die Gegenseite die ganze Zeit über verbunden war.
+      if (peerFingerprint && connected.get(peerFingerprint)?.channel === channel) connected.delete(peerFingerprint);
     });
     return { peerFingerprint, fileTransfer };
   }

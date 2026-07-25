@@ -1,30 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { Qu, sendMessage, listMessages, createNetworkPlugin, createSpacesPlugin } from '../src/index.js';
 import { createWebSocketChannel } from '../src/network/transports/websocket-browser.js';
-import { createRelay } from '../relay/relay.mjs';
-import { bridgeWebSocketServer } from '../relay/node-ws-bridge.mjs';
+import { startTestRelayServer, stopTestRelayServer } from './helpers.mjs';
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-async function startTestServer() {
-  const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
-  const relayApi = await createRelay({ pushTopics: ['qu-demo-room/'] });
-  bridgeWebSocketServer(server, relayApi, { path: '/relay' });
-  return { server, port, ...relayApi };
-}
-
-async function stopTestServer(server) {
-  server.closeAllConnections?.();
-  await new Promise((resolve) => server.close(resolve));
+function startTestServer() {
+  return startTestRelayServer({ pushTopics: ['qu-demo-room/'] });
 }
 
 test('two independent WebSocket clients exchange a chat message via the real relay (not the loopback channel)', async (t) => {
   const { server, port } = await startTestServer();
-  t.after(() => stopTestServer(server)); // registered immediately — a t.after() hook still runs even if the test body throws partway through, unlike cleanup written at the end of the body, which a mid-test throw skips entirely and leaks this still-listening server (see the CI hang this caused: examples/app-space-lib.test.mjs's doc comment)
+  t.after(() => stopTestRelayServer(server)); // registered immediately — a t.after() hook still runs even if the test body throws partway through, unlike cleanup written at the end of the body, which a mid-test throw skips entirely and leaks this still-listening server (see the CI hang this caused: examples/app-space-lib.test.mjs's doc comment)
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
@@ -54,7 +42,7 @@ test('two independent WebSocket clients exchange a chat message via the real rel
 
 test('a third, later-connecting client syncs existing room history from the relay', async (t) => {
   const { server, port } = await startTestServer();
-  t.after(() => stopTestServer(server));
+  t.after(() => stopTestRelayServer(server));
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
@@ -82,7 +70,7 @@ test('a third, later-connecting client syncs existing room history from the rela
 
 test('createWebSocketChannel().isOpen() reflects real connection state, and reconnecting with a fresh channel after a close works end-to-end', async (t) => {
   const { server, port } = await startTestServer();
-  t.after(() => stopTestServer(server));
+  t.after(() => stopTestRelayServer(server));
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
@@ -123,7 +111,7 @@ test('createWebSocketChannel().isOpen() reflects real connection state, and reco
 
 test('routed events (qu.route) are forwarded to the correct fingerprint, with the relay-proven sender — not whatever the sender claims. WebRTC signaling is one user of this, not the only one.', async (t) => {
   const { server, port } = await startTestServer();
-  t.after(() => stopTestServer(server));
+  t.after(() => stopTestRelayServer(server));
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
@@ -172,7 +160,7 @@ test('routed events (qu.route) are forwarded to the correct fingerprint, with th
 
 test('a routed event is never persisted — it never reaches the relay\'s own store, unlike publish()/append()', async (t) => {
   const { server, port, relay } = await startTestServer();
-  t.after(() => stopTestServer(server));
+  t.after(() => stopTestRelayServer(server));
   const url = `ws://127.0.0.1:${port}/relay`;
   const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const bob = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
@@ -196,7 +184,7 @@ test('a routed event is never persisted — it never reaches the relay\'s own st
 
 test('signaling to an offline/unknown fingerprint is silently dropped, not queued or errored back to the sender', async (t) => {
   const { server, port } = await startTestServer();
-  t.after(() => stopTestServer(server));
+  t.after(() => stopTestRelayServer(server));
   const url = `ws://127.0.0.1:${port}/relay`;
   const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const chA = createWebSocketChannel(url);

@@ -1,10 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { Qu, QuStore, MemoryAdapter, NullAdapter, createNetworkPlugin, createSpacesPlugin, createChatPlugin } from '../src/index.js';
 import { createWebSocketChannel } from '../src/network/transports/websocket-browser.js';
-import { createRelay } from '../relay/relay.mjs';
-import { bridgeWebSocketServer } from '../relay/node-ws-bridge.mjs';
+import { startTestRelayServer, stopTestRelayServer } from './helpers.mjs';
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -30,23 +28,17 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * exact omission previously turned one failing assertion into an
  * indefinite hang instead of a clean, fast failure).
  */
-async function startTestServer(sendPush) {
-  const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
+function startTestServer(sendPush) {
   const store = new QuStore([
     { prefix: '', adapter: new MemoryAdapter() },
     { prefix: 'push-subscription/', adapter: new NullAdapter(), replicate: false },
   ]);
-  const relayApi = await createRelay({ store, allowDynamicSubscribe: true, sendPush, pushSubscriptions: new Map() });
-  bridgeWebSocketServer(server, relayApi, { path: '/relay' });
-  return { server, port, url: `ws://127.0.0.1:${port}/relay`, ...relayApi };
+  return startTestRelayServer({ store, allowDynamicSubscribe: true, sendPush, pushSubscriptions: new Map() });
 }
 
 async function closeAll(server, ...channels) {
   for (const ch of channels) await ch.close().catch(() => {});
-  server.closeAllConnections?.();
-  await new Promise((resolve) => server.close(resolve));
+  await stopTestRelayServer(server);
 }
 
 /** Exactly what examples/chat/app.mjs's publishPushSubscription() does. */
