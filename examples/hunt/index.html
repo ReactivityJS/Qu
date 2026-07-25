@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Beispiel: Verfolgungsjagd</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    main.hunt-shell { max-width: 720px; }
+    .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+    .box h2 { margin: 0 0 0.6rem; font-size: 0.95rem; color: var(--accent); }
+    .box p { margin: 0.3rem 0; font-size: 0.85rem; color: var(--muted); }
+    code.fp { display: block; background: #00000066; padding: 0.5rem 0.7rem; border-radius: 6px; font-size: 0.8rem; word-break: break-all; margin: 0.4rem 0; }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin: 0.6rem 0 0.2rem; }
+    input[type="text"], input[type="number"] { width: 100%; background: #00000066; border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.6rem; color: var(--text); font-size: 0.85rem; }
+    button { background: var(--accent); color: #0f1115; border: none; border-radius: 6px; padding: 0.55rem 1rem; font-weight: 600; cursor: pointer; margin-top: 0.75rem; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button.danger { background: var(--fail); }
+    #map { height: 55vh; width: 100%; border-radius: 10px; margin-bottom: 1rem; background: #1c1f28; }
+    .badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+    .badge.active { background: #4ade8033; color: var(--pass); }
+    .badge.caught { background: #f8717133; color: var(--fail); }
+    .badge.ended { background: #9aa2b133; color: var(--muted); }
+    .hidden { display: none; }
+    #radius-info { font-size: 0.8rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main class="hunt-shell">
+    <a class="back" href="/docs/examples.html">&larr; Zurück</a>
+    <h1>Verfolgungsjagd</h1>
+    <p class="lede">
+      Ein gejagtes Team meldet in einem einstellbaren Abstand (Standard: 5 Minuten) seinen Standort;
+      das Fänger-Team sieht die Punkte als nachgezeichneten Weg auf der Karte, inklusive eines
+      geschätzten Radius für die nächste vermutete Position. Logik in
+      <a href="/docs/code.html?file=/examples/hunt-lib.mjs">hunt-lib.mjs</a>, hier nur die Oberfläche.
+    </p>
+    <div id="status" class="chat-status">Verbinde …</div>
+
+    <div class="box">
+      <h2>Dein Fingerprint</h2>
+      <code class="fp" id="my-fp">…</code>
+    </div>
+
+    <div class="box" id="setup-box">
+      <h2>Neues Spiel erstellen</h2>
+      <p>Du bist automatisch Teil des gejagten Teams. Fänger-Fingerprints (optional, kommagetrennt) können auch später noch per Link beitreten.</p>
+      <label for="hunter-fps">Fänger-Team (Fingerprints, optional)</label>
+      <input type="text" id="hunter-fps" placeholder="z. B. 3e19cdff…, a1b2c3d4…" />
+      <label for="ping-interval">Ping-Abstand (Minuten)</label>
+      <input type="number" id="ping-interval" value="5" min="1" step="1" />
+      <label for="assumed-speed">Angenommene Geschwindigkeit ohne Bewegungshistorie (m/s)</label>
+      <input type="number" id="assumed-speed" value="1.4" min="0" step="0.1" />
+      <button id="create-game-btn" type="button">Spiel erstellen</button>
+    </div>
+
+    <div class="box hidden" id="share-box">
+      <h2>Spiel teilen</h2>
+      <p>Diesen Link an beide Teams weitergeben.</p>
+      <input type="text" id="share-link" readonly onclick="this.select()" />
+    </div>
+
+    <div class="box hidden" id="game-box">
+      <h2>Status: <span id="game-status" class="badge">…</span></h2>
+
+      <div id="hunted-controls" class="hidden">
+        <p>Du bist Teil des <strong>gejagten Teams</strong> — dein Standort wird alle
+        <span id="interval-label">5</span> Minuten automatisch gemeldet, solange Tracking aktiv ist.</p>
+        <button id="track-btn" type="button">Tracking starten</button>
+        <p id="last-ping-info"></p>
+      </div>
+
+      <div id="hunter-controls" class="hidden">
+        <p>Du bist Teil des <strong>Fänger-Teams</strong> (oder beobachtest) — die Karte zeigt jeden
+        gemeldeten Standort als nachgezeichneten Weg, der gestrichelte Kreis ist der geschätzte
+        Radius der aktuellen vermuteten Position.</p>
+        <p id="radius-info"></p>
+        <button id="caught-btn" type="button">Team gefunden — Spiel beenden</button>
+      </div>
+
+      <div id="map"></div>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
