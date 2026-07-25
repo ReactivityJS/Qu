@@ -10,7 +10,7 @@ import {
   createNetworkPlugin, createSpacesPlugin, createFileHandlerPlugin,
   createChatPlugin, createWebSocketChannel, IndexedDBFileStorageAdapter, reassembleFile, readFileMeta,
   createWebRTCPlugin, sendRoutedEvent, onRoutedEvent, enableConsoleDebug,
-  createSpaceMembershipPlugin, inboxId, createProfilesPlugin, DIRECTORY_ID,
+  createSpaceMembershipPlugin, inboxId, createProfilesPlugin, DIRECTORY_ID, LocalStorageAdapter,
 } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
@@ -93,6 +93,9 @@ const SOUND_MESSAGES_KEY = 'qu-chat-sound-messages';
 const SOUND_CALLS_KEY = 'qu-chat-sound-calls';
 const UNENCRYPTED_ROOMS_KEY = 'qu-chat-unencrypted-rooms'; // siehe isRoomEncrypted() weiter unten
 const PENDING_DELIVERY_KEY = 'qu-chat-pending-delivery'; // siehe confirmDelivery() weiter unten
+// Default AN (bisheriges Verhalten unverändert) — siehe renderAttachment()
+// weiter unten für den Ein-Klick-statt-automatisch-Fall bei AUS.
+const AUTO_LOAD_MEDIA_KEY = 'qu-chat-auto-load-media';
 // Enger als modules/chat.js's eigene Defaults (8s/20s) — ein Kontakt soll
 // sichtbar zügig als "offline" erkannt werden, nicht erst nach bis zu 20s
 // Unschärfe. 3x Heartbeat als Stale-Schwelle lässt trotzdem genug
@@ -100,6 +103,16 @@ const PENDING_DELIVERY_KEY = 'qu-chat-pending-delivery'; // siehe confirmDeliver
 // bei jedem kleinen Hänger fälschlich "offline" zu blinken.
 const PRESENCE_HEARTBEAT_MS = 5_000;
 const PRESENCE_STALE_MS = 15_000;
+
+// Alle oben stehenden *_KEY-Konstanten laufen ab hier über Qu's eigenen
+// StorageAdapter statt direkter `localStorage.getItem()/.setItem()`-Aufrufe
+// — derselbe Adapter, den auch Qu selbst als StorageAdapter für einen
+// QuStore verwenden könnte (get/put/delete/getAll/clear), hier einfach
+// standalone für App-Einstellungen genutzt. Leerer Namespace: hält jeden
+// bestehenden localStorage-Key exakt beim bisherigen Namen (kein `qu:`-
+// Präfix), damit dieser Umbau kein bereits gespeichertes Adressbuch/
+// Chat-Liste/... stillschweigend verwaist.
+const storage = new LocalStorageAdapter({ namespace: '' });
 
 const $ = (id) => document.getElementById(id);
 const appEl = $('app');
@@ -156,6 +169,7 @@ const audioCallBtn = $('audio-call-btn');
 const videoCallBtn = $('video-call-btn');
 const soundMessagesToggle = $('sound-messages-toggle');
 const soundCallsToggle = $('sound-calls-toggle');
+const autoLoadMediaToggle = $('auto-load-media-toggle');
 
 // --- Screens/Modals — jeder ist ein eigener Router-Pfad, siehe main()s
 // navigate()/renderRoute() weiter unten für das vollständige Pfadschema. ---
@@ -312,33 +326,38 @@ function closeLightbox() {
   lightboxImg.src = '';
 }
 
-// --- Adressbuch (localStorage, per Fingerprint gepflegt — WER man kennt) ---
-function loadContacts() {
-  try { return JSON.parse(localStorage.getItem(CONTACTS_KEY)) ?? []; } catch { return []; }
+// --- Adressbuch (StorageAdapter, per Fingerprint gepflegt — WER man kennt) ---
+async function loadContacts() {
+  return (await storage.get(CONTACTS_KEY)) ?? [];
 }
-function saveContacts(contacts) {
-  localStorage.setItem(CONTACTS_KEY, JSON.stringify(contacts));
+async function saveContacts(contacts) {
+  await storage.put(CONTACTS_KEY, contacts);
 }
-let contacts = loadContacts();
+// Top-level await — dieses Modul läuft als <script type="module">, das
+// unterstützt das nativ. LocalStorageAdapter ist unter der Haube synchron
+// (Web Storage selbst ist es), das await hier löst also praktisch sofort
+// auf, im allerersten Mikrotask nach dem Import — kein spürbarer
+// Unterschied zum vorherigen rein synchronen `loadContacts()`-Aufruf.
+let contacts = await loadContacts();
 function upsertContact(fp, patch) {
   const i = contacts.findIndex((c) => c.fp === fp);
   if (i === -1) contacts.push({ fp, alias: shortFp(fp), ...patch });
   else contacts[i] = { ...contacts[i], ...patch };
-  saveContacts(contacts);
+  saveContacts(contacts); // fire-and-forget ist hier sicher — der eigentliche Schreibvorgang läuft synchron innerhalb von put(), bevor dessen erstes (hier gar nicht vorhandenes) await; die zurückgegebene Promise ist nur Formsache
 }
 function contactByFp(fp) {
   return contacts.find((c) => c.fp === fp) ?? null;
 }
 
-// --- Chat-/Raumliste (localStorage, siehe ROOMS_KEY oben — die eigentliche
-// Chat-Liste, unabhängig vom Adressbuch) ---
-function loadRooms() {
-  try { return JSON.parse(localStorage.getItem(ROOMS_KEY)) ?? []; } catch { return []; }
+// --- Chat-/Raumliste (StorageAdapter, siehe ROOMS_KEY oben — die
+// eigentliche Chat-Liste, unabhängig vom Adressbuch) ---
+async function loadRooms() {
+  return (await storage.get(ROOMS_KEY)) ?? [];
 }
-function saveRooms(rooms) {
-  localStorage.setItem(ROOMS_KEY, JSON.stringify(rooms));
+async function saveRooms(rooms) {
+  await storage.put(ROOMS_KEY, rooms);
 }
-let rooms = loadRooms();
+let rooms = await loadRooms();
 function roomById(id) {
   return rooms.find((r) => r.id === id) ?? null;
 }
@@ -346,11 +365,11 @@ function upsertRoom(id, patch) {
   const i = rooms.findIndex((r) => r.id === id);
   if (i === -1) rooms.push({ id, name: null, members: [], lastTs: 0, unread: 0, ...patch });
   else rooms[i] = { ...rooms[i], ...patch };
-  saveRooms(rooms);
+  saveRooms(rooms); // fire-and-forget — siehe upsertContact()'s Doku oben
 }
 function removeRoomEntry(id) {
   rooms = rooms.filter((r) => r.id !== id);
-  saveRooms(rooms);
+  saveRooms(rooms); // fire-and-forget — siehe upsertContact()'s Doku oben
 }
 /** Ein DM (genau ein anderes Mitglied) oder eine Gruppe (mehrere)? */
 function isGroupRoom(room) {
@@ -371,14 +390,14 @@ function roomDisplayAvatar(room) {
 }
 
 // --- Stumm-Schaltung pro Chat (siehe MUTED_ROOMS_KEY oben) ---
-function loadMutedRooms() {
-  try { return new Set(JSON.parse(localStorage.getItem(MUTED_ROOMS_KEY)) ?? []); } catch { return new Set(); }
+async function loadMutedRooms() {
+  return new Set((await storage.get(MUTED_ROOMS_KEY)) ?? []);
 }
-const mutedRooms = loadMutedRooms();
+const mutedRooms = await loadMutedRooms();
 function isRoomMuted(roomId) { return mutedRooms.has(roomId); }
 function setRoomMuted(roomId, muted) {
   if (muted) mutedRooms.add(roomId); else mutedRooms.delete(roomId);
-  localStorage.setItem(MUTED_ROOMS_KEY, JSON.stringify([...mutedRooms]));
+  storage.put(MUTED_ROOMS_KEY, [...mutedRooms]); // fire-and-forget — siehe upsertContact()'s Doku
 }
 
 // --- Verschlüsselung pro Chat (Default: AN) ---
@@ -404,14 +423,14 @@ function setRoomMuted(roomId, muted) {
 // Gilt NUR für die eigenen, künftigen Nachrichten dieses Geräts — jede
 // Seite entscheidet für ihre eigenen Schreibvorgänge unabhängig, und
 // bereits gesendete Nachrichten bleiben, wie sie geschrieben wurden.
-function loadUnencryptedRooms() {
-  try { return new Set(JSON.parse(localStorage.getItem(UNENCRYPTED_ROOMS_KEY)) ?? []); } catch { return new Set(); }
+async function loadUnencryptedRooms() {
+  return new Set((await storage.get(UNENCRYPTED_ROOMS_KEY)) ?? []);
 }
-const unencryptedRooms = loadUnencryptedRooms();
+const unencryptedRooms = await loadUnencryptedRooms();
 function isRoomEncrypted(roomId) { return !unencryptedRooms.has(roomId); }
 function setRoomEncrypted(roomId, encrypted) {
   if (encrypted) unencryptedRooms.delete(roomId); else unencryptedRooms.add(roomId);
-  localStorage.setItem(UNENCRYPTED_ROOMS_KEY, JSON.stringify([...unencryptedRooms]));
+  storage.put(UNENCRYPTED_ROOMS_KEY, [...unencryptedRooms]); // fire-and-forget — siehe upsertContact()'s Doku
 }
 
 // --- "Beim Relay angekommen?"-Status eigener Nachrichten (siehe
@@ -422,11 +441,11 @@ function setRoomEncrypted(roomId, encrypted) {
 // Persistenz würde der nächste Appstart einfach vergessen, dass da noch
 // etwas unbestätigt in der Luft hängt, und die UI zeigte dauerhaft (fälschlich)
 // "gesendet" statt es beim nächsten Verbindungsaufbau erneut zu prüfen.
-function loadPendingDeliveries() {
-  try { return JSON.parse(localStorage.getItem(PENDING_DELIVERY_KEY)) ?? []; } catch { return []; }
+async function loadPendingDeliveries() {
+  return (await storage.get(PENDING_DELIVERY_KEY)) ?? [];
 }
-function savePendingDeliveries(list) {
-  localStorage.setItem(PENDING_DELIVERY_KEY, JSON.stringify(list));
+async function savePendingDeliveries(list) {
+  await storage.put(PENDING_DELIVERY_KEY, list);
 }
 
 // --- Töne (Web Audio API, synthetisiert — kein externes Audio-Asset
@@ -436,8 +455,22 @@ function savePendingDeliveries(list) {
 // schaltbar (mutedRooms oben) — beides zusammen ergibt "Nachrichtenton
 // an, aber dieser eine Chat stumm" ODER "dieser Chat nicht stumm, aber
 // Töne insgesamt aus", unabhängig voneinander einstellbar.
-function soundEnabled(key) { return localStorage.getItem(key) !== '0'; }
-function setSoundEnabled(key, enabled) { localStorage.setItem(key, enabled ? '1' : '0'); }
+// Werte hier sind bewusst KEIN JSON (nur '0'/'1') — get()/put() unten
+// gehen trotzdem über denselben Adapter wie alles andere, JSON.stringify('1')
+// bzw. JSON.parse('"1"') sind für einen einzelnen String-Wert unauffällig,
+// sparen sich hier aber keine eigene Sonderbehandlung.
+async function soundEnabled(key) { return (await storage.get(key)) !== '0'; }
+async function setSoundEnabled(key, enabled) { await storage.put(key, enabled ? '1' : '0'); }
+
+// --- Medien automatisch laden (Bandbreite/mobiles Datenvolumen schonen) ---
+// Default AN — bisheriges Verhalten bleibt Standard; abschaltbar für alle,
+// die lieber selbst entscheiden, wann ein Anhang tatsächlich heruntergeladen
+// wird. Gilt für JEDEN Anhang-Typ (nicht nur Bild/Video) — reveal() lädt für
+// Audio/generische Dateien exakt denselben vollen Byte-Download, nur die
+// Darstellung danach unterscheidet sich; diese Einstellung schont also
+// tatsächliches Datenvolumen, nicht nur Bild-/Videowiedergabe.
+async function autoLoadMedia() { return (await storage.get(AUTO_LOAD_MEDIA_KEY)) !== '0'; }
+async function setAutoLoadMedia(enabled) { await storage.put(AUTO_LOAD_MEDIA_KEY, enabled ? '1' : '0'); }
 
 let audioCtx = null;
 function getAudioCtx() {
@@ -471,14 +504,14 @@ function playTone(freqs, { duration = 0.16, gain = 0.15, startOffset = 0 } = {})
   }
 }
 
-function playMessageSound() {
-  if (!soundEnabled(SOUND_MESSAGES_KEY)) return;
+async function playMessageSound() {
+  if (!(await soundEnabled(SOUND_MESSAGES_KEY))) return;
   playTone([880, 1318.5], { duration: 0.18, gain: 0.12 }); // A5 -> E6, kurzer aufsteigender "Ping"
 }
 
 let ringtoneTimer = null;
-function startRingtone() {
-  if (!soundEnabled(SOUND_CALLS_KEY) || ringtoneTimer) return;
+async function startRingtone() {
+  if ((!(await soundEnabled(SOUND_CALLS_KEY))) || ringtoneTimer) return;
   const ring = () => playTone([659.25, 523.25], { duration: 0.5, gain: 0.14 }); // E5 -> C5, klassisches Zwei-Ton-Klingeln
   ring();
   ringtoneTimer = setInterval(ring, 1800);
@@ -503,8 +536,9 @@ async function main() {
   registerServiceWorker(); // so früh wie möglich, unabhängig von der restlichen Chat-Initialisierung — siehe dessen Doku oben
 
   meFpShortEl.textContent = shortFp(qu.fingerprint, 10) + '…';
-  setAvatar(meAvatarBtn, localStorage.getItem(ALIAS_KEY) || qu.fingerprint);
-  let myAlias = localStorage.getItem(ALIAS_KEY) || `Ich-${qu.fingerprint.slice(0, 4)}`;
+  const savedAlias = await storage.get(ALIAS_KEY);
+  setAvatar(meAvatarBtn, savedAlias || qu.fingerprint);
+  let myAlias = savedAlias || `Ich-${qu.fingerprint.slice(0, 4)}`;
   let myAvatar = null;
   meNameEl.textContent = myAlias;
   setAvatar(meAvatarBtn, myAlias);
@@ -519,10 +553,10 @@ async function main() {
   // verschlüsselte Nachricht zu schreiben, bevor unser `epub` beim Relay
   // angekommen ist (core/session.js's #resolveRecipientKey()).
   async function ensureAlias() {
-    let alias = localStorage.getItem(ALIAS_KEY);
+    let alias = await storage.get(ALIAS_KEY);
     if (!alias) {
       alias = prompt('Dein Anzeigename:', `Ich-${qu.fingerprint.slice(0, 4)}`) || `Ich-${qu.fingerprint.slice(0, 4)}`;
-      localStorage.setItem(ALIAS_KEY, alias);
+      await storage.put(ALIAS_KEY, alias);
     }
     await qu.publishProfile({ alias });
     await repl.sync({ topic: qu.userSpaceId }).catch((e) => console.error('[chat] self-profile sync failed:', e));
@@ -553,9 +587,9 @@ async function main() {
   // PENDING_DELIVERY_KEY oben) ist die Kehrseite: eigene Nachrichten, die
   // NOCH NICHT bestätigt sind — nur diese zeigen überhaupt das Uhr-Symbol,
   // jede ältere/unbekannte eigene Nachricht gilt stillschweigend als
-  // "gesendet" (renderTicks() weiter unten), genau wie vor diesem Feature.
+  // "gesendet" (<qu-msg-tick> weiter unten), genau wie vor diesem Feature.
   const deliveredMsgIds = new Set();
-  let pendingDeliveries = loadPendingDeliveries();
+  let pendingDeliveries = await loadPendingDeliveries();
 
   /**
    * Prüft für EINE eigene Nachricht (+ ihre Anhänge), ob sie inzwischen
@@ -585,12 +619,29 @@ async function main() {
   // Chunk-genauer Fortschritt "x/y" pro eigener Nachricht, solange sie noch
   // in pendingDeliveries steht — gefüllt aus fileTransfer.waitUntilReady()s
   // `onProgress` (have/total, siehe data/files/transfer.js's readiness-
-  // Protokoll-Erweiterung) und von renderTicks() ins Sync-Badge geschrieben.
-  // Bei MEHREREN Anhängen zeigt das Badge den GERADE laufenden (Index unter
-  // `ref`), nicht eine über alle Anhänge aggregierte Zahl — Chunks
-  // unterschiedlicher Anhänge zu einer einzigen Prozentzahl zu addieren
-  // würde nur vortäuschen, hier stünde eine echte Gesamtgröße dahinter.
+  // Protokoll-Erweiterung) und über tickBus (siehe dort) ins Sync-Badge
+  // geschrieben. Bei MEHREREN Anhängen zeigt das Badge den GERADE laufenden
+  // (Index unter `ref`), nicht eine über alle Anhänge aggregierte Zahl —
+  // Chunks unterschiedlicher Anhänge zu einer einzigen Prozentzahl zu
+  // addieren würde nur vortäuschen, hier stünde eine echte Gesamtgröße
+  // dahinter.
   const syncProgressByMsgId = new Map(); // msgId -> { refIndex, refCount, have, total }
+
+  /**
+   * Ersetzt das frühere `renderTicks(roomId)`, das an ca. 10 Stellen von
+   * Hand aufgerufen werden musste, immer hinter einem
+   * `if (activeRoomId === roomId)`-Wächter. Statt zentral zu rendern,
+   * bringt jede eigene Nachricht ihr eigenes `<qu-msg-tick>`/
+   * `<qu-sync-badge>` (siehe unten) mit, das sich beim Einhängen ins DOM
+   * selbst auf `tickBus` abonniert und sich beim Aushängen wieder
+   * abmeldet — nur Elemente, die gerade wirklich sichtbar sind (der
+   * offene Chat), hören überhaupt zu, ganz ohne dass ein Aufrufer noch an
+   * `activeRoomId` denken muss.
+   */
+  const tickBus = new EventTarget();
+  function notifyTicks(roomId) {
+    tickBus.dispatchEvent(new CustomEvent('tick-change', { detail: { roomId } }));
+  }
 
   async function confirmDelivery(entry) {
     if (deliveredMsgIds.has(entry.id) || confirmInFlight.has(entry.id)) return;
@@ -606,7 +657,7 @@ async function main() {
           onProgress: ({ have, total }) => {
             if (!total) return; // 0/0 heißt hier "Anfrage fehlgeschlagen", nicht "0 von 0 Chunks" — nichts Sinnvolles zum Anzeigen
             syncProgressByMsgId.set(entry.id, { refIndex: i, refCount: refs.length, have, total });
-            if (activeRoomId === entry.roomId) renderTicks(entry.roomId);
+            notifyTicks(entry.roomId);
           },
         });
         if (!ready) return;
@@ -621,7 +672,7 @@ async function main() {
     deliveredMsgIds.add(entry.id);
     pendingDeliveries = pendingDeliveries.filter((p) => p.id !== entry.id);
     savePendingDeliveries(pendingDeliveries);
-    if (activeRoomId === entry.roomId) renderTicks(entry.roomId);
+    notifyTicks(entry.roomId);
   }
 
   // Periodischer Sicherheitsnetz-Sweep: confirmDelivery() selbst gibt nach
@@ -631,7 +682,7 @@ async function main() {
   // vollständig zum Relay gespiegelt zu werden) fällt dann NIE ein echter
   // Reconnect an, der laut derselben Doku "es beim nächsten Mal erneut
   // versucht" — der Eintrag blieb dadurch für immer in pendingDeliveries
-  // hängen und das Sync-Badge (renderTicks()) verschwand nie, obwohl der
+  // hängen und das Sync-Badge (<qu-sync-badge>) verschwand nie, obwohl der
   // Upload am Ende wirklich fertig war. Dieses Intervall schließt genau
   // diese Lücke, unabhängig davon, ob die Verbindung je abreißt.
   setInterval(() => {
@@ -1029,7 +1080,7 @@ async function main() {
     unsubs.push(qu.onPresenceChange(roomId, async () => renderPresence(roomId)));
     unsubs.push(qu.onReadReceipt(roomId, async () => {
       receiptsByRoom.set(roomId, await qu.getReadReceipts(roomId));
-      if (activeRoomId === roomId) renderTicks(roomId);
+      notifyTicks(roomId);
     }));
     // Gruppenname: ein normaler LWW-Wert AM Raum selbst (`${roomId}/meta`),
     // nicht nur lokal in `rooms` — jede Umbenennung (renameGroupRoom()
@@ -1241,7 +1292,7 @@ async function main() {
     renderRoomList();
 
     if (activeRoomId === roomId) {
-      appendLiveMessage(q);
+      appendLiveMessage(q, roomId);
       if (document.hasFocus()) markActiveRead();
     }
 
@@ -1333,7 +1384,7 @@ async function main() {
     }).catch(() => {});
   }
 
-  /** Badge-Text für EINE eigene Nachricht mit Anhang — mit echtem Chunk-Fortschritt, sobald syncProgressByMsgId etwas für sie weiß, sonst der generische Text (z. B. bevor die erste readiness-Antwort überhaupt eintraf). Gemeinsam genutzt von buildMessageItem() (Anfangszustand) und renderTicks() (laufende Aktualisierung), damit beide garantiert denselben Text erzeugen. */
+  /** Badge-Text für EINE eigene Nachricht mit Anhang — mit echtem Chunk-Fortschritt, sobald syncProgressByMsgId etwas für sie weiß, sonst der generische Text (z. B. bevor die erste readiness-Antwort überhaupt eintraf). Gemeinsam genutzt von buildMessageItem() (Anfangszustand) und <qu-sync-badge> (laufende Aktualisierung), damit beide garantiert denselben Text erzeugen. */
   function syncBadgeText(msgId) {
     const p = syncProgressByMsgId.get(msgId);
     if (!p) return '📤 Wird noch mit dem Server synchronisiert — bitte online bleiben, bis dies verschwindet.';
@@ -1342,41 +1393,68 @@ async function main() {
     return `📤 Wird synchronisiert${label}: Chunk ${p.have}/${p.total} (${percent}%) — bitte online bleiben, bis dies verschwindet.`;
   }
 
-  function renderTicks(roomId) {
-    const receipts = receiptsByRoom.get(roomId) ?? {};
-    const pendingIds = new Set(pendingDeliveries.map((p) => p.id));
-    for (const li of messageListEl.querySelectorAll('[data-mine="1"]')) {
-      const id = li.dataset.id;
-      const ts = Number(li.dataset.ts);
+  function stillPendingDelivery(msgId) {
+    return pendingDeliveries.some((p) => p.id === msgId) && !deliveredMsgIds.has(msgId);
+  }
+
+  /**
+   * Kleines ✓/✓✓/🕐-Symbol NEBEN der eigenen Nachricht (`.msg-meta`) —
+   * abonniert sich beim Einhängen auf `tickBus` (siehe dessen Doku oben)
+   * und meldet sich beim Aushängen wieder ab, statt von außen über
+   * renderTicks() angestoßen zu werden.
+   */
+  class QuMsgTickElement extends HTMLElement {
+    connectedCallback() {
+      this.className = 'tick';
+      this._onChange = (e) => { if (e.detail.roomId === this.dataset.roomId) this.render(); };
+      tickBus.addEventListener('tick-change', this._onChange);
+      this.render();
+    }
+    disconnectedCallback() {
+      tickBus.removeEventListener('tick-change', this._onChange);
+    }
+    render() {
+      const { id, roomId } = this.dataset;
+      const ts = Number(this.dataset.ts);
+      const receipts = receiptsByRoom.get(roomId) ?? {};
+      // Reihenfolge: gelesen schlägt immer "noch nicht beim Relay
+      // bestätigt" (ein Empfänger, der es gelesen hat, hat es zwangsläufig
+      // auch empfangen — sonst könnte er es gar nicht gelesen haben,
+      // selbst wenn UNSERE eigene waitUntilReplicated()-Prüfung noch
+      // aussteht/fehlgeschlagen ist).
       const read = Object.entries(receipts).some(([reader, upTo]) => reader !== qu.fingerprint && upTo >= ts);
-      const tick = li.querySelector('.tick');
-      const stillPending = pendingIds.has(id) && !deliveredMsgIds.has(id);
-      if (tick) {
-        // Reihenfolge: gelesen schlägt immer "noch nicht beim Relay
-        // bestätigt" (ein Empfänger, der es gelesen hat, hat es zwangsläufig
-        // auch empfangen — sonst könnte er es gar nicht gelesen haben,
-        // selbst wenn UNSERE eigene waitUntilReplicated()-Prüfung noch
-        // aussteht/fehlgeschlagen ist).
-        if (read) { tick.textContent = '✓✓'; tick.classList.add('read'); tick.classList.remove('pending'); }
-        else if (stillPending) { tick.textContent = '🕐'; tick.classList.remove('read'); tick.classList.add('pending'); }
-        else { tick.textContent = '✓'; tick.classList.remove('read', 'pending'); }
-      }
-      // Eigenes, deutlich lesbares Badge zusätzlich zum kleinen Uhr-Symbol
-      // oben — NUR bei Nachrichten mit Anhang: genau dort ist "noch nicht
-      // beim Relay bestätigt" die eine Information, die vor dem
-      // Ausschalten des Geräts wirklich zählt (ein reiner Text repliziert
-      // praktisch sofort, ein großer Video-Anhang kann eine Weile
-      // brauchen — das winzige Uhr-Symbol allein ist dafür leicht zu
-      // übersehen). Zeigt/versteckt dasselbe Element wieder, statt es neu
-      // zu erzeugen — buildMessageItem() legt es für jede eigene Nachricht
-      // MIT Anhang von Anfang an (leer) an.
-      const badge = li.querySelector('.sync-badge');
-      if (badge) {
-        badge.hidden = !stillPending;
-        if (stillPending) badge.textContent = syncBadgeText(id);
-      }
+      if (read) { this.textContent = '✓✓'; this.classList.add('read'); this.classList.remove('pending'); }
+      else if (stillPendingDelivery(id)) { this.textContent = '🕐'; this.classList.remove('read'); this.classList.add('pending'); }
+      else { this.textContent = '✓'; this.classList.remove('read', 'pending'); }
     }
   }
+  customElements.define('qu-msg-tick', QuMsgTickElement);
+
+  /**
+   * Deutlich lesbares Badge zusätzlich zum kleinen Uhr-Symbol oben — NUR
+   * bei Nachrichten mit Anhang: genau dort ist "noch nicht beim Relay
+   * bestätigt" die eine Information, die vor dem Ausschalten des Geräts
+   * wirklich zählt (ein reiner Text repliziert praktisch sofort, ein
+   * großer Video-Anhang kann eine Weile brauchen). Selbst-abonnierend wie
+   * <qu-msg-tick> oben.
+   */
+  class QuSyncBadgeElement extends HTMLElement {
+    connectedCallback() {
+      this.className = 'sync-badge';
+      this._onChange = (e) => { if (e.detail.roomId === this.dataset.roomId) this.render(); };
+      tickBus.addEventListener('tick-change', this._onChange);
+      this.render();
+    }
+    disconnectedCallback() {
+      tickBus.removeEventListener('tick-change', this._onChange);
+    }
+    render() {
+      const pending = stillPendingDelivery(this.dataset.id);
+      this.hidden = !pending;
+      if (pending) this.textContent = syncBadgeText(this.dataset.id);
+    }
+  }
+  customElements.define('qu-sync-badge', QuSyncBadgeElement);
 
   // --- Rendering: Chat-/Raumliste (1:1 UND Gruppen, kein Unterschied im Markup außer dem Avatar-Fallback) ---
   /**
@@ -1431,43 +1509,44 @@ async function main() {
     for (const r of sorted) {
       const li = el('li', `contact${activeRoomId === r.id ? ' active' : ''}`);
       li.dataset.room = r.id;
-      const avatar = el('div', 'avatar sm');
-      setAvatar(avatar, r.alias, roomDisplayAvatar(r));
-      avatar.appendChild(el('span', 'dot'));
-      li.appendChild(avatar);
-      // Nur bei einem DM lohnt sich ein Nachladeversuch (roomDisplayAvatar()
-      // liest bei einer Gruppe schon `room.avatar` direkt, kein separater
-      // Netzwerk-Abruf nötig) — avatarFor() ist eine Pro-IDENTITÄT-Sache.
-      if (!isGroupRoom(r) && !roomDisplayAvatar(r)) {
-        avatarFor(r.members[0]).then((url) => { if (url) setAvatar(avatar, r.alias, url); });
+      // `li` MUSS ans Dokument angehängt sein, BEVOR ein <qu-profile-card>
+      // hineinkommt — Custom Elements feuern connectedCallback() erst beim
+      // tatsächlichen Verbinden mit dem Dokument, nicht schon beim Anhängen
+      // an ein noch loses `li`. Ein Kind, das VOR diesem Zeitpunkt manuell
+      // hinzugefügt wird (z. B. der .dot unten), würde von _mount()s
+      // `this.textContent = ''` beim späteren echten Connect sonst wieder
+      // gelöscht.
+      contactListEl.appendChild(li);
+      if (isGroupRoom(r)) {
+        // Eine Gruppe hat keine EINZELNE Identität (Name/Avatar sind
+        // raumeigen) — dafür bleibt der manuell gebaute Avatar, wie schon
+        // in renderRoomHeader().
+        const avatar = el('div', 'avatar sm');
+        setAvatar(avatar, r.alias, roomDisplayAvatar(r));
+        avatar.appendChild(el('span', 'dot')); // renderPresence() findet/aktualisiert ihn über [data-room] .dot
+        li.appendChild(avatar);
+        li.appendChild(el('div', 'contact-name', r.alias));
+      } else {
+        // Ein DM IST genau eine Identität — <qu-profile-card> (siehe
+        // renderRoomHeader()) übernimmt Avatar UND Alias komplett live,
+        // kein aliasFor()/avatarFor()-Nachladeweg mehr nötig. `display:
+        // contents` (style.css) lässt Avatar-Bild und Alias-Text direkt
+        // ins Grid-Layout dieser Zeile durch, statt in einer eigenen Box
+        // zu stecken.
+        const card = document.createElement('qu-profile-card');
+        card.setAttribute('fp', r.members[0]);
+        card.qu = qu;
+        li.appendChild(card); // li ist schon verbunden — connectedCallback()/_mount() laufen HIER, synchron
+        card.appendChild(el('span', 'dot')); // renderPresence() findet/aktualisiert ihn über [data-room] .dot
       }
-
-      const body = el('div', 'contact-body');
-      const top = el('div', 'contact-top');
-      const nameEl = el('div', 'contact-name', r.alias);
-      top.appendChild(nameEl);
-      top.appendChild(el('div', 'contact-time', r.lastTs ? fmtTime(r.lastTs) : ''));
-      body.appendChild(top);
-      // Derselbe Nachladeweg wie für den Avatar direkt darüber — der Alias
-      // ist beim allerersten Rendern (Kontakt gerade erst hinzugefügt, vor
-      // dem ersten Öffnen des Chats) evtl. noch nicht aus dem Netzwerk
-      // aufgelöst (isAliasUnresolved()); danach übernimmt ensureRoom()s
-      // Live-Abo. Aktualisiert gezielt nur dieses Element statt eines
-      // vollen renderRoomList()-Neurenderns (vermeidet Rekursion).
-      if (!isGroupRoom(r) && isAliasUnresolved(r.members[0], r.alias)) {
-        aliasFor(r.members[0]).then((name) => {
-          if (name && !isAliasUnresolved(r.members[0], name)) { nameEl.textContent = name; setAvatar(avatar, name, roomDisplayAvatar(r)); }
-        });
-      }
+      li.appendChild(el('div', 'contact-time', r.lastTs ? fmtTime(r.lastTs) : ''));
       const previewRow = el('div', 'contact-preview');
       const previewText = r.lastTs ? `${r.lastMine ? 'Du: ' : ''}${r.lastPreview ?? ''}` : 'Noch keine Nachrichten';
       previewRow.appendChild(el('div', 'contact-last', previewText));
       if (r.unread) previewRow.appendChild(el('div', 'contact-unread', String(r.unread)));
-      body.appendChild(previewRow);
-      li.appendChild(body);
+      li.appendChild(previewRow);
 
       li.addEventListener('click', () => navigate(r.id));
-      contactListEl.appendChild(li);
     }
   }
 
@@ -1622,7 +1701,33 @@ async function main() {
         console.error('[chat] attachment failed:', e);
       }
     }
-    reveal();
+
+    /** Platzhalter statt eines automatischen Downloads — Dateiname/-typ/-größe kommen aus fileMeta, das schon VOR jedem Byte-Download verfügbar ist (s. o.), ein Klick löst den eigentlichen reveal() erst aus. */
+    function showLoadPlaceholder() {
+      wrap.textContent = '';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'attachment-file attachment-load-btn';
+      btn.appendChild(el('span', 'file-ic', kind === 'image' ? '🖼️' : kind === 'video' ? '🎬' : kind === 'audio' ? '🎵' : '📄'));
+      const metaEl = el('div');
+      metaEl.appendChild(el('div', '', fileMeta.name));
+      metaEl.appendChild(el('div', 'file-meta', `${fileMeta.mime} · ${fmtBytes(fileMeta.size ?? 0)} · zum Laden tippen`));
+      btn.appendChild(metaEl);
+      btn.addEventListener('click', () => {
+        wrap.textContent = '';
+        status = el('div', 'attachment-progress', 'wird geladen …');
+        wrap.appendChild(status);
+        reveal();
+      });
+      wrap.appendChild(btn);
+    }
+
+    // Schon vollständig lokal vorhanden (eigener Versand, oder früher schon
+    // heruntergeladen) — dann gibt es nichts zu sparen, immer sofort
+    // anzeigen, unabhängig von der Einstellung. Nur ein WIRKLICH noch
+    // ausstehender Download wird gegen "Medien automatisch laden" geprüft.
+    if ((await fileTransfer.hasComplete(refId)) || (await autoLoadMedia())) reveal();
+    else showLoadPlaceholder();
     return wrap;
   }
 
@@ -1656,12 +1761,11 @@ async function main() {
   }
 
   /** Baut genau ein `<li class="msg">` — geteilt zwischen dem vollständigen Neuaufbau (renderMessageList()) und dem Anhängen einer einzelnen neuen Live-Nachricht (appendLiveMessage()), damit beide garantiert dasselbe Markup erzeugen. */
-  async function buildMessageItem(q) {
+  async function buildMessageItem(q, roomId) {
     const mine = q.writer === qu.fingerprint;
     const li = el('li', `msg${mine ? ' mine' : ''}`);
     li.dataset.ts = q.ts;
     li.dataset.id = q.id;
-    li.dataset.mine = mine ? '1' : '0';
     const bubble = el('div', 'msg-bubble');
     if (q.value?.text) {
       const textEl = el('div', 'msg-text');
@@ -1674,18 +1778,24 @@ async function main() {
       bubble.appendChild(await renderAttachment(refId));
     }
     if (mine && q.refs?.length) {
-      // Anfangszustand hier direkt aus pendingDeliveries/syncProgressByMsgId
-      // — renderTicks() (bei jedem Reconnect/jeder Bestätigung/jedem
-      // Fortschritts-Tick aufgerufen) übernimmt ab hier laufend die
-      // Aktualisierung; siehe dessen eigene Doku und syncBadgeText().
-      const badge = el('div', 'sync-badge', syncBadgeText(q.id));
-      badge.hidden = !(pendingDeliveries.some((p) => p.id === q.id) && !deliveredMsgIds.has(q.id));
+      // <qu-sync-badge> zieht sich seinen Anfangs- UND jeden Folgezustand
+      // selbst (siehe dessen Doku oben) — hier nur erzeugen und den
+      // Nachrichten-/Raumbezug mitgeben.
+      const badge = document.createElement('qu-sync-badge');
+      badge.dataset.id = q.id;
+      badge.dataset.roomId = roomId;
       bubble.appendChild(badge);
     }
     li.appendChild(bubble);
     const meta = el('div', 'msg-meta');
     meta.appendChild(document.createTextNode(fmtTime(q.ts)));
-    if (mine) meta.appendChild(el('span', 'tick', '✓'));
+    if (mine) {
+      const tick = document.createElement('qu-msg-tick');
+      tick.dataset.id = q.id;
+      tick.dataset.ts = q.ts;
+      tick.dataset.roomId = roomId;
+      meta.appendChild(tick);
+    }
     li.appendChild(meta);
     return li;
   }
@@ -1699,24 +1809,22 @@ async function main() {
     for (const q of list) {
       const dayLabel = fmtDayLabel(q.ts);
       if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-      messageListEl.appendChild(await buildMessageItem(q));
+      messageListEl.appendChild(await buildMessageItem(q, roomId));
     }
     // Ein frisch geöffneter Chat startet immer unten (neueste Nachricht),
     // unabhängig vom bisherigen Scroll-Zustand — anders als
     // appendLiveMessage() unten, das das bewusst NUR tut, wenn man schon
     // dort war.
     messageListEl.scrollTop = messageListEl.scrollHeight;
-    renderTicks(roomId);
   }
 
   /** Hängt EINE neu eingetroffene Live-Nachricht an, statt die komplette Liste neu aufzubauen (kein erneutes Laden/Rendern schon vorhandener Anhänge bei jeder neuen Nachricht) — folgt dem Ende nur, wenn man vorher schon dort war (isNearBottom()), reißt also niemanden aus der gerade gelesenen älteren Historie. */
-  async function appendLiveMessage(q) {
+  async function appendLiveMessage(q, roomId) {
     const stick = isNearBottom();
     const dayLabel = fmtDayLabel(q.ts);
     if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-    messageListEl.appendChild(await buildMessageItem(q));
+    messageListEl.appendChild(await buildMessageItem(q, roomId));
     if (stick) messageListEl.scrollTop = messageListEl.scrollHeight;
-    renderTicks(activeRoomId);
   }
 
   /** Öffnet einen bereits bekannten Raum (siehe rooms/ROOMS_KEY) — 1:1 UND Gruppe laufen durch denselben Code, nur roomDisplayName()/roomDisplayAvatar() unterscheiden zwischen beiden. */
@@ -2038,7 +2146,7 @@ async function main() {
       const entry = { id: sent.qubit.id, ts: sent.qubit.ts, roomId, refs: sent.refs };
       pendingDeliveries.push(entry);
       savePendingDeliveries(pendingDeliveries);
-      if (activeRoomId === roomId) renderTicks(roomId);
+      notifyTicks(roomId);
       confirmDelivery(entry).catch(() => {});
     } catch (e) {
       console.error('[chat] send failed:', e);
@@ -2093,7 +2201,7 @@ async function main() {
   $('profile-save-btn').addEventListener('click', async () => {
     const alias = $('alias-input').value.trim() || myAlias;
     myAlias = alias;
-    localStorage.setItem(ALIAS_KEY, alias);
+    await storage.put(ALIAS_KEY, alias);
     meNameEl.textContent = alias;
     aliasCache.set(qu.fingerprint, alias);
     await qu.publishProfile({ alias });
@@ -2119,17 +2227,19 @@ async function main() {
   });
 
   // --- App-Einstellungen — `/settings` (Router) ---
-  function showAppSettingsScreen() {
+  async function showAppSettingsScreen() {
     appSettingsModal.hidden = false;
     refreshPushUI();
-    soundMessagesToggle.checked = soundEnabled(SOUND_MESSAGES_KEY);
-    soundCallsToggle.checked = soundEnabled(SOUND_CALLS_KEY);
+    soundMessagesToggle.checked = await soundEnabled(SOUND_MESSAGES_KEY);
+    soundCallsToggle.checked = await soundEnabled(SOUND_CALLS_KEY);
+    autoLoadMediaToggle.checked = await autoLoadMedia();
   }
   settingsBtn.addEventListener('click', () => navigate('settings'));
   $('app-settings-close-btn').addEventListener('click', closeScreen);
   appSettingsModal.addEventListener('click', (ev) => { if (ev.target === appSettingsModal) closeScreen(); });
   soundMessagesToggle.addEventListener('change', () => setSoundEnabled(SOUND_MESSAGES_KEY, soundMessagesToggle.checked));
   soundCallsToggle.addEventListener('change', () => setSoundEnabled(SOUND_CALLS_KEY, soundCallsToggle.checked));
+  autoLoadMediaToggle.addEventListener('change', () => setAutoLoadMedia(autoLoadMediaToggle.checked));
 
   /**
    * "App zurücksetzen" — für den Fall, dass ein Update (Anruf-Code, ein
@@ -2160,6 +2270,11 @@ async function main() {
         const req = indexedDB.deleteDatabase('qu-chat-files');
         req.onsuccess = resolve; req.onerror = resolve; req.onblocked = resolve;
       });
+      // Bewusst weiterhin direktes `localStorage` — dies ist ein "alles
+      // außer X auf diesem Origin löschen"-Vorgang, nicht "meinen per
+      // Adapter verwalteten Datensatz lesen/schreiben"; `storage` (der
+      // LocalStorageAdapter oben) kennt nur EIGENE Keys, kein generisches
+      // "alle Keys auflisten".
       for (const key of Object.keys(localStorage)) {
         if (key !== IDENTITY_KEY) localStorage.removeItem(key);
       }
@@ -2443,7 +2558,7 @@ async function main() {
 
   function showChatSettingsScreen(room) {
     const roomId = room.id;
-    activeRoomId = roomId; // Einstellungen gehören zu GENAU diesem Raum — bleibt "aktiv" wie im Chat-Screen selbst, siehe renderPresence()/renderTicks() u. a., die harmlos auf jetzt verstecktes Markup zielen, falls der darunterliegende Chat-Screen selbst gerade nicht sichtbar ist.
+    activeRoomId = roomId; // Einstellungen gehören zu GENAU diesem Raum — bleibt "aktiv" wie im Chat-Screen selbst, siehe renderPresence() u. a., die harmlos auf jetzt verstecktes Markup zielen, falls der darunterliegende Chat-Screen selbst gerade nicht sichtbar ist.
     chatSettingsTitleEl.textContent = roomDisplayName(room);
     chatSettingsGroupSection.hidden = !isGroupRoom(room);
     if (isGroupRoom(room)) {
@@ -2851,11 +2966,10 @@ async function main() {
   // --- Start ---
   renderRoomList();
   for (const r of rooms) {
-    ensureRoom(r.id)
-      .then(() => {
-        if (!isGroupRoom(r) && !roomDisplayAvatar(r)) avatarFor(r.members[0]).then((url) => { if (url) renderRoomList(); });
-      })
-      .catch((e) => console.error('[chat] ensureRoom failed:', r.id, e));
+    // Avatar/Alias eines DMs muss hier nicht mehr nachgeladen/neu gerendert
+    // werden — <qu-profile-card> in renderRoomList() aktualisiert sich für
+    // jede Zeile bereits selbst, sobald die Werte eintreffen.
+    ensureRoom(r.id).catch((e) => console.error('[chat] ensureRoom failed:', r.id, e));
   }
   window.addEventListener('beforeunload', () => { for (const stop of stopHeartbeatByRoom.values()) stop(); });
   // Zusätzlich zu 'beforeunload' — das feuert auf Mobile-Browsern oft gar

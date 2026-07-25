@@ -12,7 +12,7 @@ function startTestServer() {
 
 test('two independent WebSocket clients exchange a chat message via the real relay (not the loopback channel)', async (t) => {
   const { server, port } = await startTestServer();
-  t.after(() => stopTestRelayServer(server)); // registered immediately — a t.after() hook still runs even if the test body throws partway through, unlike cleanup written at the end of the body, which a mid-test throw skips entirely and leaks this still-listening server (see the CI hang this caused: examples/app-space-lib.test.mjs's doc comment)
+  t.after(() => stopTestRelayServer(server)); // registered immediately — a t.after() hook still runs even if the test body throws partway through, unlike cleanup written at the end of the body, which a mid-test throw skips entirely and leaks this still-listening server (see the CI hang this caused: examples/relay-space-demo-lib.test.mjs's doc comment)
   const url = `ws://127.0.0.1:${port}/relay`;
 
   const alice = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());

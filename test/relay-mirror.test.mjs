@@ -40,7 +40,7 @@ test('a file survives the uploader disconnecting: the relay mirrors it and serve
   // closeAll() below — a t.after() hook still runs even if the test body
   // throws before reaching that closeAll() call, which would otherwise
   // leak this still-listening server and hang the whole CI run (the exact
-  // bug examples/app-space-lib.test.mjs's doc comment describes). Safe to
+  // bug examples/relay-space-demo-lib.test.mjs's doc comment describes). Safe to
   // have both: server.close() on an already-closed server just calls its
   // callback with a harmless "Server is not running" error, never throws.
   t.after(() => closeAll(server).catch(() => {}));

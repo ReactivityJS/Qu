@@ -8,8 +8,18 @@
 // hätte: Identität laden/anlegen, Relay-URL fürs aktuelle Deployment
 // bestimmen, den Hash live in `{ spaceId, path }` übersetzen.
 
-import { Qu } from '../src/index.js';
+import { Qu, LocalStorageAdapter } from '../src/index.js';
 import { parseHashRoute, buildHashRoute } from './space-app-lib.mjs';
+
+// Empty namespace: LocalStorageAdapter would otherwise prefix every key
+// with `qu:` (its own default) — this app-space layer predates the
+// adapter and its callers already choose full, self-contained key names
+// (`storageKey` below, examples/chat's various *_KEY constants, …), so an
+// empty namespace here keeps every existing localStorage key exactly as
+// it already is instead of silently orphaning already-stored data (a
+// user's saved identity/rooms/contacts) under a renamed key the first
+// time this runs.
+const storage = new LocalStorageAdapter({ namespace: '' });
 
 /**
  * Identität aus `localStorage` laden, oder beim allerersten Aufruf neu
@@ -18,12 +28,20 @@ import { parseHashRoute, buildHashRoute } from './space-app-lib.mjs';
  * Origin (z. B. `/examples/cms/` und `/examples/forum/`) nicht versehentlich
  * dieselbe Identität teilen, nur weil beide vergessen haben, einen
  * eigenen Key zu wählen.
+ *
+ * Goes through Qu's own StorageAdapter (LocalStorageAdapter) instead of
+ * calling `localStorage` directly — this is the one place identity has to
+ * exist BEFORE any Qu instance does (you need it to create the instance
+ * in the first place), which is exactly why LocalStorageAdapter is built
+ * to work standalone: it has no dependency on a Runtime/QuStore, just a
+ * plain namespaced get/put over Web Storage, usable at any point —
+ * including this one, the earliest possible.
  */
 export async function loadOrCreateIdentity(storageKey) {
-  const saved = localStorage.getItem(storageKey);
-  if (saved) return Qu.create({ identity: JSON.parse(saved) });
+  const saved = await storage.get(storageKey);
+  if (saved) return Qu.create({ identity: saved });
   const qu = await Qu.create();
-  localStorage.setItem(storageKey, JSON.stringify(await qu.exportKeys()));
+  await storage.put(storageKey, await qu.exportKeys());
   return qu;
 }
 

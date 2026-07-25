@@ -6,8 +6,8 @@ echten QU-Relay per WebSocket. Kein Spielzeug-Beispiel — jeder Code-Block
 hier ist copy-paste-lauffähig und wurde tatsächlich gegen einen echten,
 selbst gestarteten Relay-Prozess ausgeführt (nicht nur gelesen). Dieselbe
 Logik als geprüfte, getestete Bibliothek:
-[`examples/app-space-lib.mjs`](./examples/app-space-lib.mjs) +
-[`examples/app-space-lib.test.mjs`](./examples/app-space-lib.test.mjs)
+[`examples/relay-space-demo-lib.mjs`](./examples/relay-space-demo-lib.mjs) +
+[`examples/relay-space-demo-lib.test.mjs`](./examples/relay-space-demo-lib.test.mjs)
 (läuft gegen einen echten, im Test selbst gestarteten Relay, kein Mock).
 
 Für die Grundkonzepte (get/put/set/on/map, ACL, Verschlüsselung) siehe
@@ -375,7 +375,7 @@ diese Sichtbarkeits-Falle:
 
 Alles zusammen — zwei unabhängige Instanzen, ein offener App-Space, ein
 echter Relay (gegen `node my-relay.mjs` von oben; für einen Selbsttest
-ohne manuell gestarteten Server siehe `examples/app-space-lib.test.mjs`,
+ohne manuell gestarteten Server siehe `examples/relay-space-demo-lib.test.mjs`,
 das denselben Relay im Test selbst hochfährt):
 
 ```js

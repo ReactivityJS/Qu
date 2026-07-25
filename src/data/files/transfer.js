@@ -1,6 +1,6 @@
 import { assertChannel } from '../../core/channel.js';
 import { sha256Hex, toB64, fromB64 } from '../../core/bytes.js';
-import { missingChunks } from './manifest.js';
+import { missingChunks, WRITE_BATCH_SIZE } from './manifest.js';
 import { filterForReader } from '../../core/acl.js';
 import { debug } from '../../core/debug.js';
 import { assertFileStorageAdapter } from './contract.js';
@@ -134,13 +134,65 @@ export class DefaultFileTransfer {
     return this.#runtime.get(manifestId);
   }
 
-  async requestFile(manifestId, { onProgress } = {}) {
+  /**
+   * `concurrency` (default 6): how many chunk requests may be in flight at
+   * once. Chunk fetching used to be strictly sequential — one request,
+   * fully awaited, before the next — which made a large file's download
+   * time scale with round-trip latency × chunk count rather than with
+   * bandwidth: at 64 KiB/chunk, a 200 MB file is ~3200 chunks, and even at
+   * a modest 20-50ms RTT that's over a minute spent purely serialized on
+   * one socket, before a single byte's worth of actual bandwidth became
+   * the bottleneck. A sliding window of concurrent requests overlaps that
+   * latency instead of paying it once per chunk.
+   */
+  async requestFile(manifestId, { onProgress, concurrency = 6 } = {}) {
     const qubit = await this.#ensureManifest(manifestId);
     const manifest = qubit.value;
-    const missing = await missingChunks(this.#fileStorage, manifest);
+    // De-duplicated: content-addressing means the SAME hash can legitimately
+    // appear at more than one position in `manifest.chunks` (two identical
+    // 64 KiB blocks anywhere in the file, or the same file shared twice) —
+    // missingChunks() reports one entry per POSITION, not per unique hash.
+    // Fetching a hash more than once wastes bandwidth on the sequential
+    // path (harmless, just wasteful) but, worse, on the CONCURRENT path
+    // below turns into several simultaneous requests for the byte-for-byte
+    // identical content — pointless, and under real contention (a slow
+    // IndexedDB lookup answering N identical requests at once) it can
+    // starve other genuinely-still-missing chunks past their timeout for
+    // no reason. Chunks are stored keyed by hash, not by position, so
+    // fetching each unique hash exactly once is enough — every position
+    // that shares it already resolves correctly via getChunk(hash) at
+    // reassembly time.
+    const missing = [...new Set(await missingChunks(this.#fileStorage, manifest))];
     debug('files', 'request-file', { manifestId, totalChunks: manifest.chunks.length, missing: missing.length });
     const maxAttempts = 6; // ~ up to 500+1000+2000+3000+4000ms of backoff — enough for a relay to finish mirroring a moderate file
-    for (const hash of missing) {
+
+    // Storage writes go through putChunks() (a batch of WRITE_BATCH_SIZE)
+    // if the adapter offers it, else fall back to one putChunk() per
+    // chunk — mirrors manifest.js's publishFile() doing exactly this on
+    // the SEND side; this is the same fix applied to the RECEIVE side,
+    // which previously paid one IndexedDB transaction per chunk (~3200
+    // for a 200 MB file) regardless of what the send side already did.
+    // `flushChain` serializes the actual writes: several concurrent
+    // workers (see `concurrency` above) can each fill a batch around the
+    // same moment, and calling putChunks() on the same adapter from two
+    // still-in-flight calls at once isn't something every adapter is
+    // guaranteed to handle safely — chaining makes each flush wait for
+    // the previous one instead.
+    const supportsBatch = typeof this.#fileStorage.putChunks === 'function';
+    let writeBatch = [];
+    let flushChain = Promise.resolve();
+    const flush = (batch) => { flushChain = flushChain.then(() => this.#fileStorage.putChunks(batch)); return flushChain; };
+    const storeChunk = async (hash, bytes) => {
+      if (!supportsBatch) { await this.#fileStorage.putChunk(hash, bytes); return; }
+      writeBatch.push({ hash, bytes });
+      if (writeBatch.length >= WRITE_BATCH_SIZE) {
+        const batch = writeBatch;
+        writeBatch = [];
+        await flush(batch);
+      }
+    };
+
+    const fetchOneChunk = async (hash) => {
       let resp = null;
       let lastError = null;
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -169,8 +221,40 @@ export class DefaultFileTransfer {
         debug('files', 'chunk-integrity-failed', { manifestId, hash });
         throw new Error(`[DefaultFileTransfer] Chunk hash mismatch for ${hash} — rejected, not stored`);
       }
-      await this.#fileStorage.putChunk(hash, bytes);
-    }
+      await storeChunk(hash, bytes);
+    };
+
+    // Sliding window: `concurrency` workers each pull the next not-yet-
+    // claimed hash off `missing` until it's exhausted or one of them
+    // fails. The FIRST error wins and is what requestFile() ultimately
+    // throws — once one is caught, no NEW fetch is started, but whatever
+    // was already in flight is allowed to finish (there's no cheap way to
+    // cancel an outstanding #request() mid-flight over this Channel
+    // contract, and letting a couple of already-sent requests complete
+    // harmlessly is far simpler than adding cancellation just to save
+    // that little — their bytes are still valid and get stored either way).
+    let nextIndex = 0;
+    let firstError = null;
+    const worker = async () => {
+      while (nextIndex < missing.length && !firstError) {
+        const hash = missing[nextIndex++];
+        try {
+          await fetchOneChunk(hash);
+        } catch (e) {
+          if (!firstError) firstError = e;
+          return;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, missing.length) }, worker));
+
+    // Flush whatever's left in the batch even on failure — those chunks
+    // were genuinely verified and downloaded before the failing one; no
+    // reason to discard real progress just because a later chunk failed
+    // (a retried requestFile() call only re-fetches what's still missing).
+    if (writeBatch.length) await flush(writeBatch);
+
+    if (firstError) throw firstError;
     debug('files', 'request-file-complete', { manifestId });
   }
 

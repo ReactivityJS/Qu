@@ -65,7 +65,7 @@ export async function assertStorageAdapterContract(adapter) {
  * exact same handful of lines (http.createServer + listen(0) +
  * createRelay() + bridgeWebSocketServer()) was independently duplicated
  * across test/relay.test.mjs, test/relay-mirror.test.mjs,
- * test/relay-push.test.mjs, and examples/app-space-lib.test.mjs, each with
+ * test/relay-push.test.mjs, and examples/relay-space-demo-lib.test.mjs, each with
  * its own slightly-differently-named local `startTestServer()`. `relayOpts`
  * is passed straight through to createRelay() — the STORE/fileStorage/
  * pushTopics/sendPush shape a specific test needs stays entirely with that
@@ -87,7 +87,7 @@ export async function startTestRelayServer(relayOpts = {}) {
  * resolves if every CLIENT channel talking to this server was already
  * closed beforehand; otherwise the awaited `server.close()` callback can
  * hang forever waiting for a connection it doesn't know is still open
- * (confirmed the hard way — see examples/app-space-lib.test.mjs's git
+ * (confirmed the hard way — see examples/relay-space-demo-lib.test.mjs's git
  * history for the CI hang this caused when a cleanup hook closed the
  * server before its channels).
  */

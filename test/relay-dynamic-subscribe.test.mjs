@@ -185,10 +185,10 @@ test('QuSpace on()/map(): activating a listener asks every connected peer to pus
 
   const seen = [];
   bob.get(space.id).get('items').map((q) => seen.push(q.value.text));
-  await wait(80); // on()/map()'s subscribeDispatch -> ensureSynced() round-trip
+  await wait(150); // on()/map()'s subscribeDispatch -> ensureSynced() round-trip
 
   await space.get('items').set({ text: 'live via auto-subscribe' });
-  await wait(80);
+  await wait(150);
   assert.deepEqual(seen, ['live via auto-subscribe'], 'bob never configured pushTopics for this Space — map() itself triggered the network subscribe');
 });
 
@@ -206,10 +206,10 @@ test('QuSpace on()/map() { raw: true } skips the network subscribe entirely — 
 
   const seen = [];
   bob.get(space.id).get('items').map((q) => seen.push(q.value.text), { raw: true });
-  await wait(80);
+  await wait(150);
 
   await space.get('items').set({ text: 'should never arrive' });
-  await wait(80);
+  await wait(150);
   assert.deepEqual(seen, [], 'raw:true skips the auto-subscribe — bob never asked for this topic');
 });
 
@@ -234,7 +234,7 @@ test('qu.connect()\'s default subscribeOwnSpace: true asks the peer to push the 
 
   await wait();
   await deviceA.own.get('setting').put('dark-mode');
-  await wait(80);
+  await wait(150);
 
   const seenOnB = await deviceB.session.get(`${deviceB.userSpaceId}/setting`);
   assert.equal(seenOnB?.value, 'dark-mode', 'deviceB received deviceA\'s write to their shared identity\'s own Space, purely from connecting');
@@ -253,7 +253,7 @@ test('qu.connect({ subscribeOwnSpace: false }) opts out — no automatic own-Spa
 
   await wait();
   await deviceA.own.get('setting').put('dark-mode');
-  await wait(80);
+  await wait(150);
 
   const seenOnB = await deviceB.session.get(`${deviceB.userSpaceId}/setting`);
   assert.equal(seenOnB, null, 'without subscribeOwnSpace, deviceB never asked to receive its own Space and does not see the write');

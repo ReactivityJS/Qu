@@ -590,11 +590,12 @@ bleibt unverändert bestehen (Immutable Data), nur der Index "vergisst"
 
 **Lauffähiges Beispiel:** [`examples/forum-lib.mjs`](./examples/forum-lib.mjs)
 setzt genau dieses Muster (ein Segment, `YYYY-MM`) vollständig um —
-`createBoard`, `addPost`, `listPosts`, `onPosts`, `listBuckets`,
-`olderBucket` — inklusive Bucket-Index und kollisionssicherem gleichzeitigem
-Schreiben mehrerer Autoren; [`examples/forum-lib.test.mjs`](./examples/forum-lib.test.mjs)
-zeigt jede Garantie (Bucket-Isolation live wie beim Lesen, Dedup/Sortierung
-des Index, keine Kollision) als laufenden Test.
+`createBoard`, `createTopic`, `listPosts`, `onPosts`, `listBuckets`,
+`olderBucket`, `addReply`, `listReplies`, `onReplies` — inklusive Bucket-Index
+und kollisionssicherem gleichzeitigem Schreiben mehrerer Autoren;
+[`examples/forum-lib.test.mjs`](./examples/forum-lib.test.mjs) zeigt jede
+Garantie (Bucket-Isolation live wie beim Lesen, Dedup/Sortierung des Index,
+keine Kollision) als laufenden Test.
 
 ### 8. Referenzen automatisch folgen (`key://`)
 
@@ -850,9 +851,9 @@ examples/                    Übersicht mit Quelltext-Links: /docs/examples.html
                             lauffähig statt nur Prosa: Boards, Posts pro Zeit-Bucket, Bucket-Index
   forum-lib.test.mjs           node:test dafür — Bucket-Isolation (live wie beim Lesen),
                             Index-Dedup/-Sortierung, kollisionssicheres gleichzeitiges Schreiben
-  app-space-lib.mjs             App-Space über einen echten WebSocket-Relay — offene vs.
+  relay-space-demo-lib.mjs             App-Space über einen echten WebSocket-Relay — offene vs.
                             mitgliederbeschränkte Variante (App-Guide baut hierauf auf)
-  app-space-lib.test.mjs          node:test dafür — läuft gegen einen echten, im Test selbst
+  relay-space-demo-lib.test.mjs          node:test dafür — läuft gegen einen echten, im Test selbst
                             gestarteten Relay-Prozess, kein Mock
   space-index-lib.mjs           mehrere Sub-Spaces von einem App-Space aus referenzieren/
                             indexieren ("App hat viele Spaces" statt "App ist ein Space")

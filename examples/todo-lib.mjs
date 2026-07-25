@@ -9,36 +9,24 @@
 // hinzufügen — nur der/die Admin(s) dürfen das (siehe §8.3), alle anderen
 // dürfen die Liste zwar lesen (readers: ['*']), aber nicht verändern, bis
 // sie freigeschaltet sind.
+//
+// Nutzerverwaltung (Writer hinzufügen/wer darf schreiben) ist NICHT hier
+// neu implementiert, sondern aus space-app-lib.mjs importiert — dieselbe
+// Logik, die jede Space-App braucht (siehe deren Moduldoku). Wichtig: das
+// ersetzt eine frühere, eigene grantWriteAccess()-Implementierung hier, die
+// das Manifest direkt patchte (`qu.get(listId).put({...manifest, writers})`)
+// statt über `qu.addToRole()` zu gehen — funktional fast gleich, aber eine
+// echte Konsistenzlücke gegenüber der vom Framework zentral gepflegten
+// Rollen-Logik.
+import { createSpaceApp, getManifest, canWrite, grantWriteAccess } from './space-app-lib.mjs';
 
-/** Erstellt eine neue, leere Liste. Rückgabe: die Space-ID (für den Link) — bewusst der reine String, nicht das QuSpace-Handle, das qu.createSpace() zurückgibt: die Funktionen unten (getListManifest etc.) nehmen weiterhin überall listId als plain string entgegen. */
+export { canWrite, grantWriteAccess };
+/** Alias für space-app-lib.mjs's getManifest() — hier unter dem in diesem Modul etablierten Namen. */
+export const getListManifest = getManifest;
+
+/** Erstellt eine neue, leere Liste. Rückgabe: die Space-ID (für den Link). */
 export async function createTodoList(qu) {
-  const space = qu.createSpace({ writers: [qu.fingerprint], readers: ['*'] }); // synchron — siehe modules/spaces.js
-  await space.ready; // wirklich auf das Manifest warten (nicht nur "await space" — das ist nur ein Read und kann dem Write vorauslaufen)
-  return space.id;
-}
-
-/** Aktueller Zustand des Manifests — u. a. um zu prüfen, wer schreiben darf. */
-export async function getListManifest(qu, listId) {
-  const q = await qu.get(listId);
-  return q?.value ?? null;
-}
-
-export async function canWrite(qu, listId) {
-  const manifest = await getListManifest(qu, listId);
-  if (!manifest) return false; // kein Manifest = Space existiert (für diesen Client) noch nicht sichtbar
-  return manifest.writers.includes('*') || manifest.writers.includes(qu.fingerprint);
-}
-
-/**
- * Nur von einem/einer Admin aufrufbar (siehe §8.3 — Manifest-Änderungen
- * brauchen Admin, nicht nur Writer). Fügt einen Fingerprint zu den Writern
- * hinzu, ohne bestehende Writer/Admins zu verlieren.
- */
-export async function grantWriteAccess(qu, listId, fingerprint) {
-  const manifest = await getListManifest(qu, listId);
-  if (!manifest) throw new Error('Liste nicht gefunden — noch nicht gesynct?');
-  const writers = manifest.writers.includes(fingerprint) ? manifest.writers : [...manifest.writers, fingerprint];
-  return qu.get(listId).put({ ...manifest, writers });
+  return createSpaceApp(qu);
 }
 
 /** Ein neuer Eintrag — set(), weil mehrere Personen unabhängig voneinander Einträge hinzufügen können (kollisionssicher, siehe §7.2). */

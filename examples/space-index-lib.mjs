@@ -1,6 +1,6 @@
 // Beispiel 6: mehrere Sub-Spaces von einem App-Space aus referenzieren —
 // "App hat mehrere Boards/ToDo-Listen" statt "App IST ein Space" (siehe
-// examples/app-space-lib.mjs für den Ein-Space-Fall).
+// examples/relay-space-demo-lib.mjs für den Ein-Space-Fall).
 //
 // Kernidee, kein neuer Mechanismus: eine Id ist eine Id. Ein Space kann
 // die Id eines anderen Spaces ganz gewöhnlich als Feld in seinen eigenen
