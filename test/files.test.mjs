@@ -34,6 +34,133 @@ test('a file is chunked, transferred, and reassembles byte-for-byte identical to
   xferB.close();
 });
 
+test('requestFile() fetches chunks concurrently, not strictly one at a time', async () => {
+  const rtA = makeRuntime();
+  const rtB = makeRuntime();
+  const alice = await QuIdentity.generate();
+  const sessA = new QuSession(rtA, { identity: alice });
+  const original = randomBytes(700_000); // ~11 chunks @ 64 KiB — comfortably more than the default concurrency window (6)
+
+  // Wraps a real MemoryFileStorageAdapter, delaying every getChunk() by a
+  // fixed amount and tracking how many are in flight AT ONCE — a strictly
+  // sequential requestFile() would never see more than 1 active; the
+  // whole point of this test is to prove that's no longer true.
+  const real = new MemoryFileStorageAdapter();
+  let active = 0;
+  let peakActive = 0;
+  const slowStorageA = {
+    async putChunk(hash, bytes) { return real.putChunk(hash, bytes); },
+    async hasChunk(hash) { return real.hasChunk(hash); },
+    async deleteChunk(hash) { return real.deleteChunk(hash); },
+    async getChunk(hash) {
+      active++;
+      peakActive = Math.max(peakActive, active);
+      await new Promise((r) => setTimeout(r, 30));
+      active--;
+      return real.getChunk(hash);
+    },
+  };
+
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f-concurrent', original, { name: 'concurrent.bin', fileStorage: real });
+  const manifest = (await rtA.get(manifestId)).value;
+  assert.ok(manifest.chunks.length >= 8, 'test fixture should span enough chunks to make concurrency observable');
+
+  const storageB = new MemoryFileStorageAdapter();
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+  const xferA = new DefaultFileTransfer(rtA, chA, slowStorageA);
+  const xferB = new DefaultFileTransfer(rtB, chB, storageB);
+
+  await xferB.requestFile(manifestId);
+
+  assert.ok(peakActive > 1, `expected multiple chunk requests in flight at once, saw a peak of ${peakActive}`);
+
+  xferA.close();
+  xferB.close();
+});
+
+test('requestFile() batches receive-side writes via putChunks() when the adapter offers it, instead of one storage transaction per chunk', async () => {
+  const rtA = makeRuntime();
+  const rtB = makeRuntime();
+  const alice = await QuIdentity.generate();
+  const sessA = new QuSession(rtA, { identity: alice });
+  const storageA = new MemoryFileStorageAdapter();
+  const original = randomBytes(2_500_000); // enough chunks to force multiple WRITE_BATCH_SIZE-sized flushes plus a trailing partial batch
+
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f-batched', original, { name: 'batched.bin', fileStorage: storageA });
+  const manifest = (await rtA.get(manifestId)).value;
+  assert.ok(manifest.chunks.length > 32, 'test fixture should span more than one write batch (WRITE_BATCH_SIZE = 32)');
+
+  // A receive-side adapter that offers putChunks() — real chunk storage
+  // backed by a plain MemoryFileStorageAdapter, only wrapped to record how
+  // it was actually called.
+  const real = new MemoryFileStorageAdapter();
+  let putChunkCalls = 0;
+  const batchSizes = [];
+  const storageB = {
+    async putChunk(hash, bytes) { putChunkCalls++; return real.putChunk(hash, bytes); },
+    async putChunks(entries) { batchSizes.push(entries.length); for (const { hash, bytes } of entries) await real.putChunk(hash, bytes); },
+    async getChunk(hash) { return real.getChunk(hash); },
+    async hasChunk(hash) { return real.hasChunk(hash); },
+    async deleteChunk(hash) { return real.deleteChunk(hash); },
+  };
+
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+  const xferA = new DefaultFileTransfer(rtA, chA, storageA);
+  const xferB = new DefaultFileTransfer(rtB, chB, storageB);
+
+  await xferB.requestFile(manifestId);
+
+  assert.equal(putChunkCalls, 0, 'when the adapter supports putChunks(), the single-chunk putChunk() must never be used on the receive path');
+  assert.ok(batchSizes.length >= 2, `expected at least 2 batches for ${manifest.chunks.length} chunks, saw ${batchSizes.length}`);
+  assert.equal(batchSizes.reduce((a, b) => a + b, 0), manifest.chunks.length, 'every chunk must have been written exactly once across all batches');
+  for (const size of batchSizes) assert.ok(size <= 32, `no batch may exceed WRITE_BATCH_SIZE (32), saw ${size}`);
+
+  const reassembled = await reassembleFile(real, manifest);
+  assert.deepEqual(reassembled, original, 'batched writes must still produce byte-identical data');
+
+  xferA.close();
+  xferB.close();
+});
+
+test('requestFile() fetches a hash that appears at multiple manifest positions only once', async () => {
+  const rtA = makeRuntime();
+  const rtB = makeRuntime();
+  const alice = await QuIdentity.generate();
+  const sessA = new QuSession(rtA, { identity: alice });
+  const storageA = new MemoryFileStorageAdapter();
+  // Two byte-for-byte identical 64 KiB blocks — content-addressing means
+  // they hash to the SAME value, so the manifest's `chunks` array ends up
+  // with that hash at two DIFFERENT positions (this is legitimate, not
+  // malformed — e.g. two identical images anywhere in one upload).
+  const block = randomBytes(65536);
+  const original = new Uint8Array(block.length * 2);
+  original.set(block, 0);
+  original.set(block, block.length);
+
+  const { manifestId } = await publishFile(sessA, 'chat/room1/files/f-dup', original, { name: 'dup.bin', fileStorage: storageA });
+  const manifest = (await rtA.get(manifestId)).value;
+  assert.equal(manifest.chunks.length, 2, 'test fixture should produce exactly two chunk entries');
+  assert.equal(manifest.chunks[0], manifest.chunks[1], 'both entries must share the same hash — that is the whole point of this test');
+
+  const storageB = new MemoryFileStorageAdapter();
+  const { a: chA, b: chB } = createLoopbackChannelPair();
+  let chunkRequestCount = 0;
+  const originalSend = chB.send.bind(chB);
+  chB.send = async (msg) => { if (msg.type === 'qu.file.chunk.request') chunkRequestCount++; return originalSend(msg); };
+
+  const xferA = new DefaultFileTransfer(rtA, chA, storageA);
+  const xferB = new DefaultFileTransfer(rtB, chB, storageB);
+
+  await xferB.requestFile(manifestId);
+
+  assert.equal(chunkRequestCount, 1, 'a hash appearing twice in the manifest must only be requested once over the wire');
+  const reassembled = await reassembleFile(storageB, manifest);
+  assert.deepEqual(reassembled, original, 'both positions must still reassemble correctly from the single fetched copy');
+
+  xferA.close();
+  xferB.close();
+});
+
 test('resuming a transfer only requests chunks that are actually still missing', async () => {
   const rtA = makeRuntime();
   const rtB = makeRuntime();

@@ -215,14 +215,30 @@ export async function createRelay({
   // need mirroring; attachChannel() below retries them the moment that
   // uploader's fingerprint reconnects — no polling, no fixed retry
   // schedule, just "try again the next time we plausibly can."
-  const pendingMirrors = new Map(); // fingerprint -> Set<qubit id>
+  const pendingMirrors = new Map(); // fingerprint -> Map<qubit id, attempts so far>
   const MAX_PENDING_MIRRORS_PER_UPLOADER = 200; // bounded, same reasoning as maxDynamicTopics above — one uploader shouldn't be able to grow this forever
+  // Ohne eine Obergrenze retried der Sweep unten (alle 20s) eine id für
+  // immer — für eine ECHT vorübergehende Störung (Uploader kurz offline,
+  // eine einzelne verlorene Antwort) ist das richtig, aber für einen
+  // DAUERHAFTEN Fehlschlag (ACL nachträglich entzogen, Uploader hat die
+  // Datei nie wirklich vollständig — requestFile() bricht dann jedes Mal
+  // an derselben Stelle ab) bedeutet es, für immer alle 20s denselben
+  // Sweep-Slot zu verbrauchen, ohne dass sich je etwas ändert. 10 Versuche
+  // (~200s bei 20s-Takt) sind großzügig genug für jede realistische
+  // vorübergehende Störung, aber nicht endlos.
+  const MAX_MIRROR_ATTEMPTS = 10;
   // Welche ids GERADE laufen — ein großer Anhang kann länger brauchen, als
   // der periodische Sweep unten auseinander liegt (20s); ohne diese Sperre
   // würde der Sweep für eine noch laufende id einen zweiten, redundanten
   // requestFile()-Durchlauf parallel lostreten (dieselbe Absicherung wie
   // examples/chat/app.mjs's confirmInFlight, hier serverseitig).
   const mirrorInFlight = new Set();
+
+  function queueMirrorRetry(writer, id) {
+    let pending = pendingMirrors.get(writer);
+    if (!pending) { pending = new Map(); pendingMirrors.set(writer, pending); }
+    if (pending.has(id) || pending.size < MAX_PENDING_MIRRORS_PER_UPLOADER) pending.set(id, pending.get(id) ?? 0);
+  }
 
   async function mirrorFile(id, writer, fileTransfer) {
     if (mirrorInFlight.has(id)) return;
@@ -233,11 +249,17 @@ export async function createRelay({
       pendingMirrors.get(writer)?.delete(id);
       debug('relay', 'mirror-complete', { id });
     } catch (e) {
-      let pending = pendingMirrors.get(writer);
-      if (!pending) { pending = new Set(); pendingMirrors.set(writer, pending); }
-      if (pending.size < MAX_PENDING_MIRRORS_PER_UPLOADER) pending.add(id);
-      debug('relay', 'mirror-failed', { id, error: e.message });
-      console.error(`[Relay] failed to mirror ${id}:`, e.message);
+      const attempts = (pendingMirrors.get(writer)?.get(id) ?? 0) + 1;
+      if (attempts >= MAX_MIRROR_ATTEMPTS) {
+        pendingMirrors.get(writer)?.delete(id);
+        debug('relay', 'mirror-abandoned', { id, attempts, error: e.message });
+        console.error(`[Relay] giving up mirroring ${id} after ${attempts} attempts:`, e.message);
+      } else {
+        queueMirrorRetry(writer, id); // ensures the writer's Map exists and id is present
+        pendingMirrors.get(writer).set(id, attempts); // then record the REAL attempt count — queueMirrorRetry() alone would leave an existing id's count untouched, which is correct for its OTHER caller (the ingest hook, where "already queued" must not reset progress) but wrong here, where a fresh failure must always advance the count
+        debug('relay', 'mirror-failed', { id, attempts, error: e.message });
+        console.error(`[Relay] failed to mirror ${id} (attempt ${attempts}/${MAX_MIRROR_ATTEMPTS}):`, e.message);
+      }
     } finally {
       mirrorInFlight.delete(id);
     }
@@ -248,9 +270,7 @@ export async function createRelay({
     const uploader = connected.get(q.writer);
     if (!uploader) {
       debug('relay', 'mirror-skip-uploader-offline', { id: q.id, writer: q.writer });
-      let pending = pendingMirrors.get(q.writer);
-      if (!pending) { pending = new Set(); pendingMirrors.set(q.writer, pending); }
-      if (pending.size < MAX_PENDING_MIRRORS_PER_UPLOADER) pending.add(q.id);
+      queueMirrorRetry(q.writer, q.id);
       return;
     }
     mirrorFile(q.id, q.writer, uploader.fileTransfer);
@@ -276,7 +296,7 @@ export async function createRelay({
       if (!ids.size) continue;
       const uploader = connected.get(fp);
       if (!uploader) continue;
-      for (const id of [...ids]) mirrorFile(id, fp, uploader.fileTransfer);
+      for (const id of [...ids.keys()]) mirrorFile(id, fp, uploader.fileTransfer);
     }
   }, 20000);
   if (typeof mirrorRetryTimer.unref === 'function') mirrorRetryTimer.unref();
@@ -291,12 +311,12 @@ export async function createRelay({
     // Retry any of THIS fingerprint's uploads the proactive mirror above
     // couldn't finish earlier (they were offline, or the attempt failed
     // mid-transfer) — see pendingMirrors' doc comment. Iterated as a copy
-    // (`[...pending]`) since mirrorFile() mutates the same Set it's
+    // (`[...pending.keys()]`) since mirrorFile() mutates the same Map it's
     // iterating (deletes on success).
     const pendingForThisUploader = peerFingerprint ? pendingMirrors.get(peerFingerprint) : null;
     if (pendingForThisUploader?.size) {
       debug('relay', 'mirror-retry-on-reconnect', { fingerprint: peerFingerprint, count: pendingForThisUploader.size });
-      for (const id of [...pendingForThisUploader]) mirrorFile(id, peerFingerprint, fileTransfer);
+      for (const id of [...pendingForThisUploader.keys()]) mirrorFile(id, peerFingerprint, fileTransfer);
     }
 
     // Generisches, geroutetes, ephemeres Event nach Fingerprint — dritte

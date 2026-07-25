@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { safeInvoke } from '../src/core/channel.js';
 import { debug } from '../src/core/debug.js';
+import { createHeartbeat } from '../src/core/heartbeat.js';
 
 // Generic WebSocket server built on node:http's 'upgrade' event and raw
 // sockets — no dependency, because the only thing we actually need is
@@ -155,9 +156,21 @@ export function handleUpgrade(req, socket, _head, onConnection) {
   const fireClose = () => {
     if (closed) return;
     closed = true;
+    hb.stop();
     debug('ws-server', 'close', { id });
     closeListeners.forEach((fn) => fn());
   };
+
+  // See src/core/heartbeat.js — detects a client whose socket never fires
+  // 'close' even though it's long gone (dropped wifi mid-download, a
+  // proxy/NAT mapping that silently expired), so relay.mjs's `connected`
+  // map and file-mirror retries stop trusting a connection that will
+  // never answer again, instead of only finding out once every in-flight
+  // chunk request times out on its own, one at a time.
+  const hb = createHeartbeat({
+    send: (msg) => { if (!closed) socket.write(encodeFrame(JSON.stringify(msg))); },
+    onTimeout: () => { debug('ws-server', 'heartbeat-timeout', { id }); socket.destroy(); },
+  });
 
   socket.on('data', (chunk) => {
     let frames;
@@ -179,6 +192,7 @@ export function handleUpgrade(req, socket, _head, onConnection) {
           debug('ws-server', 'parse-error', { id, bytes: frame.payload.length, error: e.message });
           continue;
         }
+        if (hb.handleIncoming(obj)) continue; // ping/pong — never forwarded to real listeners
         debug('ws-server', 'message-in', { id, type: obj?.type, bytes: frame.payload.length });
         dispatch(obj);
       }
@@ -188,6 +202,7 @@ export function handleUpgrade(req, socket, _head, onConnection) {
   socket.on('error', (e) => { debug('ws-server', 'socket-error', { id, error: e.message }); fireClose(); });
 
   debug('ws-server', 'connect', { id });
+  hb.start(); // the connection already exists once handleUpgrade runs — no separate connect() step server-side
 
   onConnection({
     id,
@@ -211,6 +226,6 @@ export function handleUpgrade(req, socket, _head, onConnection) {
       return () => messageListeners.delete(fn);
     },
     onClose(fn) { closeListeners.add(fn); return () => closeListeners.delete(fn); },
-    async close() { if (!closed) { closed = true; socket.destroy(); } },
+    async close() { if (!closed) { closed = true; hb.stop(); socket.destroy(); } },
   });
 }

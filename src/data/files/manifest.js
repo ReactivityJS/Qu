@@ -5,7 +5,12 @@ import { encryptFor as encryptValueFor, decryptWith, encryptBytesFor, decryptByt
 
 const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64 KiB
 const YIELD_EVERY_N_CHUNKS = 8; // give the event loop (and the WebSocket connection's own housekeeping) room to breathe on a long file
-const WRITE_BATCH_SIZE = 32; // see adapters/indexeddb-file-storage.js's putChunks() doc — this is how many chunks share one storage transaction
+// See adapters/indexeddb-file-storage.js's putChunks() doc — this is how
+// many chunks share one storage transaction. Exported so transfer.js's
+// requestFile() can batch its RECEIVE-side writes the exact same way this
+// file already batches the SEND side — one constant, not two copies that
+// could quietly drift apart.
+export const WRITE_BATCH_SIZE = 32;
 
 function splitChunks(bytes, chunkSize) {
   const chunks = [];
