@@ -587,7 +587,7 @@ async function main() {
   // PENDING_DELIVERY_KEY oben) ist die Kehrseite: eigene Nachrichten, die
   // NOCH NICHT bestätigt sind — nur diese zeigen überhaupt das Uhr-Symbol,
   // jede ältere/unbekannte eigene Nachricht gilt stillschweigend als
-  // "gesendet" (renderTicks() weiter unten), genau wie vor diesem Feature.
+  // "gesendet" (<qu-msg-tick> weiter unten), genau wie vor diesem Feature.
   const deliveredMsgIds = new Set();
   let pendingDeliveries = await loadPendingDeliveries();
 
@@ -619,12 +619,29 @@ async function main() {
   // Chunk-genauer Fortschritt "x/y" pro eigener Nachricht, solange sie noch
   // in pendingDeliveries steht — gefüllt aus fileTransfer.waitUntilReady()s
   // `onProgress` (have/total, siehe data/files/transfer.js's readiness-
-  // Protokoll-Erweiterung) und von renderTicks() ins Sync-Badge geschrieben.
-  // Bei MEHREREN Anhängen zeigt das Badge den GERADE laufenden (Index unter
-  // `ref`), nicht eine über alle Anhänge aggregierte Zahl — Chunks
-  // unterschiedlicher Anhänge zu einer einzigen Prozentzahl zu addieren
-  // würde nur vortäuschen, hier stünde eine echte Gesamtgröße dahinter.
+  // Protokoll-Erweiterung) und über tickBus (siehe dort) ins Sync-Badge
+  // geschrieben. Bei MEHREREN Anhängen zeigt das Badge den GERADE laufenden
+  // (Index unter `ref`), nicht eine über alle Anhänge aggregierte Zahl —
+  // Chunks unterschiedlicher Anhänge zu einer einzigen Prozentzahl zu
+  // addieren würde nur vortäuschen, hier stünde eine echte Gesamtgröße
+  // dahinter.
   const syncProgressByMsgId = new Map(); // msgId -> { refIndex, refCount, have, total }
+
+  /**
+   * Ersetzt das frühere `renderTicks(roomId)`, das an ca. 10 Stellen von
+   * Hand aufgerufen werden musste, immer hinter einem
+   * `if (activeRoomId === roomId)`-Wächter. Statt zentral zu rendern,
+   * bringt jede eigene Nachricht ihr eigenes `<qu-msg-tick>`/
+   * `<qu-sync-badge>` (siehe unten) mit, das sich beim Einhängen ins DOM
+   * selbst auf `tickBus` abonniert und sich beim Aushängen wieder
+   * abmeldet — nur Elemente, die gerade wirklich sichtbar sind (der
+   * offene Chat), hören überhaupt zu, ganz ohne dass ein Aufrufer noch an
+   * `activeRoomId` denken muss.
+   */
+  const tickBus = new EventTarget();
+  function notifyTicks(roomId) {
+    tickBus.dispatchEvent(new CustomEvent('tick-change', { detail: { roomId } }));
+  }
 
   async function confirmDelivery(entry) {
     if (deliveredMsgIds.has(entry.id) || confirmInFlight.has(entry.id)) return;
@@ -640,7 +657,7 @@ async function main() {
           onProgress: ({ have, total }) => {
             if (!total) return; // 0/0 heißt hier "Anfrage fehlgeschlagen", nicht "0 von 0 Chunks" — nichts Sinnvolles zum Anzeigen
             syncProgressByMsgId.set(entry.id, { refIndex: i, refCount: refs.length, have, total });
-            if (activeRoomId === entry.roomId) renderTicks(entry.roomId);
+            notifyTicks(entry.roomId);
           },
         });
         if (!ready) return;
@@ -655,7 +672,7 @@ async function main() {
     deliveredMsgIds.add(entry.id);
     pendingDeliveries = pendingDeliveries.filter((p) => p.id !== entry.id);
     savePendingDeliveries(pendingDeliveries);
-    if (activeRoomId === entry.roomId) renderTicks(entry.roomId);
+    notifyTicks(entry.roomId);
   }
 
   // Periodischer Sicherheitsnetz-Sweep: confirmDelivery() selbst gibt nach
@@ -665,7 +682,7 @@ async function main() {
   // vollständig zum Relay gespiegelt zu werden) fällt dann NIE ein echter
   // Reconnect an, der laut derselben Doku "es beim nächsten Mal erneut
   // versucht" — der Eintrag blieb dadurch für immer in pendingDeliveries
-  // hängen und das Sync-Badge (renderTicks()) verschwand nie, obwohl der
+  // hängen und das Sync-Badge (<qu-sync-badge>) verschwand nie, obwohl der
   // Upload am Ende wirklich fertig war. Dieses Intervall schließt genau
   // diese Lücke, unabhängig davon, ob die Verbindung je abreißt.
   setInterval(() => {
@@ -1063,7 +1080,7 @@ async function main() {
     unsubs.push(qu.onPresenceChange(roomId, async () => renderPresence(roomId)));
     unsubs.push(qu.onReadReceipt(roomId, async () => {
       receiptsByRoom.set(roomId, await qu.getReadReceipts(roomId));
-      if (activeRoomId === roomId) renderTicks(roomId);
+      notifyTicks(roomId);
     }));
     // Gruppenname: ein normaler LWW-Wert AM Raum selbst (`${roomId}/meta`),
     // nicht nur lokal in `rooms` — jede Umbenennung (renameGroupRoom()
@@ -1275,7 +1292,7 @@ async function main() {
     renderRoomList();
 
     if (activeRoomId === roomId) {
-      appendLiveMessage(q);
+      appendLiveMessage(q, roomId);
       if (document.hasFocus()) markActiveRead();
     }
 
@@ -1367,7 +1384,7 @@ async function main() {
     }).catch(() => {});
   }
 
-  /** Badge-Text für EINE eigene Nachricht mit Anhang — mit echtem Chunk-Fortschritt, sobald syncProgressByMsgId etwas für sie weiß, sonst der generische Text (z. B. bevor die erste readiness-Antwort überhaupt eintraf). Gemeinsam genutzt von buildMessageItem() (Anfangszustand) und renderTicks() (laufende Aktualisierung), damit beide garantiert denselben Text erzeugen. */
+  /** Badge-Text für EINE eigene Nachricht mit Anhang — mit echtem Chunk-Fortschritt, sobald syncProgressByMsgId etwas für sie weiß, sonst der generische Text (z. B. bevor die erste readiness-Antwort überhaupt eintraf). Gemeinsam genutzt von buildMessageItem() (Anfangszustand) und <qu-sync-badge> (laufende Aktualisierung), damit beide garantiert denselben Text erzeugen. */
   function syncBadgeText(msgId) {
     const p = syncProgressByMsgId.get(msgId);
     if (!p) return '📤 Wird noch mit dem Server synchronisiert — bitte online bleiben, bis dies verschwindet.';
@@ -1376,41 +1393,68 @@ async function main() {
     return `📤 Wird synchronisiert${label}: Chunk ${p.have}/${p.total} (${percent}%) — bitte online bleiben, bis dies verschwindet.`;
   }
 
-  function renderTicks(roomId) {
-    const receipts = receiptsByRoom.get(roomId) ?? {};
-    const pendingIds = new Set(pendingDeliveries.map((p) => p.id));
-    for (const li of messageListEl.querySelectorAll('[data-mine="1"]')) {
-      const id = li.dataset.id;
-      const ts = Number(li.dataset.ts);
+  function stillPendingDelivery(msgId) {
+    return pendingDeliveries.some((p) => p.id === msgId) && !deliveredMsgIds.has(msgId);
+  }
+
+  /**
+   * Kleines ✓/✓✓/🕐-Symbol NEBEN der eigenen Nachricht (`.msg-meta`) —
+   * abonniert sich beim Einhängen auf `tickBus` (siehe dessen Doku oben)
+   * und meldet sich beim Aushängen wieder ab, statt von außen über
+   * renderTicks() angestoßen zu werden.
+   */
+  class QuMsgTickElement extends HTMLElement {
+    connectedCallback() {
+      this.className = 'tick';
+      this._onChange = (e) => { if (e.detail.roomId === this.dataset.roomId) this.render(); };
+      tickBus.addEventListener('tick-change', this._onChange);
+      this.render();
+    }
+    disconnectedCallback() {
+      tickBus.removeEventListener('tick-change', this._onChange);
+    }
+    render() {
+      const { id, roomId } = this.dataset;
+      const ts = Number(this.dataset.ts);
+      const receipts = receiptsByRoom.get(roomId) ?? {};
+      // Reihenfolge: gelesen schlägt immer "noch nicht beim Relay
+      // bestätigt" (ein Empfänger, der es gelesen hat, hat es zwangsläufig
+      // auch empfangen — sonst könnte er es gar nicht gelesen haben,
+      // selbst wenn UNSERE eigene waitUntilReplicated()-Prüfung noch
+      // aussteht/fehlgeschlagen ist).
       const read = Object.entries(receipts).some(([reader, upTo]) => reader !== qu.fingerprint && upTo >= ts);
-      const tick = li.querySelector('.tick');
-      const stillPending = pendingIds.has(id) && !deliveredMsgIds.has(id);
-      if (tick) {
-        // Reihenfolge: gelesen schlägt immer "noch nicht beim Relay
-        // bestätigt" (ein Empfänger, der es gelesen hat, hat es zwangsläufig
-        // auch empfangen — sonst könnte er es gar nicht gelesen haben,
-        // selbst wenn UNSERE eigene waitUntilReplicated()-Prüfung noch
-        // aussteht/fehlgeschlagen ist).
-        if (read) { tick.textContent = '✓✓'; tick.classList.add('read'); tick.classList.remove('pending'); }
-        else if (stillPending) { tick.textContent = '🕐'; tick.classList.remove('read'); tick.classList.add('pending'); }
-        else { tick.textContent = '✓'; tick.classList.remove('read', 'pending'); }
-      }
-      // Eigenes, deutlich lesbares Badge zusätzlich zum kleinen Uhr-Symbol
-      // oben — NUR bei Nachrichten mit Anhang: genau dort ist "noch nicht
-      // beim Relay bestätigt" die eine Information, die vor dem
-      // Ausschalten des Geräts wirklich zählt (ein reiner Text repliziert
-      // praktisch sofort, ein großer Video-Anhang kann eine Weile
-      // brauchen — das winzige Uhr-Symbol allein ist dafür leicht zu
-      // übersehen). Zeigt/versteckt dasselbe Element wieder, statt es neu
-      // zu erzeugen — buildMessageItem() legt es für jede eigene Nachricht
-      // MIT Anhang von Anfang an (leer) an.
-      const badge = li.querySelector('.sync-badge');
-      if (badge) {
-        badge.hidden = !stillPending;
-        if (stillPending) badge.textContent = syncBadgeText(id);
-      }
+      if (read) { this.textContent = '✓✓'; this.classList.add('read'); this.classList.remove('pending'); }
+      else if (stillPendingDelivery(id)) { this.textContent = '🕐'; this.classList.remove('read'); this.classList.add('pending'); }
+      else { this.textContent = '✓'; this.classList.remove('read', 'pending'); }
     }
   }
+  customElements.define('qu-msg-tick', QuMsgTickElement);
+
+  /**
+   * Deutlich lesbares Badge zusätzlich zum kleinen Uhr-Symbol oben — NUR
+   * bei Nachrichten mit Anhang: genau dort ist "noch nicht beim Relay
+   * bestätigt" die eine Information, die vor dem Ausschalten des Geräts
+   * wirklich zählt (ein reiner Text repliziert praktisch sofort, ein
+   * großer Video-Anhang kann eine Weile brauchen). Selbst-abonnierend wie
+   * <qu-msg-tick> oben.
+   */
+  class QuSyncBadgeElement extends HTMLElement {
+    connectedCallback() {
+      this.className = 'sync-badge';
+      this._onChange = (e) => { if (e.detail.roomId === this.dataset.roomId) this.render(); };
+      tickBus.addEventListener('tick-change', this._onChange);
+      this.render();
+    }
+    disconnectedCallback() {
+      tickBus.removeEventListener('tick-change', this._onChange);
+    }
+    render() {
+      const pending = stillPendingDelivery(this.dataset.id);
+      this.hidden = !pending;
+      if (pending) this.textContent = syncBadgeText(this.dataset.id);
+    }
+  }
+  customElements.define('qu-sync-badge', QuSyncBadgeElement);
 
   // --- Rendering: Chat-/Raumliste (1:1 UND Gruppen, kein Unterschied im Markup außer dem Avatar-Fallback) ---
   /**
@@ -1716,12 +1760,11 @@ async function main() {
   }
 
   /** Baut genau ein `<li class="msg">` — geteilt zwischen dem vollständigen Neuaufbau (renderMessageList()) und dem Anhängen einer einzelnen neuen Live-Nachricht (appendLiveMessage()), damit beide garantiert dasselbe Markup erzeugen. */
-  async function buildMessageItem(q) {
+  async function buildMessageItem(q, roomId) {
     const mine = q.writer === qu.fingerprint;
     const li = el('li', `msg${mine ? ' mine' : ''}`);
     li.dataset.ts = q.ts;
     li.dataset.id = q.id;
-    li.dataset.mine = mine ? '1' : '0';
     const bubble = el('div', 'msg-bubble');
     if (q.value?.text) {
       const textEl = el('div', 'msg-text');
@@ -1734,18 +1777,24 @@ async function main() {
       bubble.appendChild(await renderAttachment(refId));
     }
     if (mine && q.refs?.length) {
-      // Anfangszustand hier direkt aus pendingDeliveries/syncProgressByMsgId
-      // — renderTicks() (bei jedem Reconnect/jeder Bestätigung/jedem
-      // Fortschritts-Tick aufgerufen) übernimmt ab hier laufend die
-      // Aktualisierung; siehe dessen eigene Doku und syncBadgeText().
-      const badge = el('div', 'sync-badge', syncBadgeText(q.id));
-      badge.hidden = !(pendingDeliveries.some((p) => p.id === q.id) && !deliveredMsgIds.has(q.id));
+      // <qu-sync-badge> zieht sich seinen Anfangs- UND jeden Folgezustand
+      // selbst (siehe dessen Doku oben) — hier nur erzeugen und den
+      // Nachrichten-/Raumbezug mitgeben.
+      const badge = document.createElement('qu-sync-badge');
+      badge.dataset.id = q.id;
+      badge.dataset.roomId = roomId;
       bubble.appendChild(badge);
     }
     li.appendChild(bubble);
     const meta = el('div', 'msg-meta');
     meta.appendChild(document.createTextNode(fmtTime(q.ts)));
-    if (mine) meta.appendChild(el('span', 'tick', '✓'));
+    if (mine) {
+      const tick = document.createElement('qu-msg-tick');
+      tick.dataset.id = q.id;
+      tick.dataset.ts = q.ts;
+      tick.dataset.roomId = roomId;
+      meta.appendChild(tick);
+    }
     li.appendChild(meta);
     return li;
   }
@@ -1759,24 +1808,22 @@ async function main() {
     for (const q of list) {
       const dayLabel = fmtDayLabel(q.ts);
       if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-      messageListEl.appendChild(await buildMessageItem(q));
+      messageListEl.appendChild(await buildMessageItem(q, roomId));
     }
     // Ein frisch geöffneter Chat startet immer unten (neueste Nachricht),
     // unabhängig vom bisherigen Scroll-Zustand — anders als
     // appendLiveMessage() unten, das das bewusst NUR tut, wenn man schon
     // dort war.
     messageListEl.scrollTop = messageListEl.scrollHeight;
-    renderTicks(roomId);
   }
 
   /** Hängt EINE neu eingetroffene Live-Nachricht an, statt die komplette Liste neu aufzubauen (kein erneutes Laden/Rendern schon vorhandener Anhänge bei jeder neuen Nachricht) — folgt dem Ende nur, wenn man vorher schon dort war (isNearBottom()), reißt also niemanden aus der gerade gelesenen älteren Historie. */
-  async function appendLiveMessage(q) {
+  async function appendLiveMessage(q, roomId) {
     const stick = isNearBottom();
     const dayLabel = fmtDayLabel(q.ts);
     if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-    messageListEl.appendChild(await buildMessageItem(q));
+    messageListEl.appendChild(await buildMessageItem(q, roomId));
     if (stick) messageListEl.scrollTop = messageListEl.scrollHeight;
-    renderTicks(activeRoomId);
   }
 
   /** Öffnet einen bereits bekannten Raum (siehe rooms/ROOMS_KEY) — 1:1 UND Gruppe laufen durch denselben Code, nur roomDisplayName()/roomDisplayAvatar() unterscheiden zwischen beiden. */
@@ -2098,7 +2145,7 @@ async function main() {
       const entry = { id: sent.qubit.id, ts: sent.qubit.ts, roomId, refs: sent.refs };
       pendingDeliveries.push(entry);
       savePendingDeliveries(pendingDeliveries);
-      if (activeRoomId === roomId) renderTicks(roomId);
+      notifyTicks(roomId);
       confirmDelivery(entry).catch(() => {});
     } catch (e) {
       console.error('[chat] send failed:', e);
@@ -2510,7 +2557,7 @@ async function main() {
 
   function showChatSettingsScreen(room) {
     const roomId = room.id;
-    activeRoomId = roomId; // Einstellungen gehören zu GENAU diesem Raum — bleibt "aktiv" wie im Chat-Screen selbst, siehe renderPresence()/renderTicks() u. a., die harmlos auf jetzt verstecktes Markup zielen, falls der darunterliegende Chat-Screen selbst gerade nicht sichtbar ist.
+    activeRoomId = roomId; // Einstellungen gehören zu GENAU diesem Raum — bleibt "aktiv" wie im Chat-Screen selbst, siehe renderPresence() u. a., die harmlos auf jetzt verstecktes Markup zielen, falls der darunterliegende Chat-Screen selbst gerade nicht sichtbar ist.
     chatSettingsTitleEl.textContent = roomDisplayName(room);
     chatSettingsGroupSection.hidden = !isGroupRoom(room);
     if (isGroupRoom(room)) {
