@@ -741,14 +741,51 @@ async function main() {
     tickBus.dispatchEvent(new CustomEvent('tick-change', { detail: { roomId } }));
   }
 
+  /**
+   * Hält den Bildschirm wach (Screen Wake Lock API), SOLANGE mindestens
+   * eine Anhang-Übertragung läuft (eigener Upload-Sync via
+   * confirmDelivery() unten, oder ein Download via renderAttachment()s
+   * reveal()) — ein großer Video-Anhang über eine schwache Verbindung
+   * kann Minuten brauchen; schaltet sich das Display währenddessen ab,
+   * pausiert (je nach Gerät/Browser) oft auch die laufende Übertragung
+   * selbst. Referenzgezählt (`activeTransfers`), nicht ein einfaches
+   * Ja/Nein-Flag — mehrere gleichzeitige Übertragungen (z. B. Senden UND
+   * gleichzeitig einen anderen Anhang laden) dürfen sich nicht gegenseitig
+   * das Lock vorzeitig freigeben. Kein Fehler, wenn die API fehlt (ältere
+   * Safari-Versionen) — dann bleibt es schlicht wirkungslos, wie bisher.
+   */
+  let wakeLock = null;
+  let activeTransfers = 0;
+  async function beginTransfer() {
+    activeTransfers++;
+    if (activeTransfers === 1 && 'wakeLock' in navigator) {
+      try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { console.warn('[chat] Screen Wake Lock nicht verfügbar:', e.message); }
+    }
+  }
+  function endTransfer() {
+    activeTransfers = Math.max(0, activeTransfers - 1);
+    if (activeTransfers === 0 && wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  }
+  // Ein Wake Lock wird vom Browser automatisch freigegeben, sobald der Tab
+  // in den Hintergrund wechselt (Spezifikation) — kommt er zurück, während
+  // noch eine Übertragung läuft, muss es explizit neu angefordert werden,
+  // sonst bliebe das Display ab hier dauerhaft ungeschützt, obwohl
+  // `activeTransfers` weiterhin > 0 ist.
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && activeTransfers > 0 && !wakeLock && 'wakeLock' in navigator) {
+      try { wakeLock = await navigator.wakeLock.request('screen'); } catch { /* z. B. Tab doch nicht wirklich sichtbar — nächster Wechsel versucht es erneut */ }
+    }
+  });
+
   async function confirmDelivery(entry) {
     if (deliveredMsgIds.has(entry.id) || confirmInFlight.has(entry.id)) return;
     if (!channel?.isOpen()) return; // nichts zu prüfen gerade — nächster Reconnect/Sweep versucht es erneut
     confirmInFlight.add(entry.id);
+    const refs = entry.refs ?? [];
+    if (refs.length) await beginTransfer(); // nur bei einem echten Anhang wach halten — eine reine Text-Nachricht synct praktisch sofort
     try {
       const msgOk = await repl.waitUntilReplicated(entry.id, { ts: entry.ts, maxWaitMs: 20000 });
       if (!msgOk) return;
-      const refs = entry.refs ?? [];
       for (let i = 0; i < refs.length; i++) {
         const ready = await fileTransfer.waitUntilReady(refs[i], {
           maxWaitMs: 20000,
@@ -765,6 +802,7 @@ async function main() {
       return;
     } finally {
       confirmInFlight.delete(entry.id);
+      if (refs.length) endTransfer();
     }
     syncProgressByMsgId.delete(entry.id);
     deliveredMsgIds.add(entry.id);
@@ -1733,9 +1771,15 @@ async function main() {
     }
 
     async function reveal() {
+      let holdingWakeLock = false;
       try {
         let complete = await fileTransfer.hasComplete(refId);
         if (!complete) {
+          // Nur ab hier wach halten — bereits vollständig lokal vorhandene
+          // Anhänge (eigener Versand, früher schon geladen) brauchen keinen
+          // Download, für die lohnt sich kein Wake Lock.
+          holdingWakeLock = true;
+          await beginTransfer();
           // waitUntilReady() fragt nur, ob der RELAY selbst inzwischen
           // alle Chunks hat (vom Absender gespiegelt, siehe relay/relay.mjs's
           // proaktives Mirroring) — überträgt dabei noch KEIN einziges Byte
@@ -1827,6 +1871,8 @@ async function main() {
       } catch (e) {
         showError(`Fehler beim Laden (${e.message})`);
         console.error('[chat] attachment failed:', e);
+      } finally {
+        if (holdingWakeLock) endTransfer();
       }
     }
 
