@@ -21,12 +21,12 @@ import { Qu } from './src/index.js';
 ```
 
 **Als externe Abhängigkeit per `<script type="module">`**, ohne eigenen
-Bundler — z. B. für ein separates Projekt, das nur das fertige Framework
+Bundler — z. B. für ein separates Projekt, das nur Teile des Frameworks
 braucht: `.github/workflows/build-cdn.yml` baut nach jedem Merge nach
-`main` ein einziges gebündeltes `qu[.min].js` (`npm run build`,
-`scripts/build.mjs`) und veröffentlicht es auf einem eigenen `dist`-Branch.
-Sobald dieses Repo öffentlich ist, ist das direkt über jsDelivrs
-GitHub-CDN erreichbar, ganz ohne npm-Veröffentlichung:
+`main` mehrere gebündelte `<name>[.min].js`-Dateien (`npm run build`,
+`scripts/build.mjs`, Bundle-Liste in `src/bundles/`) und veröffentlicht sie
+auf einem eigenen `dist`-Branch. Sobald dieses Repo öffentlich ist, ist das
+direkt über jsDelivrs GitHub-CDN erreichbar, ganz ohne npm-Veröffentlichung:
 
 ```html
 <script type="module">
@@ -38,6 +38,22 @@ GitHub-CDN erreichbar, ganz ohne npm-Veröffentlichung:
 `@dist` zieht immer den neuesten `main`-Stand (jsDelivr cached Branches nur
 kurz) — für eine dauerhaft stabile, versionierte URL stattdessen auf einen
 Release-Tag pinnen, sobald es welche gibt (z. B. `@v0.4.0`).
+
+**Welches Bundle?** Jedes hat eine unminifizierte (lesbar/Debugging) und
+eine minifizierte + sourcemapped (`.min.js`, kleinste Downloadgröße)
+Variante, alle unter `dist/<name>[.min].js`:
+
+| Datei | Inhalt | Für wen |
+|---|---|---|
+| `qu-core` | Nur `src/core/**` + `MemoryAdapter`/`NullAdapter` — Store/Session/Identity/ACL, keine I/O-Abhängigkeit | Eigene Sync-Schicht/App-Modell direkt auf dem rohen, signierten Store bauen |
+| `qu-plugins-storage` | Web-Storage-/IndexedDB-Adapter (QuBits + Datei-Chunks) | Persistenz über den Core-Default hinaus |
+| `qu-plugins-network` | Replikation, Transporte (WebSocket/WebRTC), Routing | Mit einem Relay/anderen Peers reden |
+| `qu-plugins-data` | Referenzen (`obj://`/`key://`/`file://`), Datei-Transfer-Pipeline | Große Anhänge/Dateien |
+| `qu-app-space` | Spaces, Mitgliederverwaltung, Profile, Chat-Primitive, Presence — der App-Baukasten | Eine Chat-/ToDo-/Forum-artige App bauen |
+| `qu-ui` | `<qu-view>`/`<qu-bind>`/`<qu-list>`/`<qu-profile-card>`/`<qu-people-search>` + Bindings — registriert die Custom Elements als Nebeneffekt, **nur im Browser** | Reaktives HTML ohne eigenes Framework |
+| `qu-core-plugins` | Core + alle drei Plugin-Gruppen, ohne App-Space/UI | Eigene App-Abstraktion direkt auf Qu/Session, aber mit Netzwerk/Storage/Dateien |
+| `qu` | Core + alle Plugin-Gruppen + App-Space, ohne UI (= `src/index.js`, Node-sicher, bisheriger Standard) | Die meisten Konsumenten — Standard-Import |
+| `qu-all` | Wirklich alles, inklusive UI | Wer Bundle-Größe egal ist |
 
 ## Quickstart
 
