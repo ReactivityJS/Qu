@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Qu, createNetworkPlugin, createSpacesPlugin } from '../src/index.js';
-import { connectToRelay, openAppSpace, restrictedAppSpace, postEntry, listEntries, onEntry } from './app-space-lib.mjs';
+import { connectToRelay, openAppSpace, restrictedAppSpace, postEntry, listEntries, onEntry } from './relay-space-demo-lib.mjs';
 import { startTestRelayServer, stopTestRelayServer } from '../test/helpers.mjs';
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }

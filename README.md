@@ -850,9 +850,9 @@ examples/                    Übersicht mit Quelltext-Links: /docs/examples.html
                             lauffähig statt nur Prosa: Boards, Posts pro Zeit-Bucket, Bucket-Index
   forum-lib.test.mjs           node:test dafür — Bucket-Isolation (live wie beim Lesen),
                             Index-Dedup/-Sortierung, kollisionssicheres gleichzeitiges Schreiben
-  app-space-lib.mjs             App-Space über einen echten WebSocket-Relay — offene vs.
+  relay-space-demo-lib.mjs             App-Space über einen echten WebSocket-Relay — offene vs.
                             mitgliederbeschränkte Variante (App-Guide baut hierauf auf)
-  app-space-lib.test.mjs          node:test dafür — läuft gegen einen echten, im Test selbst
+  relay-space-demo-lib.test.mjs          node:test dafür — läuft gegen einen echten, im Test selbst
                             gestarteten Relay-Prozess, kein Mock
   space-index-lib.mjs           mehrere Sub-Spaces von einem App-Space aus referenzieren/
                             indexieren ("App hat viele Spaces" statt "App ist ein Space")

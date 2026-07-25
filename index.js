@@ -187,7 +187,7 @@ const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 // (kept for docs/lab/'s Network section, which relies on a fixed room), any
 // connected client may additionally register its own topic at runtime via
 // qu.subscribe() (network/replication/default.js) — what the Playground's
-// "Bob" step and examples/app-space-lib.mjs's runtime-created App-Spaces
+// "Bob" step and examples/relay-space-demo-lib.mjs's runtime-created App-Spaces
 // rely on. Still fully ACL-gated per push, never a wider grant than the
 // static case (README "Sync, Mirror, Relay").
 const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions });

@@ -190,7 +190,7 @@ tatsächlichen Doku-Auslieferung.
   das akzeptiert der Relay nur die statisch vorkonfigurierten `pushTopics`,
   und eine zur Laufzeit neu erzeugte Site (`qu.createSpace()`, zufällige
   UUID) könnte nie live repliziert werden. Dieses Repo hat es in `index.js`
-  bereits an, dieselbe Einstellung, die auch `examples/app-space-lib.mjs`s
+  bereits an, dieselbe Einstellung, die auch `examples/relay-space-demo-lib.mjs`s
   mitgliederbeschränkte App-Spaces braucht.
 - Und: nach `qu.connect()` einmal `repl.sync({ topic: siteId, since: 0 })`
   aufrufen, wenn man gerade selbst etwas VOR dem `connect()` geschrieben hat
