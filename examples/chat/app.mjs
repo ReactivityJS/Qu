@@ -16,6 +16,7 @@ import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
   dmRoomId, groupRoomId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
   linkify, mediaKind, sortByActivity, buildPath, parsePathSegments, fmtCallDuration,
+  buildLocationUrl,
 } from './chat-lib.mjs';
 import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert <qu-profile-card> (renderRoomHeader()/renderGroupMemberList()) UND <qu-people-search> (Neuer-Chat-Formular)
 
@@ -103,6 +104,12 @@ const PENDING_DELIVERY_KEY = 'qu-chat-pending-delivery'; // siehe confirmDeliver
 // Default AN (bisheriges Verhalten unverändert) — siehe renderAttachment()
 // weiter unten für den Ein-Klick-statt-automatisch-Fall bei AUS.
 const AUTO_LOAD_MEDIA_KEY = 'qu-chat-auto-load-media';
+// Kartenanbieter für den 📍-Button (Standort teilen) — 'osm' (Default,
+// braucht keinen eigenen API-Key/Account) | 'google' | 'apple' | 'custom'
+// (MAP_CUSTOM_URL_KEY liefert dann das URL-Template mit {lat}/{lng},
+// siehe buildLocationUrl() in chat-lib.mjs).
+const MAP_PROVIDER_KEY = 'qu-chat-map-provider';
+const MAP_CUSTOM_URL_KEY = 'qu-chat-map-custom-url';
 // Enger als modules/chat.js's eigene Defaults (8s/20s) — ein Kontakt soll
 // sichtbar zügig als "offline" erkannt werden, nicht erst nach bis zu 20s
 // Unschärfe. 3x Heartbeat als Stale-Schwelle lässt trotzdem genug
@@ -136,6 +143,15 @@ const textInput = $('text-input');
 const fileInput = $('file-input');
 const attachBtn = $('attach-btn');
 const pendingFilesEl = $('pending-files');
+const locationBtn = $('location-btn');
+const voiceBtn = $('voice-btn');
+const voiceRecorderEl = $('voice-recorder');
+const voiceDiscardBtn = $('voice-discard-btn');
+const voiceStatusEl = $('voice-status');
+const voiceTimerEl = $('voice-timer');
+const voicePreviewAudio = $('voice-preview-audio');
+const voiceStopBtn = $('voice-stop-btn');
+const voiceSendBtn = $('voice-send-btn');
 const emojiBtn = $('emoji-btn');
 const emojiPicker = $('emoji-picker');
 const sendBtn = $('send-btn');
@@ -177,6 +193,9 @@ const videoCallBtn = $('video-call-btn');
 const soundMessagesToggle = $('sound-messages-toggle');
 const soundCallsToggle = $('sound-calls-toggle');
 const autoLoadMediaToggle = $('auto-load-media-toggle');
+const mapProviderSelect = $('map-provider-select');
+const mapCustomUrlRow = $('map-custom-url-row');
+const mapCustomUrlInput = $('map-custom-url-input');
 
 // --- Screens/Modals — jeder ist ein eigener Router-Pfad, siehe main()s
 // navigate()/renderRoute() weiter unten für das vollständige Pfadschema. ---
@@ -409,6 +428,12 @@ async function setSoundEnabled(key, enabled) { await storage.put(key, enabled ? 
 // tatsächliches Datenvolumen, nicht nur Bild-/Videowiedergabe.
 async function autoLoadMedia() { return (await storage.get(AUTO_LOAD_MEDIA_KEY)) !== '0'; }
 async function setAutoLoadMedia(enabled) { await storage.put(AUTO_LOAD_MEDIA_KEY, enabled ? '1' : '0'); }
+
+// --- Standort teilen: welcher Kartenanbieter (App-Einstellungen) ---
+async function mapProvider() { return (await storage.get(MAP_PROVIDER_KEY)) || 'osm'; }
+async function setMapProvider(provider) { await storage.put(MAP_PROVIDER_KEY, provider); }
+async function mapCustomUrlTemplate() { return (await storage.get(MAP_CUSTOM_URL_KEY)) || ''; }
+async function setMapCustomUrlTemplate(template) { await storage.put(MAP_CUSTOM_URL_KEY, template); }
 
 let audioCtx = null;
 function getAudioCtx() {
@@ -2255,6 +2280,131 @@ async function main() {
     renderPendingFiles();
   });
 
+  // --- Standort teilen — kein eigener Nachrichtentyp: der Kartenlink geht
+  // als ganz normaler Text raus, die bereits vorhandene Link-Vorschau
+  // (buildLinkPreview() oben) übernimmt Darstellung/Anklickbarkeit von
+  // allein. Anbieter (OSM/Google/Apple/eigene URL) kommt aus den
+  // App-Einstellungen (mapProvider(), s. o.).
+  locationBtn.addEventListener('click', () => {
+    if (!activeRoomId) return;
+    if (!navigator.geolocation) { statusBar.textContent = 'Standortfreigabe wird von diesem Browser nicht unterstützt.'; return; }
+    locationBtn.disabled = true;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        locationBtn.disabled = false;
+        const { latitude, longitude } = pos.coords;
+        const provider = await mapProvider();
+        const template = provider === 'custom' ? await mapCustomUrlTemplate() : '';
+        const url = buildLocationUrl(provider, latitude, longitude, template);
+        textInput.value = textInput.value ? `${textInput.value} ${url}` : url;
+        autoGrow();
+        composer.requestSubmit();
+      },
+      (err) => {
+        locationBtn.disabled = false;
+        statusBar.textContent = err.code === err.PERMISSION_DENIED
+          ? 'Zugriff auf den Standort verweigert.'
+          : 'Standort konnte nicht ermittelt werden.';
+      },
+      { enableHighAccuracy: true, timeout: 10_000 },
+    );
+  });
+
+  // --- Sprachnachricht — Aufnehmen -> Abhören -> Verwerfen ODER Senden.
+  // Läuft, sobald gesendet wird, über exakt denselben Anhang-Pfad wie ein
+  // per 📎 gewählter Datei-Anhang (pendingFiles -> composer-Submit-Handler
+  // oben) — kein eigener Nachrichtentyp, keine eigene Verschlüsselungs-/
+  // Fortschrittslogik nötig; Wiedergabe im Chat übernimmt bereits
+  // renderAttachmentBody()'s audio-Zweig.
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let recordingStream = null;
+  let recordingStartedAt = 0;
+  let recordingTimerInterval = null;
+  let recordedBlob = null;
+  let recordedUrl = null;
+  let discardOnStop = false;
+
+  function fmtRecTimer(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function resetVoiceRecorder() {
+    clearInterval(recordingTimerInterval);
+    recordingTimerInterval = null;
+    if (recordedUrl) { URL.revokeObjectURL(recordedUrl); recordedUrl = null; }
+    recordedBlob = null;
+    recordedChunks = [];
+    stopStream(recordingStream);
+    recordingStream = null;
+    mediaRecorder = null;
+    discardOnStop = false;
+    voiceRecorderEl.hidden = true;
+    composer.hidden = false;
+    voicePreviewAudio.hidden = true;
+    voicePreviewAudio.src = '';
+    voiceStatusEl.hidden = false;
+    voiceStopBtn.hidden = false;
+    voiceSendBtn.hidden = true;
+  }
+
+  voiceBtn.addEventListener('click', async () => {
+    if (!activeRoomId) return;
+    if (typeof MediaRecorder === 'undefined') { statusBar.textContent = 'Sprachnachrichten werden von diesem Browser nicht unterstützt.'; return; }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      statusBar.textContent = mediaErrorMessage(e);
+      return;
+    }
+    recordingStream = stream;
+    recordedChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    mediaRecorder.addEventListener('dataavailable', (ev) => { if (ev.data.size) recordedChunks.push(ev.data); });
+    mediaRecorder.addEventListener('stop', () => {
+      stopStream(recordingStream);
+      recordingStream = null;
+      clearInterval(recordingTimerInterval);
+      if (discardOnStop) { resetVoiceRecorder(); return; }
+      recordedBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      recordedUrl = URL.createObjectURL(recordedBlob);
+      voicePreviewAudio.src = recordedUrl;
+      voicePreviewAudio.hidden = false;
+      voiceStatusEl.hidden = true;
+      voiceStopBtn.hidden = true;
+      voiceSendBtn.hidden = false;
+    });
+    mediaRecorder.start();
+    composer.hidden = true;
+    voiceRecorderEl.hidden = false;
+    voicePreviewAudio.hidden = true;
+    voiceStatusEl.hidden = false;
+    voiceStopBtn.hidden = false;
+    voiceSendBtn.hidden = true;
+    recordingStartedAt = Date.now();
+    voiceTimerEl.textContent = '0:00';
+    recordingTimerInterval = setInterval(() => { voiceTimerEl.textContent = fmtRecTimer(Date.now() - recordingStartedAt); }, 250);
+  });
+
+  voiceStopBtn.addEventListener('click', () => { if (mediaRecorder?.state === 'recording') mediaRecorder.stop(); });
+
+  voiceDiscardBtn.addEventListener('click', () => {
+    if (mediaRecorder?.state === 'recording') { discardOnStop = true; mediaRecorder.stop(); }
+    else resetVoiceRecorder();
+  });
+
+  voiceSendBtn.addEventListener('click', () => {
+    if (!recordedBlob || !activeRoomId) return;
+    const ext = (recordedBlob.type.split('/')[1] || 'webm').split(';')[0];
+    const file = new File([recordedBlob], `Sprachnachricht-${Date.now()}.${ext}`, { type: recordedBlob.type });
+    pendingFiles.push(file);
+    resetVoiceRecorder();
+    composer.requestSubmit();
+  });
+
   composer.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     if (!activeRoomId) return;
@@ -2404,6 +2554,9 @@ async function main() {
     soundMessagesToggle.checked = await soundEnabled(SOUND_MESSAGES_KEY);
     soundCallsToggle.checked = await soundEnabled(SOUND_CALLS_KEY);
     autoLoadMediaToggle.checked = await autoLoadMedia();
+    mapProviderSelect.value = await mapProvider();
+    mapCustomUrlInput.value = await mapCustomUrlTemplate();
+    mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
   }
   settingsBtn.addEventListener('click', () => navigate('settings'));
   $('app-settings-close-btn').addEventListener('click', closeScreen);
@@ -2411,6 +2564,11 @@ async function main() {
   soundMessagesToggle.addEventListener('change', () => setSoundEnabled(SOUND_MESSAGES_KEY, soundMessagesToggle.checked));
   soundCallsToggle.addEventListener('change', () => setSoundEnabled(SOUND_CALLS_KEY, soundCallsToggle.checked));
   autoLoadMediaToggle.addEventListener('change', () => setAutoLoadMedia(autoLoadMediaToggle.checked));
+  mapProviderSelect.addEventListener('change', () => {
+    setMapProvider(mapProviderSelect.value);
+    mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
+  });
+  mapCustomUrlInput.addEventListener('change', () => setMapCustomUrlTemplate(mapCustomUrlInput.value.trim()));
 
   /**
    * "App zurücksetzen" — für den Fall, dass ein Update (Anruf-Code, ein

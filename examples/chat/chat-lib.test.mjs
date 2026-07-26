@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   isValidFingerprint, normalizeFingerprint, dmRoomId, groupRoomId, shortFp, fmtBytes,
   fmtTime, fmtDayLabel, fmtCallDuration, linkify, mediaKind, sortByActivity,
-  buildPath, parsePathSegments,
+  buildPath, parsePathSegments, buildLocationUrl,
 } from './chat-lib.mjs';
 
 const FP_A = 'a1b2c3d4e5f60718293a4b5c';
@@ -91,6 +91,26 @@ test('mediaKind()', () => {
   assert.equal(mediaKind('audio/mpeg'), 'audio');
   assert.equal(mediaKind('application/pdf'), 'file');
   assert.equal(mediaKind(undefined), 'file');
+});
+
+test('buildLocationUrl() defaults to OpenStreetMap', () => {
+  const url = buildLocationUrl('osm', 52.52, 13.405);
+  assert.equal(url, 'https://www.openstreetmap.org/?mlat=52.52&mlon=13.405#map=16/52.52/13.405');
+});
+
+test('buildLocationUrl() builds Google/Apple Maps links', () => {
+  assert.equal(buildLocationUrl('google', 52.52, 13.405), 'https://www.google.com/maps/search/?api=1&query=52.52,13.405');
+  assert.equal(buildLocationUrl('apple', 52.52, 13.405), 'https://maps.apple.com/?ll=52.52,13.405&q=Standort');
+});
+
+test('buildLocationUrl() substitutes {lat}/{lng} in a custom template', () => {
+  const url = buildLocationUrl('custom', 52.52, 13.405, 'https://example.com/map?x={lat}&y={lng}');
+  assert.equal(url, 'https://example.com/map?x=52.52&y=13.405');
+});
+
+test('buildLocationUrl() falls back to OpenStreetMap for "custom" without a template', () => {
+  assert.equal(buildLocationUrl('custom', 52.52, 13.405, ''), buildLocationUrl('osm', 52.52, 13.405));
+  assert.equal(buildLocationUrl('custom', 52.52, 13.405), buildLocationUrl('osm', 52.52, 13.405));
 });
 
 test('sortByActivity() sorts by lastTs desc, missing lastTs last, tie-break by alias', () => {
