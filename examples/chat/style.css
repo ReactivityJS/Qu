@@ -186,10 +186,23 @@ button { font-family: inherit; }
    eigene absolute Positionierung relativ zu .contact statt zu .avatar.
    `qu-profile-card > .dot` grenzt das gezielt auf den DM-Fall ein, damit
    es die bestehende `.avatar .dot`-Regel der Gruppe nicht überschreibt. */
+/* grid-area statt fixer left/top-Pixelwerte — .qu-profile-avatar sitzt
+   selbst nicht an einer festen Position innerhalb von .contact (die
+   "avatar"-Zone ist über zwei Zeilen hoch und wird vertikal zentriert,
+   siehe .contact's align-items), ein hartkodierter Absolut-Offset trifft
+   den Rand daher nur zufällig statt zuverlässig — landete zuvor sichtbar
+   nahe der Avatar-MITTE statt am Rand. Beide, Avatar UND Punkt, teilen sich
+   dieselbe Zone und werden gleich (center/center) darin ausgerichtet —
+   ihre Mittelpunkte fallen so IMMER exakt zusammen, unabhängig von der
+   tatsächlichen Zeilenhöhe; der anschließende transform verschiebt den
+   Punkt von diesem gemeinsamen Mittelpunkt aus gezielt zur Avatar-Ecke
+   (halbe Avatar-Breite minus halbe Punkt-Breite, plus ein Hauch Überhang
+   wie bei `.avatar .dot`s right:-1px/bottom:-1px oben). */
 .contact qu-profile-card > .dot {
-  position: absolute;
-  left: 1.35rem;
-  top: 1.35rem;
+  grid-area: avatar;
+  align-self: center;
+  justify-self: center;
+  transform: translate(0.7rem, 0.7rem);
   width: 0.65rem;
   height: 0.65rem;
   border-radius: 50%;
@@ -450,10 +463,15 @@ button { font-family: inherit; }
   flex-shrink: 0;
 }
 .voice-status { display: flex; align-items: center; gap: 0.5rem; flex: 1; color: var(--text); font-variant-numeric: tabular-nums; }
-.voice-rec-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--danger); animation: voice-rec-pulse 1.2s ease-in-out infinite; }
+/* Grau/statisch im "armed"-Zustand (Mikrofon frei, noch nicht gestartet)
+   — erst .recording (echte Aufnahme läuft) bekommt Rot+Puls; .paused
+   bleibt rot, aber ohne Puls, sichtbar unterscheidbar von beiden. */
+.voice-rec-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--muted); }
+.voice-status.recording .voice-rec-dot { background: var(--danger); animation: voice-rec-pulse 1.2s ease-in-out infinite; }
+.voice-status.paused .voice-rec-dot { background: var(--danger); opacity: 0.5; }
 @keyframes voice-rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .voice-recorder audio { flex: 1; height: 2.35rem; }
-.voice-stop-btn { color: var(--danger); border: 1px solid var(--danger) !important; }
+.voice-stop-btn, .voice-start-btn { color: var(--danger); border: 1px solid var(--danger) !important; }
 
 .status-bar { font-size: 0.72rem; color: var(--muted); padding: 0.3rem 1rem; text-align: center; }
 .status-bar.err { color: var(--danger); }
