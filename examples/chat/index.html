@@ -56,6 +56,18 @@
         <button id="chat-settings-btn" class="icon-btn" type="button" title="Chat-Einstellungen">⚙</button>
       </header>
 
+      <!-- Angeheftete Nachrichten dieses Chats (Element-Vorbild) — sichtbar,
+           sobald mindestens eine Nachricht angeheftet ist. Zeigt die
+           zuletzt angeheftete zuoberst; ein Klick springt zu ihr (derselbe
+           Anker-Mechanismus wie ein Zeit-Link, s. scrollToMessage()). -->
+      <div id="pinned-bar" class="pinned-bar" hidden>
+        <button id="pinned-bar-jump" class="pinned-bar-jump" type="button">
+          <span class="pinned-bar-icon">📌</span>
+          <span id="pinned-bar-text" class="pinned-bar-text"></span>
+        </button>
+        <button id="pinned-bar-list-btn" class="pinned-bar-count" type="button" title="Alle angehefteten Nachrichten"></button>
+      </div>
+
       <ul id="message-list" class="message-list"></ul>
 
       <!-- Antwort-Vorschau — sichtbar, solange replyTarget gesetzt ist (s.
@@ -315,12 +327,36 @@
        #emoji-picker. "Teilen" nur sichtbar, wenn navigator.share
        überhaupt existiert. -->
   <div id="message-actions-menu" class="message-actions-menu" hidden>
+    <button id="msg-action-react" class="message-action-item" type="button">😊 Reagieren</button>
+    <button id="msg-action-pin" class="message-action-item" type="button">📌 Anheften</button>
     <button id="msg-action-reply" class="message-action-item" type="button">↩️ Antworten</button>
     <button id="msg-action-edit" class="message-action-item" type="button">✏️ Bearbeiten</button>
     <button id="msg-action-forward" class="message-action-item" type="button">➡️ Weiterleiten</button>
     <button id="msg-action-share" class="message-action-item" type="button">📤 Teilen</button>
     <button id="msg-action-copy" class="message-action-item" type="button">📋 Text kopieren</button>
     <button id="msg-action-copy-link" class="message-action-item" type="button">🔗 Link kopieren</button>
+  </div>
+
+  <!-- Schnellauswahl für eine Reaktion — öffnet sich anstelle des
+       Aktionsmenüs (msg-action-react-Handler in app.mjs), dasselbe
+       Positionierungs-/Öffnen-Schließen-Muster. -->
+  <div id="reaction-picker" class="reaction-picker" hidden>
+    <button type="button" class="reaction-picker-item" data-emoji="👍">👍</button>
+    <button type="button" class="reaction-picker-item" data-emoji="❤️">❤️</button>
+    <button type="button" class="reaction-picker-item" data-emoji="😂">😂</button>
+    <button type="button" class="reaction-picker-item" data-emoji="😮">😮</button>
+    <button type="button" class="reaction-picker-item" data-emoji="😢">😢</button>
+    <button type="button" class="reaction-picker-item" data-emoji="🙏">🙏</button>
+    <button type="button" class="reaction-picker-item" data-emoji="🔥">🔥</button>
+    <button type="button" class="reaction-picker-item" data-emoji="✅">✅</button>
+  </div>
+
+  <!-- Liste ALLER angehefteten Nachrichten dieses Chats — geöffnet über den
+       Zähler-Button in #pinned-bar, wenn mehr als eine angeheftet ist.
+       renderPinnedListPopup() (app.mjs) füllt #pinned-list-items. -->
+  <div id="pinned-list-popup" class="pinned-list-popup" hidden>
+    <div class="pinned-list-header">📌 Angeheftete Nachrichten</div>
+    <ul id="pinned-list-items" class="pinned-list-items"></ul>
   </div>
 
   <!-- Lightbox: Vollbild + Zoom für Bilder -->
