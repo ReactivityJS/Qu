@@ -20,12 +20,13 @@ import { createPushRoutes } from './server/push-routes.mjs';
 import { createWebRTCRoutes } from './server/webrtc-routes.mjs';
 import { createPortalRoutes } from './server/portal-routes.mjs';
 import { createServiceRegistry } from './server/service-registry.mjs';
+import { createRelayInfoRoutes } from './server/relay-info-routes.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { loadOrGenerateRelayIdentity } from './relay/relay-identity.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
 import { sendWebPush, generateVapidKeys } from './relay/webpush.mjs';
-import { QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter } from './src/index.js';
+import { QuIdentity, QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter } from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
 
@@ -87,6 +88,17 @@ const registry = createServiceRegistry([
   { id: 'app-guide', category: 'documentation', label: 'App-Guide', description: 'Eine vernetzte App bauen: mehrere Instanzen tauschen Daten über einen echten Relay und einen gemeinsamen App-Space aus.', entry: '/docs/view.html?file=/APP-GUIDE.md' },
   { id: 'whitepaper', category: 'documentation', label: 'Whitepaper', description: 'Architektur-Spezifikation — Contracts, Sicherheitsmodell, Spaces, Facade.', entry: '/docs/view.html?file=/qu-whitepaper-v0.6.md' },
   { id: 'tests', category: 'documentation', label: 'Tests', description: 'Dieselbe Testsuite wie npm test, hier im Browser ausgeführt.', entry: '/test/index.html' },
+  // category: 'admin', not 'service' — portal.mjs only ever renders
+  // 'service'/'example'/'documentation' cards, so this never appears in
+  // the public Services tab. That's a discoverability choice, not a
+  // security boundary: static file serving has no notion of "this
+  // visitor's fingerprint" to gate on (identity only proves itself once
+  // the app's own JS connects to the relay) — the actual authorization is
+  // entirely the relayAdmins ACL check on the writes this app makes (see
+  // relay/relay.mjs), same as any other Qu app. Hiding the tab only saves
+  // a non-admin visitor a confusing detour into an app they can open but
+  // can't do anything privileged in.
+  { id: 'relay-admin', category: 'admin', label: 'Relay-Admin', description: 'Services verwalten (nur für QU_RELAY_ADMINS-Fingerprints).', entry: '/examples/relay-admin/index.html' },
 ]);
 for (const id of (process.env.QU_SERVICES_DISABLED || '').split(',').map((s) => s.trim()).filter(Boolean)) {
   registry.setEnabled(id, false);
@@ -169,6 +181,22 @@ const iceServers = [
   ...(turnUrls.length ? [{ urls: turnUrls, username: process.env.QU_TURN_USERNAME || '', credential: process.env.QU_TURN_CREDENTIAL || '' }] : []),
 ];
 
+// A relay that regenerates a fresh identity every restart has no stable
+// fingerprint anything can address it by (an admin encrypting a command
+// "only this relay can read", a peer that pinned it once via trustPeer())
+// — persisted the same way the VAPID keypair above already is, and only
+// in persistent mode for the same reason (see relay-identity.mjs's own
+// doc comment). In memory mode a fresh identity is generated here too
+// (not left to createRelay()'s own default) specifically so its
+// fingerprint/epub are known BEFORE `startServer()` below builds
+// /relay/info — a real deployment loses admin-encryption stability across
+// restarts in memory mode either way, but a single run still gets a
+// working, self-consistent relay-admin flow.
+const relayIdentity = persistent
+  ? await loadOrGenerateRelayIdentity(path.join(dataDir, 'relay-identity.json'))
+  : await QuIdentity.generate();
+const relayEpub = await crypto.subtle.exportKey('jwk', relayIdentity.encryptionKey);
+
 // /test/manifest.json is always on (read-only, no code runs); the
 // server-side test-EXECUTION endpoint (/test/run-node-tests) is opt-in via
 // QU_ENABLE_TEST_ENDPOINT=1 — see server/test-runner.mjs for why.
@@ -179,6 +207,7 @@ const server = startServer({
     ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null }),
     ...createWebRTCRoutes({ iceServers }),
     ...createPortalRoutes({ root, registry }),
+    ...createRelayInfoRoutes({ fingerprint: relayIdentity.fingerprint, epub: relayEpub }),
   ],
 });
 
@@ -235,22 +264,10 @@ const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 // "Bob" step and examples/relay-space-demo-lib.mjs's runtime-created App-Spaces
 // rely on. Still fully ACL-gated per push, never a wider grant than the
 // static case (README "Sync, Mirror, Relay").
-// A relay that regenerates a fresh identity every restart has no stable
-// fingerprint anything can address it by (an admin encrypting a command
-// "only this relay can read", a peer that pinned it once via trustPeer())
-// — persisted the same way the VAPID keypair above already is, and only
-// in persistent mode for the same reason (see relay-identity.mjs's own
-// doc comment). `publishProfile()` right after makes the relay's own
-// `~<fingerprint>/epub` discoverable — the one thing anything encrypting
-// TO this relay in the future needs to look up.
-const relayIdentity = persistent ? await loadOrGenerateRelayIdentity(path.join(dataDir, 'relay-identity.json')) : undefined;
-
 const relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions, relayAdmins, serviceRegistry: registry });
-if (relayIdentity) await relayApi.relay.publishProfile();
+await relayApi.relay.publishProfile(); // makes ~<fingerprint>/epub discoverable — the one thing anything encrypting TO this relay needs to look up (also directly served at /relay/info above, no sync required)
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
-console.log(relayIdentity
-  ? `[Relay] Stable identity: ${relayIdentity.fingerprint}${relayAdmins.length ? ` (${relayAdmins.length} admin fingerprint(s) configured)` : ' (no QU_RELAY_ADMINS configured — no admin write access to relay-services/)'}`
-  : '[Relay] Ephemeral identity (QU_STORE=memory) — a fresh fingerprint every restart.');
+console.log(`[Relay] Identity: ${relayIdentity.fingerprint}${persistent ? ' (stable across restarts)' : ' (ephemeral — QU_STORE=memory, a fresh fingerprint every restart)'}${relayAdmins.length ? `, ${relayAdmins.length} admin fingerprint(s) configured` : ' — no QU_RELAY_ADMINS configured, no admin write access to relay-services/ or admin/'}`);
 console.log(pushEnabled
   ? `[Relay] Web Push enabled (${pushSubscriptions.size} stored subscription(s))`
   : '[Relay] Web Push disabled (QU_PUSH=0)');
