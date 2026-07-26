@@ -9,14 +9,67 @@
 self.addEventListener('install', () => { self.skipWaiting(); });
 self.addEventListener('activate', (event) => { event.waitUntil(self.clients.claim()); });
 
-// Reiner Pass-through, kein Caching/Offline-Modus (bewusst NICHT Teil
-// dieser Änderung — nur "installierbar" war gefragt, nicht "funktioniert
-// ohne Netz"). Ein registrierter Service Worker MIT fetch-Handler ist
-// trotzdem eines der Installierbarkeits-Kriterien mancher Browser (u. a.
-// ältere Chrome-Versionen prüfen das explizit) — ohne diesen Listener
-// würde der PWA-Installations-Prompt auf solchen Browsern gar nicht erst
-// erscheinen, obwohl Manifest + Service Worker sonst vollständig da sind.
-self.addEventListener('fetch', (event) => { event.respondWith(fetch(event.request)); });
+// Ablagefach für geteilte Inhalte zwischen handleShareTarget() (schreibt)
+// und app.mjs's showShareTargetScreen() (liest + löscht wieder) — ein
+// eigener Cache statt IndexedDB, weil Cache Storage Blobs (die geteilten
+// Dateien) nativ als Response-Body hält, ohne sie erst in Base64/ArrayBuffer
+// umwandeln zu müssen.
+const SHARE_CACHE_NAME = 'qu-chat-share-target';
+
+// Reiner Pass-through für alles außer der Share-Target-POST unten (kein
+// Caching/Offline-Modus — bewusst NICHT Teil dieser Änderung, nur
+// "installierbar" war gefragt, nicht "funktioniert ohne Netz"). Ein
+// registrierter Service Worker MIT fetch-Handler ist trotzdem eines der
+// Installierbarkeits-Kriterien mancher Browser (u. a. ältere
+// Chrome-Versionen prüfen das explizit) — ohne diesen Listener würde der
+// PWA-Installations-Prompt auf solchen Browsern gar nicht erst erscheinen,
+// obwohl Manifest + Service Worker sonst vollständig da sind.
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  // manifest.webmanifest's share_target.action — der Browser schickt
+  // "Teilen an QU Chat" (aus der Galerie, einem anderen Browser, …) als
+  // POST GENAU hierhin. Eine normale Seite/ein Server kann eine solche
+  // POST-Navigation nicht sinnvoll entgegennehmen (kein Ort, an dem sie
+  // multipart/form-data mit rohen Datei-Bytes verarbeiten könnte) — nur
+  // ein Service Worker darf/kann das abfangen, bevor es überhaupt einen
+  // Server erreicht.
+  if (req.method === 'POST' && new URL(req.url).pathname.endsWith('/share-target')) {
+    event.respondWith(handleShareTarget(req));
+    return;
+  }
+  event.respondWith(fetch(req));
+});
+
+/**
+ * Legt den geteilten Inhalt (Text/Link/Titel + Dateien) unter einer
+ * Einweg-Id im SHARE_CACHE_NAME-Cache ab und leitet DANACH per Redirect
+ * auf `#/share/<id>` um — die Spec verlangt für einen POST-Share-Target
+ * zwingend eine Redirect-Response (kein direktes Rendern hier), der
+ * Browser navigiert der Nutzerin also sichtbar in die normale App-UI,
+ * deren Router (app.mjs's ROOT_ROUTES.share) diese Id danach ausliest.
+ * Leere/fehlende Felder werden bewusst nicht ausgefiltert — text/url/title
+ * einzeln optional, genau wie ein "Teilen"-Dialog sie liefert.
+ */
+async function handleShareTarget(request) {
+  const formData = await request.formData();
+  const id = crypto.randomUUID();
+  const files = formData.getAll('files').filter((f) => f instanceof File && f.size > 0);
+  const meta = {
+    text: formData.get('text') || '',
+    url: formData.get('url') || '',
+    title: formData.get('title') || '',
+    fileCount: files.length,
+    fileNames: files.map((f) => f.name),
+    fileTypes: files.map((f) => f.type),
+  };
+  const cache = await caches.open(SHARE_CACHE_NAME);
+  await cache.put(`/share-payload/${id}`, new Response(JSON.stringify(meta)));
+  await Promise.all(files.map((f, i) => cache.put(
+    `/share-file/${id}/${i}`,
+    new Response(f, { headers: { 'Content-Type': f.type || 'application/octet-stream' } }),
+  )));
+  return Response.redirect(`./#/share/${id}`, 303);
+}
 
 self.addEventListener('push', (event) => {
   let data = {};

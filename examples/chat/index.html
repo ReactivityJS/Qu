@@ -205,6 +205,25 @@
     </div>
   </div>
 
+  <!-- Ziel für "Teilen an QU Chat" (System-Teilen-Dialog aus Galerie/
+       Browser/anderen Apps, s. manifest.webmanifest's share_target +
+       sw.js's handleShareTarget()) — #/share/<id>. Zeigt eine Kurz-
+       zusammenfassung + Chat-Auswahl; die eigentliche Übernahme in den
+       Composer passiert danach in dessen showChatScreen(), wie ein ganz
+       normal angehängter/eingegebener Inhalt. -->
+  <div id="share-target-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <h2>Teilen an …</h2>
+      <p class="modal-hint" id="share-target-summary">Lädt …</p>
+      <label>In welchem Chat öffnen?</label>
+      <ul id="share-target-room-list" class="share-target-room-list"></ul>
+      <div class="modal-error" id="share-target-error"></div>
+      <div class="modal-actions">
+        <button id="share-target-cancel-btn" class="btn btn-secondary" type="button">Abbrechen</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Neue Gruppe -->
   <div id="new-group-modal" class="modal-backdrop" hidden>
     <div class="modal">
