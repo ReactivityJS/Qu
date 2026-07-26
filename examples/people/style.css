@@ -156,7 +156,17 @@ qu-profile-card { display: block; }
 .attr-row { display: flex; align-items: center; gap: 0.5rem; background: var(--panel-2); border-radius: 0.5rem; padding: 0.5rem 0.7rem; }
 .attr-key { color: var(--muted); font-size: 0.8rem; min-width: 5rem; }
 .attr-value { flex: 1; word-break: break-word; font-size: 0.9rem; }
-.attr-lock { font-size: 0.85rem; }
+.attr-privacy-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.55rem;
+  white-space: nowrap;
+}
+.attr-privacy-btn:hover { border-color: var(--accent); color: var(--accent); }
 .attr-remove-btn { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 1.1rem; padding: 0 0.3rem; }
 .attr-form { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.7rem; align-items: center; }
 .attr-form input[type="text"] { flex: 1; min-width: 8rem; }

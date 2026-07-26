@@ -61,13 +61,23 @@ export async function deleteProfileAttr(qu, key) {
 }
 
 /**
- * All of `fingerprint`'s current (non-deleted) custom attributes as a
- * plain `{ key: value }` object. Filters by the QuBit's verified `writer`,
- * not by path — see file doc — so a stray write from someone else under
- * this identity's `attrs/` subtree (impossible under the normal ACL, since
- * only the owner/an authorized co-writer can write into a User-Space, but
- * never assumed away here regardless) can never masquerade as this
- * identity's own attribute.
+ * All of `fingerprint`'s current (non-deleted) custom attributes, as
+ * `{ key: { value, private } }` — `private` (session.js's `#decrypt()`
+ * now sets `encrypted: true` on a SUCCESSFUL decrypt too, not just on
+ * failure) tells a UI whether THIS attribute is currently encrypted for
+ * the owner only (setProfileAttr(..., { encryptFor: [ownFingerprint] }))
+ * vs. plain/public. Only ever meaningful for the OWNER's own view — a
+ * private attribute of someone ELSE never reaches this far at all (decrypt
+ * fails for a non-addressed reader, `q.value` stays `undefined`, filtered
+ * out below exactly as before), so `private` is never misleadingly `false`
+ * for a field a non-owner simply couldn't decrypt.
+ *
+ * Filters by the QuBit's verified `writer`, not by path — see file doc —
+ * so a stray write from someone else under this identity's `attrs/`
+ * subtree (impossible under the normal ACL, since only the owner/an
+ * authorized co-writer can write into a User-Space, but never assumed
+ * away here regardless) can never masquerade as this identity's own
+ * attribute.
  */
 export async function listProfileAttrs(qu, fingerprint) {
   const prefix = `${userSpaceId(fingerprint)}/${ATTR_PREFIX}/`;
@@ -76,7 +86,7 @@ export async function listProfileAttrs(qu, fingerprint) {
   for (const q of rows) {
     if (q.writer !== fingerprint) continue;
     if (q.value === null || q.value === undefined) continue;
-    attrs[q.id.slice(prefix.length)] = q.value;
+    attrs[q.id.slice(prefix.length)] = { value: q.value, private: !!q.encrypted };
   }
   return attrs;
 }

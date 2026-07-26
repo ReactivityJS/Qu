@@ -310,6 +310,7 @@ button { font-family: inherit; }
 .msg-meta .tick { color: var(--muted); }
 .msg-meta .tick.read { color: var(--accent-strong); }
 .msg-meta .tick.pending { opacity: 0.55; }
+.msg-edited { font-style: italic; opacity: 0.75; }
 .sync-badge { display: block; margin-top: 0.35rem; font-size: 0.72rem; color: var(--accent-strong); background: color-mix(in srgb, var(--accent-strong) 12%, transparent); border-radius: 6px; padding: 0.3rem 0.5rem; }
 .msg-sender { font-size: 0.72rem; color: var(--accent); margin-bottom: 0.15rem; }
 
@@ -444,6 +445,82 @@ button { font-family: inherit; }
   line-height: 1;
 }
 .emoji-picker button:hover { background: var(--border); }
+
+/* Popup für die Nachrichten-Aktionen (↩️➡️📤📋🔗) — ein einziges gemeinsames
+   Element, per JS neben dem jeweils angetippten ⋮-Button positioniert
+   (position: fixed, deshalb KEIN bottom/left wie .emoji-picker hier, das
+   setzt app.mjs direkt inline). */
+.message-actions-menu {
+  position: fixed;
+  z-index: 60;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.3rem;
+  min-width: 11rem;
+  box-shadow: 0 4px 16px #00000050;
+}
+.message-action-item {
+  all: unset;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.message-action-item:hover, .message-action-item:focus-visible { background: var(--border); }
+
+.reply-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  border-top: 1px solid var(--border);
+  border-left: 3px solid var(--accent-strong);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.reply-preview-body { flex: 1; min-width: 0; }
+.reply-preview-author { font-size: 0.78rem; color: var(--accent-strong); font-weight: 600; }
+.reply-preview-text { font-size: 0.82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Zitierter Ausschnitt EINER anderen Nachricht (q.value.replyTo) oben in
+   der Bubble — Autor+Zeitpunkt wie im Composer-Vorschau-Balken (s. o.),
+   plus der zum Zeitpunkt der Antwort gespeicherte Text-Schnappschuss
+   (bleibt lesbar, selbst falls das Original lokal längst nicht mehr da
+   ist). Ein Klick springt zum Original, sofern es in der aktuell
+   geladenen Historie steht (scrollToMessage()). */
+.msg-quote {
+  background: #00000030;
+  border-left: 3px solid var(--accent-strong);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  margin-bottom: 0.35rem;
+  cursor: pointer;
+}
+.msg-quote:hover { background: #00000050; }
+.msg-quote-author { font-size: 0.76rem; color: var(--accent-strong); font-weight: 600; }
+.msg-quote-time { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.1rem; }
+.msg-quote-text { font-size: 0.82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Immer sichtbar (nicht nur bei Hover) — Touch-Geräte haben kein Hover,
+   siehe die übrige Composer-/Popup-Gestaltung dieser App. Am Zeilenanfang
+   der .msg-meta-Reihe (vor Uhrzeit/Häkchen), durch margin-right: auto von
+   diesen getrennt statt selbst mit justify-content zu kollidieren. */
+.msg-actions-btn {
+  all: unset;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0.15rem 0.4rem;
+  margin-right: auto;
+  border-radius: 6px;
+}
+.msg-actions-btn:hover, .msg-actions-btn:focus-visible { background: var(--border); color: var(--text); }
 
 .pending-files { display: flex; gap: 0.4rem; flex-wrap: wrap; padding: 0 0.7rem 0.5rem; flex-shrink: 0; }
 .pending-file { display: flex; align-items: center; gap: 0.3rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.25rem 0.5rem; font-size: 0.75rem; }
