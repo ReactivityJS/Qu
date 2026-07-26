@@ -1177,7 +1177,18 @@ Design: `writers: relayAdmins` mit leerer Liste = niemand):
    ist.
 3. **Fingerprint eintragen**: den Relay-Prozess mit
    `QU_RELAY_ADMINS=<fingerprint>` neu starten (mehrere Admins
-   kommagetrennt: `QU_RELAY_ADMINS=<fp1>,<fp2>`).
+   kommagetrennt: `QU_RELAY_ADMINS=<fp1>,<fp2>`). `index.js` normalisiert
+   auf Kleinschreibung und loggt beim Start die TATSÄCHLICH übernommenen
+   Fingerprints im Klartext (`[Relay] Admin fingerprints configured (N): ...`)
+   — nicht nur eine Anzahl —, damit ein stiller Tippfehler/eine falsche
+   Groß-/Kleinschreibung aus einer `docker-compose.yml`/`.env`-Datei sofort
+   sichtbar ist, statt als scheinbar korrekt konfiguriert durchzugehen.
+   Ein Fingerprint ist IMMER Kleinschreibung (Hex) — falls ein
+   Schreibversuch trotz augenscheinlich passendem Fingerprint mit
+   `[ACL] Write denied for <fp> on admin/…` scheitert, zuerst diesen
+   Log-Eintrag mit dem tatsächlich in der Fehlermeldung genannten `<fp>`
+   Zeichen für Zeichen vergleichen (Copy-Paste-Stellen wie ein `.env`-Wert
+   in Anführungszeichen sind der häufigste Übeltäter).
 4. **Neu laden**: `/examples/relay-admin/index.html` erneut öffnen (dieselbe
    Identität wird aus `localStorage` wiederverwendet) — Toggle-Versuche
    wirken jetzt tatsächlich, sichtbar am aktualisierten Katalog. Im
