@@ -1157,6 +1157,46 @@ legitime Mesh-/Gossip-Weiterleitung) und wie eine eigene `ingestGate`-Regel
 aussieht, stehen in
 [API.md](./API.md#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate).
 
+### Relay-Admin einrichten (`QU_RELAY_ADMINS`)
+
+Kurzanleitung, um einem Relay einen Admin zuzuweisen — ohne diesen Schritt
+bleiben Services-Registry-Verwaltung und Admin-Kommandos (unten)
+komplett wirkungslos (jeder Schreibversuch scheitert an der ACL, per
+Design: `writers: relayAdmins` mit leerer Liste = niemand):
+
+1. **Relay einmal starten** (`node index.js` bzw. `npm start`), egal ob
+   `QU_RELAY_ADMINS` schon gesetzt ist oder nicht.
+2. **Die eigene Identität/Fingerprint besorgen** — dafür genügt es, EINE
+   beliebige Qu-App im Browser zu öffnen (z. B. `/examples/relay-admin/index.html`
+   selbst, oder `/examples/chat`/`/examples/people`) — jede davon legt beim
+   ersten Öffnen automatisch eine lokale Identität an (`localStorage`,
+   `examples/space-app-browser.js`s `loadOrCreateIdentity()`) und zeigt den
+   Fingerprint an (bei `/examples/relay-admin/` direkt oben unter "Deine
+   Identität"). Diese Seite selbst prüft zu diesem Zeitpunkt noch nichts —
+   das Öffnen funktioniert unabhängig davon, ob die Identität schon Admin
+   ist.
+3. **Fingerprint eintragen**: den Relay-Prozess mit
+   `QU_RELAY_ADMINS=<fingerprint>` neu starten (mehrere Admins
+   kommagetrennt: `QU_RELAY_ADMINS=<fp1>,<fp2>`).
+4. **Neu laden**: `/examples/relay-admin/index.html` erneut öffnen (dieselbe
+   Identität wird aus `localStorage` wiederverwendet) — Toggle-Versuche
+   wirken jetzt tatsächlich, sichtbar am aktualisierten Katalog. Im
+   Hauptportal (`/`) erscheint jetzt außerdem automatisch ein zusätzlicher
+   "🛠️ Admin"-Tab für genau diese Identität (`portal.mjs` fragt
+   `GET /relay/info`s `admins`-Liste ab und vergleicht sie mit lokal
+   gespeicherten Identitäten — reine Sichtbarkeits-/Komfortfunktion, keine
+   Sicherheitsgrenze; wer die URL kennt, kommt so oder so rein, die
+   eigentliche Durchsetzung bleibt die ACL-Prüfung beim Schreiben).
+
+Wichtig: `QU_RELAY_ADMINS` ist **nur per Neustart/Redeploy** änderbar,
+nicht zur Laufzeit über das Admin-Event-Protokoll (siehe unten) — bewusst,
+damit eine kompromittierte Admin-Identität sich nicht selbst dauerhaft
+weitere Rechte verschaffen kann. In `QU_STORE=memory`-Modus (flüchtig) hat
+der Relay selbst außerdem bei jedem Neustart eine NEUE eigene Identität
+(kein stabiler Fingerprint) — für einen dauerhaft funktionierenden
+Admin-Kanal ist der persistente Modus (Standard, kein `QU_STORE=memory`)
+nötig, siehe `relay/relay-identity.mjs`.
+
 **Services-Registry** (`server/service-registry.mjs`) — eine einzige
 Quelle der Wahrheit dafür, welche Services/Beispiele/Dokumentation ein
 Deployment anbietet, statt der früheren, zweifach (server- UND

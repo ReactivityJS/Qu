@@ -22,13 +22,23 @@
       <button class="category-tab" data-category="services" type="button">🚀 Services</button>
       <button class="category-tab" data-category="examples" type="button">🧪 Examples</button>
       <button class="category-tab" data-category="documentation" type="button">📖 Dokumentation</button>
+      <!-- Standardmäßig versteckt (`hidden`) — portal.mjs blendet diesen
+           Tab nur ein, wenn die LOKAL gespeicherte Identität dieses
+           Browsers zufällig ein per QU_RELAY_ADMINS gepinnter Fingerprint
+           ist (GET /relay/info liefert die Admin-Liste, ein Fingerprint
+           ist in diesem Framework nie geheim). Reine Sichtbarkeits-/
+           Komfort-Entscheidung, KEINE Sicherheitsgrenze — die eigentliche
+           Durchsetzung bleibt vollständig die Relay-seitige ACL-Prüfung
+           beim Schreiben (relay/relay.mjs); wer die URL kennt, kann
+           /examples/relay-admin/index.html jederzeit direkt öffnen. -->
+      <button class="category-tab" data-category="admin" type="button" hidden>🛠️ Admin</button>
     </nav>
 
     <!-- Karteninhalte werden von portal.mjs aus GET /relay/services befüllt
          (server/service-registry.mjs) — nicht mehr hartcodiert, siehe
          portal.mjs's Kommentar. Services: eigenständige, tatsächlich
          nutzbare Apps. Examples: kurze, fokussierte Code-Module. Documentation:
-         alles zum Nachlesen. -->
+         alles zum Nachlesen. Admin: nur für erkannte Admin-Identitäten (s.o.). -->
     <section class="cards-section" data-category="services">
       <nav class="cards"></nav>
     </section>
@@ -38,6 +48,10 @@
     </section>
 
     <section class="cards-section" data-category="documentation">
+      <nav class="cards"></nav>
+    </section>
+
+    <section class="cards-section" data-category="admin">
       <nav class="cards"></nav>
     </section>
   </main>
