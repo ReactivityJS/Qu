@@ -140,6 +140,11 @@ button { font-family: inherit; }
   font-size: 1.1rem;
   flex-shrink: 0;
 }
+/* Nur von attach-btn/location-btn/voice-btn benutzt — im Icon-Modus
+   (Standard, s. .composer-extras oben) unsichtbar; im Handy-Popup
+   (760px-Breakpoint unten) wieder eingeblendet, damit eine vertikale
+   Liste aus drei Icons allein (ohne Beschriftung) nicht mehrdeutig ist. */
+.icon-btn-label { display: none; }
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 .icon-btn:active { transform: scale(0.94); }
 .icon-btn.active { background: var(--danger); border-color: var(--danger); color: #fff; }
@@ -373,6 +378,16 @@ button { font-family: inherit; }
 }
 .composer textarea:focus { outline: none; border-color: var(--accent); }
 .composer .icon-btn { background: none; border: none; }
+
+/* Default (breit genug, s. den 760px-Breakpoint unten): 📎/📍/🎤 laufen
+   direkt in der Eingabezeile mit — .composer-extras trägt sie nur als
+   Klammer im Markup (app.mjs braucht einen Container zum Ein-/Ausblenden
+   des Popups auf Handy-Breite), erscheint hier aber selbst NICHT im Layout
+   ("display: contents"), ihre Kind-Buttons verhalten sich also exakt wie
+   vorher direkte Geschwister von textarea/emoji-btn. Der "➕"-Umschalter
+   ist hier unnötig (jede Aktion hat eh schon ihr eigenes Icon). */
+.composer-extras { display: contents; }
+.extras-toggle-btn { display: none; }
 .send-btn {
   background: var(--accent-strong);
   color: #06202b;
@@ -714,6 +729,35 @@ button { font-family: inherit; }
   .app.chat-open .chat-panel { display: flex; }
   .back-btn { display: inline-flex; align-items: center; }
   .attachment-media { max-width: 70vw; }
+
+  /* Auf Handy-Breite bräuchten 😊+📎+📍+🎤+Textfeld+Senden nebeneinander
+     zu viel Platz — das Eingabefeld selbst würde dadurch unbrauchbar
+     schmal. 📎/📍/🎤 wandern daher hinter einen einzelnen "➕"-Umschalter
+     in ein Popup (gleiches Muster wie .emoji-picker: über der Eingabezeile,
+     schließt bei Klick daneben/auf eine der drei Aktionen — s. app.mjs).
+     Jede Touch-Fläche bleibt dabei die volle .icon-btn-Größe, keine
+     verkleinerten Buttons. */
+  .composer-extras {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 0.7rem;
+    margin-bottom: 0.4rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.3rem;
+    flex-direction: column;
+    gap: 0.1rem;
+    box-shadow: 0 4px 16px #00000050;
+  }
+  .composer-extras.open { display: flex; }
+  /* min-height statt fixer height — 2.75rem (44px) ist die gängige
+     Mindest-Touch-Zielgröße, größer als das sonst überall genutzte
+     2.25rem-.icon-btn-Rund. */
+  .composer-extras .icon-btn { width: 100%; min-height: 2.75rem; height: auto; border-radius: 10px; justify-content: flex-start; gap: 0.7rem; padding: 0.55rem 0.8rem; font-size: 1.05rem; }
+  .composer-extras .icon-btn-label { display: inline; font-size: 0.92rem; }
+  .extras-toggle-btn { display: flex; }
 }
 
 @media (min-width: 761px) {

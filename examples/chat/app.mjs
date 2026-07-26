@@ -143,6 +143,8 @@ const textInput = $('text-input');
 const fileInput = $('file-input');
 const attachBtn = $('attach-btn');
 const pendingFilesEl = $('pending-files');
+const extrasToggleBtn = $('extras-toggle-btn');
+const composerExtras = $('composer-extras');
 const locationBtn = $('location-btn');
 const voiceBtn = $('voice-btn');
 const voiceRecorderEl = $('voice-recorder');
@@ -332,6 +334,24 @@ emojiBtn.addEventListener('click', () => { emojiPicker.hidden = !emojiPicker.hid
 document.addEventListener('click', (ev) => {
   if (!emojiPicker.hidden && !emojiPicker.contains(ev.target) && ev.target !== emojiBtn) emojiPicker.hidden = true;
 });
+
+// --- "➕"-Popup für 📎/📍/🎤 auf Handy-Breite (style.css's 760px-Breakpoint
+// klappt .composer-extras dafür von "läuft normal in der Zeile mit" auf
+// "Popup über der Eingabezeile" um) — dieselbe attach-btn/location-btn/
+// voice-btn-Elemente wie in der breiten Ansicht, nur die JS-Sichtbarkeits-
+// steuerung des Popups selbst kommt hier dazu. Unterhalb des Breakpoints
+// ist extrasToggleBtn per CSS ausgeblendet, ein Klick darauf also ohnehin
+// unmöglich — kein zusätzlicher Breite-Check hier nötig.
+extrasToggleBtn.addEventListener('click', () => composerExtras.classList.toggle('open'));
+document.addEventListener('click', (ev) => {
+  if (composerExtras.classList.contains('open') && !composerExtras.contains(ev.target) && ev.target !== extrasToggleBtn) {
+    composerExtras.classList.remove('open');
+  }
+});
+// Nach der Wahl einer Aktion (Anhang/Standort/Sprachnachricht) schließt
+// sich das Popup von selbst, statt offen stehen zu bleiben, bis irgendwo
+// daneben getippt wird.
+composerExtras.addEventListener('click', (ev) => { if (ev.target.closest('button')) composerExtras.classList.remove('open'); });
 
 // --- Lightbox: Vollbild + einfacher Tap-Zoom ---
 const lightboxEl = $('lightbox');
