@@ -39,8 +39,32 @@
  *     entry?: string,             // simple redirect target, e.g. '/examples/chat/index.html'
  *     routes?: [{ match(pathname), handle(req,res) }], // optional — exact server/static-server.mjs shape
  *     ingestGates?: [(ctx, next) => Promise<void>],     // optional — exact src/network/ingest-gate.js shape
+ *     onAdminEvent?: (action, payload) => any,          // optional — see relay/relay.mjs's admin/service/<id>/<action> dispatch
  *     enabledByDefault?: boolean, // default true
  *   }
+ *
+ * THE CUSTOM-SERVICE EXTENSION CONTRACT (category: 'custom'): a third
+ * party (not this repo) extends a relay deployment by writing a
+ * `createXService(opts) -> definition` factory (same naming convention as
+ * `createXPlugin()`/`createXRoutes()` elsewhere) and passing its result
+ * into this function's `definitions` array — see relay/services/fail2ban.mjs
+ * for a worked reference implementation (ingestGates + onAdminEvent both
+ * used together).
+ *
+ * Deliberately CODE-LEVEL / DEPLOY-TIME ONLY — a NEW custom service still
+ * needs a restart to install (same as any other option added to
+ * createRelay()/index.js). This is NOT an oversight to "fix" by adding
+ * remote/dynamic registration later: a custom service's `ingestGates` can
+ * accept or reject arbitrary pushes for the WHOLE relay (the same trust
+ * level as `requireDirectWriterGate`/`rateLimitGate`), so loading one from
+ * a wire message would mean executing code an admin merely CLAIMED
+ * ownership of, not code this deployment's own operator chose and
+ * reviewed — a fundamentally different, and unacceptable, trust boundary
+ * for this codebase's "no dynamic code loading" model. What genuinely CAN
+ * be administered remotely, no restart, is an ALREADY-INSTALLED custom
+ * service's ENABLED flag (setEnabled(), same as any other code-defined
+ * service) and its own admin-event actions (onAdminEvent(), e.g.
+ * fail2ban's "unban" — configuration, never new logic).
  */
 export function createServiceRegistry(definitions = []) {
   const services = new Map(); // code-defined — declared in index.js, can carry routes/ingestGates (real code, only ever added at startup, see file doc above)
@@ -135,17 +159,21 @@ export function createServiceRegistry(definitions = []) {
     },
 
     /**
-     * Every currently-enabled service's ingest gates, in definition order —
-     * consumed once at connection-attach time (see relay/relay.mjs), same
-     * "installed once, cheap flag re-read per push" split as routes()
-     * above applies inside each gate's own `if (!isEnabled(id)) return
-     * next()` check (a gate that needs to react to being toggled off
-     * mid-connection checks the registry itself, this method only decides
-     * which gates get WIRED IN AT ALL for a brand-new connection).
+     * Every CODE-defined service's ingest gates (store-defined/dynamic
+     * entries never carry ones, see file doc above), each wrapped with the
+     * same live `enabled` check routes() uses — a disabled custom service
+     * (e.g. relay/services/fail2ban.mjs toggled off via an admin command)
+     * must stop enforcing immediately, without the gate pipeline itself
+     * (built once per connection, see network/replication/default.js)
+     * ever being rebuilt.
      */
     ingestGates() {
       const out = [];
-      for (const def of services.values()) out.push(...(def.ingestGates ?? []));
+      for (const def of services.values()) {
+        for (const gate of def.ingestGates ?? []) {
+          out.push(async (ctx, next) => (def.enabled ? gate(ctx, next) : next()));
+        }
+      }
       return out;
     },
 

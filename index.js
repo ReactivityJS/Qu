@@ -23,6 +23,7 @@ import { createServiceRegistry } from './server/service-registry.mjs';
 import { createRelayInfoRoutes } from './server/relay-info-routes.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { loadOrGenerateRelayIdentity } from './relay/relay-identity.mjs';
+import { createFail2banService } from './relay/services/fail2ban.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
 import { sendWebPush, generateVapidKeys } from './relay/webpush.mjs';
@@ -99,6 +100,17 @@ const registry = createServiceRegistry([
   // a non-admin visitor a confusing detour into an app they can open but
   // can't do anything privileged in.
   { id: 'relay-admin', category: 'admin', label: 'Relay-Admin', description: 'Services verwalten (nur für QU_RELAY_ADMINS-Fingerprints).', entry: '/examples/relay-admin/index.html' },
+  // Reference custom service (relay/services/fail2ban.mjs, see
+  // server/service-registry.mjs's extension contract doc for the full
+  // reasoning) — registered but OFF by default: this demo deployment
+  // shouldn't silently start banning fingerprints without an operator
+  // deliberately turning it on. Enable it either at startup
+  // (QU_SERVICES_DISABLED does the opposite — remove 'fail2ban' from
+  // that env var's list, or just don't rely on enabledByDefault and flip
+  // it directly here) or live, via the same admin/service/fail2ban
+  // toggle command every other code-defined service already supports —
+  // no restart needed either way once QU_RELAY_ADMINS is configured.
+  { ...createFail2banService(), enabledByDefault: false },
 ]);
 for (const id of (process.env.QU_SERVICES_DISABLED || '').split(',').map((s) => s.trim()).filter(Boolean)) {
   registry.setEnabled(id, false);
