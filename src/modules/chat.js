@@ -33,8 +33,16 @@ function randomId() {
  * `progress`. Purely a pass-through so a UI can show upload progress for
  * a large attachment (e.g. a video) instead of an unexplained pause; has
  * no effect on what gets written or how.
+ *
+ * `replyTo`, if given, is stored as-is inside the message value (e.g.
+ * `{ id, writer, ts, text }` — a UI-chosen snapshot of the quoted message,
+ * not just its id) — this module has no opinion on its shape, it only
+ * carries it through. A snapshot instead of a bare id lets a UI render the
+ * quote (author/time/snippet) without an extra lookup, and keeps it
+ * displayable even if the original message is later deleted locally on
+ * this device.
  */
-export async function sendMessage(space, { text, attachments = [], encryptFor, onAttachmentProgress } = {}) {
+export async function sendMessage(space, { text, attachments = [], encryptFor, onAttachmentProgress, replyTo } = {}) {
   const fp = space.session.fingerprint;
   const refs = [];
   for (let i = 0; i < attachments.length; i++) {
@@ -57,7 +65,7 @@ export async function sendMessage(space, { text, attachments = [], encryptFor, o
     });
     refs.push(manifestId);
   }
-  const result = await space.get('msgs').set({ text }, { refs: refs.length ? refs : undefined, encryptFor });
+  const result = await space.get('msgs').set({ text, replyTo }, { refs: refs.length ? refs : undefined, encryptFor });
   return { ...result, refs };
 }
 

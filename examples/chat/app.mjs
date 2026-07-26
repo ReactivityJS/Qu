@@ -168,6 +168,16 @@ const composer = $('composer');
 const textInput = $('text-input');
 const fileInput = $('file-input');
 const attachBtn = $('attach-btn');
+const replyPreviewEl = $('reply-preview');
+const replyPreviewAuthorEl = $('reply-preview-author');
+const replyPreviewTextEl = $('reply-preview-text');
+const replyCancelBtn = $('reply-cancel-btn');
+const messageActionsMenuEl = $('message-actions-menu');
+const msgActionReplyBtn = $('msg-action-reply');
+const msgActionForwardBtn = $('msg-action-forward');
+const msgActionShareBtn = $('msg-action-share');
+const msgActionCopyBtn = $('msg-action-copy');
+const msgActionCopyLinkBtn = $('msg-action-copy-link');
 const pendingFilesEl = $('pending-files');
 const extrasToggleBtn = $('extras-toggle-btn');
 const composerExtras = $('composer-extras');
@@ -2081,6 +2091,39 @@ async function main() {
     return a;
   }
 
+  /** "Du" für die eigene Identität, sonst der bekannte Alias/Kurz-Fingerprint — dieselbe Konvention wie renderRoomList()s "Du: <Vorschau>". */
+  function authorNameFor(fp) {
+    return fp === qu.fingerprint ? 'Du' : (contactByFp(fp)?.alias ?? shortFp(fp));
+  }
+
+  /**
+   * Der zitierte Ausschnitt einer ANDEREN Nachricht oben in der Bubble
+   * (q.value.replyTo, s. dessen Doku in chat.js) — Autor+Zeitpunkt+Text
+   * kommen als beim Antworten gespeicherter SCHNAPPSCHUSS, nicht per
+   * Nachschlagen der Originalnachricht (die könnte lokal längst nicht
+   * mehr geladen/verfügbar sein). Ein Klick springt trotzdem zum
+   * Original, sofern es in der GERADE geladenen Historie steht.
+   */
+  function buildReplyQuote(replyTo) {
+    const quote = el('div', 'msg-quote');
+    quote.appendChild(el('div', 'msg-quote-author', authorNameFor(replyTo.writer)));
+    quote.appendChild(el('div', 'msg-quote-time', `${fmtDayLabel(replyTo.ts)} · ${fmtTime(replyTo.ts)}`));
+    if (replyTo.text) quote.appendChild(el('div', 'msg-quote-text', replyTo.text));
+    quote.addEventListener('click', (ev) => { ev.stopPropagation(); scrollToMessage(replyTo.id); });
+    return quote;
+  }
+
+  /** ⋮-Button in der .msg-meta-Reihe — öffnet das gemeinsame Aktionsmenü (openMessageActionsMenu() unten) für GENAU diese Nachricht. */
+  function buildMessageActionsBtn(q, roomId) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'msg-actions-btn';
+    btn.title = 'Weitere Optionen';
+    btn.textContent = '⋮';
+    btn.addEventListener('click', (ev) => { ev.stopPropagation(); openMessageActionsMenu(q, roomId, btn); });
+    return btn;
+  }
+
   /** Baut genau ein `<li class="msg">` — geteilt zwischen dem vollständigen Neuaufbau (renderMessageList()) und dem Anhängen einer einzelnen neuen Live-Nachricht (appendLiveMessage()), damit beide garantiert dasselbe Markup erzeugen. */
   async function buildMessageItem(q, roomId) {
     const mine = q.writer === qu.fingerprint;
@@ -2088,6 +2131,7 @@ async function main() {
     li.dataset.ts = q.ts;
     li.dataset.id = q.id;
     const bubble = el('div', 'msg-bubble');
+    if (q.value?.replyTo) bubble.appendChild(buildReplyQuote(q.value.replyTo));
     if (q.value?.text) {
       // Ein Text, der NUR aus einem einzelnen Link besteht (z. B. genau
       // das, was der 📍-Standort-Button verschickt), bräuchte sonst die
@@ -2119,6 +2163,7 @@ async function main() {
     }
     li.appendChild(bubble);
     const meta = el('div', 'msg-meta');
+    meta.appendChild(buildMessageActionsBtn(q, roomId));
     meta.appendChild(document.createTextNode(fmtTime(q.ts)));
     if (mine) {
       const tick = document.createElement('qu-msg-tick');
@@ -2133,20 +2178,39 @@ async function main() {
 
   let lastRenderedDay = null; // von renderMessageList() (Neuaufbau) UND appendLiveMessage() (einzelne neue Nachricht) gemeinsam gepflegter Tages-Trenner-Zustand der aktuell angezeigten Liste
 
-  async function renderMessageList(roomId) {
+  /**
+   * `scrollToId`: springt (mit demselben Hervorheben wie scrollToMessage())
+   * zu GENAU dieser Nachricht statt ans Ende — showChatScreen() übergibt
+   * hier die erste noch ungelesene Nachricht (aus dem VOR dem Öffnen
+   * gelesenen `unread`-Zähler, bevor der auf 0 zurückgesetzt wird), damit
+   * ein Chat mit langer ungelesener Historie nicht direkt bei der
+   * neuesten (und damit ggf. mittendrin übersprungenen) Nachricht landet.
+   * `undefined`/keine Übereinstimmung in der Liste (z. B. `unread` war
+   * größer als die tatsächlich geladene Historie) fällt auf das bisherige
+   * Verhalten zurück: ans Ende (neueste Nachricht).
+   */
+  async function renderMessageList(roomId, scrollToId) {
     messageListEl.textContent = '';
     lastRenderedDay = null;
     const list = messagesByRoom.get(roomId) ?? [];
+    let scrollTargetLi = null;
     for (const q of list) {
       const dayLabel = fmtDayLabel(q.ts);
       if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-      messageListEl.appendChild(await buildMessageItem(q, roomId));
+      const li = await buildMessageItem(q, roomId);
+      messageListEl.appendChild(li);
+      if (scrollToId && q.id === scrollToId) scrollTargetLi = li;
     }
-    // Ein frisch geöffneter Chat startet immer unten (neueste Nachricht),
-    // unabhängig vom bisherigen Scroll-Zustand — anders als
-    // appendLiveMessage() unten, das das bewusst NUR tut, wenn man schon
-    // dort war.
-    messageListEl.scrollTop = messageListEl.scrollHeight;
+    if (scrollTargetLi) {
+      scrollTargetLi.scrollIntoView({ block: 'center' });
+      scrollTargetLi.querySelector('.msg-bubble')?.classList.add('jump-highlight');
+    } else {
+      // Ein frisch geöffneter Chat ohne (auffindbares) ungelesenes Ziel
+      // startet unten (neueste Nachricht), unabhängig vom bisherigen
+      // Scroll-Zustand — anders als appendLiveMessage() unten, das das
+      // bewusst NUR tut, wenn man schon dort war.
+      messageListEl.scrollTop = messageListEl.scrollHeight;
+    }
   }
 
   /** Hängt EINE neu eingetroffene Live-Nachricht an, statt die komplette Liste neu aufzubauen (kein erneutes Laden/Rendern schon vorhandener Anhänge bei jeder neuen Nachricht) — folgt dem Ende nur, wenn man vorher schon dort war (isNearBottom()), reißt also niemanden aus der gerade gelesenen älteren Historie. */
@@ -2168,6 +2232,11 @@ async function main() {
   /** Ein Chat — `/<roomId>` (Router). */
   async function showChatScreen(room) {
     const roomId = room.id;
+    // Eine noch offene Antwort-Vorschau gehört zu GENAU dem Raum, in dem
+    // sie gestartet wurde (replyTarget.roomId, s. dessen Doku oben) — beim
+    // Wechsel in einen ANDEREN Chat verworfen, sonst würde sie dort
+    // fälschlich weiter angezeigt/mitgesendet.
+    if (replyTarget && replyTarget.roomId !== roomId) { replyTarget = null; renderReplyPreview(); }
     activeRoomId = roomId;
     renderRoomHeader(room);
     peerStatusEl.textContent = '…';
@@ -2198,8 +2267,19 @@ async function main() {
       });
     }
     renderPresence(roomId);
+    // Erste ungelesene Nachricht VOR dem untenstehenden upsertRoom(unread: 0)
+    // bestimmen — danach ist der Zähler weg. `unread` ist die Anzahl der
+    // NEUESTEN Nachrichten seit dem letzten Lesen (s. dessen Doku bei der
+    // Live-Nachrichten-Verarbeitung oben) — die erste davon ist also genau
+    // `list.length - unread` in der bereits chronologisch sortierten Liste.
+    // Ungültige/veraltete Zählerstände (0, "mehr als geladen") fallen
+    // einfach auf `undefined` zurück -> renderMessageList() scrollt dann
+    // wie bisher ans Ende (neueste Nachricht).
+    const unreadCount = roomById(roomId)?.unread ?? 0;
+    const list = messagesByRoom.get(roomId) ?? [];
+    const firstUnreadId = unreadCount > 0 && unreadCount < list.length ? list[list.length - unreadCount].id : undefined;
     upsertRoom(roomId, { unread: 0 }); // löst renderRoomList() selbst über die zentrale rooms-Subscription aus (siehe main())
-    await renderMessageList(roomId);
+    await renderMessageList(roomId, firstUnreadId);
     await markActiveRead();
   }
   backBtn.addEventListener('click', closeScreen);
@@ -2291,8 +2371,28 @@ async function main() {
       top.appendChild(el('span', 'search-result-name', isGroupRoom(room) ? `${name} · ${senderName}` : name));
       top.appendChild(el('span', 'search-result-time', `${fmtDayLabel(q.ts)} · ${fmtTime(q.ts)}`));
       body.appendChild(top);
-      const text = q.value?.text || (q.refs?.length ? '📎 Anhang' : '');
-      body.appendChild(buildSnippet(text, query));
+      // Dieselbe Darstellung wie im Chat selbst statt einer bloßen
+      // Platzhalter-Zeile ("📎 Anhang") — buildLinkPreview()/renderAttachment()
+      // sind exakt dieselben Funktionen, die auch buildMessageItem() für
+      // eine echte Chat-Bubble aufruft, hier nur zusätzlich zum
+      // Text-Snippet statt in einer eigenen Bubble. `stopPropagation()`
+      // auf jedem eingebetteten interaktiven Ergebnis (Link öffnen,
+      // Bild-Lightbox, Anhang laden) verhindert, dass so ein Klick ZUSÄTZLICH
+      // noch das äußere li.onclick (Sprung zur Nachricht) auslöst — ein
+      // Klick soll hier klar EINE der beiden Aktionen sein, nie beide auf
+      // einmal.
+      if (q.value?.text) body.appendChild(buildSnippet(q.value.text, query));
+      const linkPreview = q.value?.text ? buildLinkPreview(q.value.text) : null;
+      if (linkPreview) {
+        linkPreview.addEventListener('click', (ev) => ev.stopPropagation());
+        body.appendChild(linkPreview);
+      }
+      for (const refId of q.refs ?? []) {
+        renderAttachment(refId).then((node) => {
+          node.addEventListener('click', (ev) => ev.stopPropagation());
+          body.appendChild(node);
+        });
+      }
       li.appendChild(body);
       li.addEventListener('click', () => openSearchResult(roomId, q.id));
       searchResultsEl.appendChild(li);
@@ -2332,6 +2432,121 @@ async function main() {
   async function openSearchResult(roomId, messageId) {
     await navigate(roomId, 'msg', messageId);
   }
+
+  /** Voller, teilbarer Direktlink zu genau dieser Nachricht — dieselbe Route wie openSearchResult()/renderRoute()'s `/<roomId>/msg/<id>`, hier als absolute URL (für Zwischenablage/System-Teilen statt nur internes Navigieren). */
+  function messageLink(roomId, messageId) {
+    return location.origin + location.pathname + buildPath(roomId, 'msg', messageId);
+  }
+
+  // --- Antworten (Zitat) ---
+  // replyTarget: { id, writer, ts, text } — ein SCHNAPPSCHUSS der Original-
+  // nachricht (nicht nur ihre Id), damit buildReplyQuote() ihn auch dann
+  // noch anzeigen kann, wenn das Original lokal längst nicht mehr geladen
+  // ist. Wird composer.submit (unten) als `replyTo` mitgegeben und danach
+  // geleert — eine "aktive Antwort" ist ausschließlich ein Zustand DIESES
+  // Composers, nicht Teil der Nachricht, bevor sie abgeschickt ist.
+  let replyTarget = null;
+  function renderReplyPreview() {
+    replyPreviewEl.hidden = !replyTarget;
+    if (!replyTarget) return;
+    replyPreviewAuthorEl.textContent = authorNameFor(replyTarget.writer);
+    replyPreviewTextEl.textContent = replyTarget.text || '📎 Anhang';
+  }
+  replyCancelBtn.addEventListener('click', () => { replyTarget = null; renderReplyPreview(); });
+
+  // --- Aktionsmenü einer Nachricht (⋮ in .msg-meta, s. buildMessageActionsBtn()) ---
+  let messageActionsContext = null; // { q, roomId } für die Nachricht, deren Menü gerade offen ist
+  function openMessageActionsMenu(q, roomId, btn) {
+    messageActionsContext = { q, roomId };
+    const rect = btn.getBoundingClientRect();
+    // "Teilen" nur, wenn es die Web Share API überhaupt gibt — sonst ein
+    // Knopf, der bei jedem Klick sichtbar nichts täte.
+    msgActionShareBtn.hidden = !navigator.share;
+    // Weiterleiten braucht Text (s. msgActionForwardBtn's eigene Doku
+    // weiter unten — Anhänge werden bewusst nicht mit übernommen) — bei
+    // einer reinen Anhang-Nachricht ohne Text gäbe es sonst einen Knopf,
+    // der wirkungslos bliebe statt einfach gar nicht erst dazustehen.
+    msgActionForwardBtn.hidden = !q.value?.text;
+    messageActionsMenuEl.hidden = false;
+    // ERST einblenden, DANN messen (offsetHeight bei hidden wäre 0) — an
+    // den unteren/rechten Rand andocken statt über den sichtbaren Bereich
+    // hinauszuragen, falls der Button nahe am Rand sitzt (z. B. die
+    // jeweils erste/letzte Nachricht in einem kurzen Chat-Fenster).
+    const menuRect = messageActionsMenuEl.getBoundingClientRect();
+    let top = rect.bottom + 4;
+    if (top + menuRect.height > window.innerHeight) top = Math.max(4, rect.top - menuRect.height - 4);
+    let left = rect.left;
+    if (left + menuRect.width > window.innerWidth) left = window.innerWidth - menuRect.width - 4;
+    messageActionsMenuEl.style.top = `${top}px`;
+    messageActionsMenuEl.style.left = `${Math.max(4, left)}px`;
+  }
+  function closeMessageActionsMenu() {
+    messageActionsMenuEl.hidden = true;
+    messageActionsContext = null;
+  }
+  document.addEventListener('click', (ev) => {
+    if (!messageActionsMenuEl.hidden && !messageActionsMenuEl.contains(ev.target) && !ev.target.closest('.msg-actions-btn')) {
+      closeMessageActionsMenu();
+    }
+  });
+
+  msgActionReplyBtn.addEventListener('click', () => {
+    const { q, roomId } = messageActionsContext;
+    closeMessageActionsMenu();
+    replyTarget = { id: q.id, writer: q.writer, ts: q.ts, text: q.value?.text || '', roomId };
+    renderReplyPreview();
+    textInput.focus();
+  });
+
+  msgActionCopyBtn.addEventListener('click', async () => {
+    const { q } = messageActionsContext;
+    closeMessageActionsMenu();
+    if (q.value?.text) await navigator.clipboard.writeText(q.value.text).catch(() => {});
+  });
+
+  msgActionCopyLinkBtn.addEventListener('click', async () => {
+    const { q, roomId } = messageActionsContext;
+    closeMessageActionsMenu();
+    await navigator.clipboard.writeText(messageLink(roomId, q.id)).catch(() => {});
+    statusBar.textContent = 'Link kopiert.';
+    setTimeout(() => { if (statusBar.textContent === 'Link kopiert.') statusBar.textContent = 'Verbunden'; }, 2000);
+  });
+
+  msgActionShareBtn.addEventListener('click', async () => {
+    const { q, roomId } = messageActionsContext;
+    closeMessageActionsMenu();
+    if (!navigator.share) return;
+    try {
+      await navigator.share({ text: q.value?.text || undefined, url: messageLink(roomId, q.id) });
+    } catch { /* Nutzer hat den System-Teilen-Dialog abgebrochen — kein Fehler */ }
+  });
+
+  /**
+   * Weiterleiten — öffnet DASSELBE Zielauswahl-Modal wie ein externer
+   * "Teilen an QU Chat"-Share (share-target-modal/pendingShare/
+   * applyShareToRoom(), s. dort), nur AD-HOC statt über den Router
+   * (shareTargetIsRouted = false, s. closeShareTargetModal()) — dieselbe
+   * Chat-Auswahl + Composer-Übernahme, ohne den Umweg über
+   * Service-Worker/Cache, der nur für einen ECHTEN externen Share nötig
+   * ist. Anhänge werden dabei bewusst NICHT mit weitergeleitet (bräuchte
+   * ein erneutes Herunterladen+Entschlüsseln+Hochladen der Originaldatei
+   * — als klar kommunizierte Einschränkung einfacher als eine
+   * halbfertige/unzuverlässige Variante).
+   */
+  msgActionForwardBtn.addEventListener('click', () => {
+    const { q } = messageActionsContext;
+    closeMessageActionsMenu();
+    if (!q.value?.text) return; // keine reine Anhang-Nachricht ohne Text weiterleitbar, s. o.
+    shareTargetIsRouted = false;
+    pendingShare = { text: q.value.text, url: '', title: '', files: [] };
+    shareTargetSummaryEl.textContent = q.refs?.length
+      ? 'Nachricht weiterleiten (nur Text — Anhänge werden nicht mit übernommen)'
+      : 'Nachricht weiterleiten';
+    shareTargetRoomListEl.textContent = '';
+    shareTargetErrorEl.textContent = '';
+    shareTargetModal.hidden = false;
+    renderShareTargetRoomList();
+  });
 
   /** Suche über alle Chats — `/search` (Router). */
   function showSearchScreen() {
@@ -2634,6 +2849,10 @@ async function main() {
       // einer Gruppe sind es entsprechend mehr.
       const sent = await qu.sendMessage(roomId, {
         text, attachments, encryptFor: [qu.fingerprint, ...room.members],
+        // roomId (nur intern zum Erkennen eines Raumwechsels genutzt, s.
+        // replyTarget's eigene Doku) gehört NICHT in die gespeicherte
+        // Nachricht — innerhalb eines Raums ohnehin immer derselbe.
+        replyTo: replyTarget ? { id: replyTarget.id, writer: replyTarget.writer, ts: replyTarget.ts, text: replyTarget.text } : undefined,
         // Fortschritt für lokales Verschlüsseln/Zerstückeln GROSSER Anhänge
         // (z. B. ein Video) — ohne das sah ein größerer Upload nach einem
         // hängenden Sendevorgang aus, weil die UI vorher bis zum Schluss
@@ -2657,6 +2876,8 @@ async function main() {
       autoGrow();
       pendingFiles = [];
       renderPendingFiles();
+      replyTarget = null;
+      renderReplyPreview();
 
       // "Beim Relay angekommen?"-Status: als unbestätigt eintragen (auch
       // persistiert, siehe PENDING_DELIVERY_KEY) und im Hintergrund prüfen
@@ -2986,6 +3207,7 @@ async function main() {
   }
 
   async function showShareTargetScreen(id) {
+    shareTargetIsRouted = true;
     shareTargetSummaryEl.textContent = 'Lädt …';
     shareTargetRoomListEl.textContent = '';
     shareTargetErrorEl.textContent = '';
@@ -3013,6 +3235,7 @@ async function main() {
    * Fehlschlag ohne Erklärung).
    */
   function showShareBlockedScreen() {
+    shareTargetIsRouted = true;
     shareTargetSummaryEl.textContent = '"Teilen an QU Chat" ist deaktiviert (Einstellungen → Privatsphäre). Es wurde nichts übernommen.';
     shareTargetRoomListEl.textContent = '';
     shareTargetErrorEl.textContent = '';
@@ -3035,8 +3258,23 @@ async function main() {
     textInput.focus();
   }
 
-  $('share-target-cancel-btn').addEventListener('click', () => { pendingShare = null; closeScreen(); });
-  shareTargetModal.addEventListener('click', (ev) => { if (ev.target === shareTargetModal) { pendingShare = null; closeScreen(); } });
+  /**
+   * `true`, solange dieser Screen über den Router kam (`/share/<id>` bzw.
+   * `/share-blocked`, s. showShareTargetScreen()/showShareBlockedScreen())
+   * — dann hinterlässt navigate() einen echten Verlaufseintrag, "Abbrechen"
+   * muss also history.back() sein (closeScreen()). Weiterleiten (msg-action-
+   * forward-Handler unten) öffnet dasselbe Modal dagegen AD-HOC, ohne
+   * Router-Beteiligung — dort wäre closeScreen() falsch (könnte je nach
+   * vorherigem Verlauf aus dem gerade offenen Chat heraus navigieren statt
+   * nur dieses Modal zu schließen).
+   */
+  let shareTargetIsRouted = false;
+  function closeShareTargetModal() {
+    pendingShare = null;
+    if (shareTargetIsRouted) closeScreen(); else shareTargetModal.hidden = true;
+  }
+  $('share-target-cancel-btn').addEventListener('click', closeShareTargetModal);
+  shareTargetModal.addEventListener('click', (ev) => { if (ev.target === shareTargetModal) closeShareTargetModal(); });
 
   // --- Neuer 1:1-Chat — `/add-contact[/<fp>]` (Router; die zweite Form ist
   // auch das Ziel eines geteilten Einladungslinks, siehe share-link-btn) ---
