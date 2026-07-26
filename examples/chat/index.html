@@ -76,10 +76,21 @@
       <form id="composer" class="composer">
         <button id="emoji-btn" class="icon-btn" type="button" title="Emoji">😊</button>
         <div id="emoji-picker" class="emoji-picker" hidden></div>
-        <button id="attach-btn" class="icon-btn" type="button" title="Anhang">📎</button>
-        <input id="file-input" type="file" multiple hidden accept="image/*,video/*,audio/*" />
-        <button id="location-btn" class="icon-btn" type="button" title="Standort teilen">📍</button>
-        <button id="voice-btn" class="icon-btn" type="button" title="Sprachnachricht aufnehmen">🎤</button>
+        <!-- Ab einer schmalen (Handy-)Breite blendet style.css .extras-toggle-btn
+             ein und .composer-extras auf ein Popup um (bottom: 100%, wie
+             .emoji-picker) statt es normal in der Eingabezeile mitlaufen zu
+             lassen — ab der Breakpoint-Breite zeigt .composer-extras
+             (display: contents) dieselben drei Buttons stattdessen wieder
+             EINZELN direkt in der Zeile, wie zuvor. Dieselben Elemente/
+             Klick-Handler in app.mjs für beide Darstellungen, nur die
+             Anordnung ändert sich per CSS. -->
+        <button id="extras-toggle-btn" class="icon-btn extras-toggle-btn" type="button" title="Weitere Optionen">➕</button>
+        <div id="composer-extras" class="composer-extras">
+          <button id="attach-btn" class="icon-btn" type="button" title="Anhang"><span class="icon-btn-glyph">📎</span><span class="icon-btn-label">Anhang</span></button>
+          <input id="file-input" type="file" multiple hidden accept="image/*,video/*,audio/*" />
+          <button id="location-btn" class="icon-btn" type="button" title="Standort teilen"><span class="icon-btn-glyph">📍</span><span class="icon-btn-label">Standort teilen</span></button>
+          <button id="voice-btn" class="icon-btn" type="button" title="Sprachnachricht aufnehmen"><span class="icon-btn-glyph">🎤</span><span class="icon-btn-label">Sprachnachricht</span></button>
+        </div>
         <textarea id="text-input" rows="1" placeholder="Nachricht schreiben …"></textarea>
         <button id="send-btn" class="send-btn" type="submit" title="Senden">&#10148;</button>
       </form>
