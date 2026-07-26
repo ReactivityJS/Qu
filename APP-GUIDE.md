@@ -183,6 +183,22 @@ const manifest = (await alice.get(APP_SPACE)).value;
 await alice.get(APP_SPACE).put({ ...manifest, writers: [...manifest.writers, bob.fingerprint] });
 ```
 
+Das manuelle "Manifest lesen, `writers` ergänzen, zurückschreiben" oben
+funktioniert für einen einzelnen, fest im Quellcode stehenden App-Space —
+sobald eine App stattdessen viele, zur Laufzeit für wechselnde Mitglieder
+entstehende Spaces braucht (ein ToDo pro Gruppe, ein Forum-Board, ein
+eigener Chat-Room je Konversation), übernimmt
+[`src/modules/space-membership.js`](./src/modules/README.md) genau dieses
+Bootstrap-plus-Benachrichtigen als fertigen Baustein:
+`ensureSpace(qu, id, members)` legt den Space mit den gewünschten
+Mitgliedern an (oder no-op, falls schon vorhanden), `notifyMembers()`
+pingt jedes Mitglieds Inbox automatisch an, sodass es den neuen Space über
+`onSpaceInvite()` von selbst mitbekommt — ohne dass, wie oben, ein Link
+oder eine Id manuell weitergegeben werden muss. Space-neutral (kein
+"Room"/"Board" im Code), also gleichermaßen für ToDo, Forum oder Chat
+nutzbar; siehe [`src/modules/README.md`](./src/modules/README.md) für die
+volle Bausteine-Übersicht.
+
 Weil `APP_SPACE` fest und vorher bekannt ist, deckt derselbe
 `pushTopics: [APP_SPACE]`/`pushTopics: ['my-app/']`-Präfix aus Schritt 2
 sowohl das Manifest (`id === APP_SPACE`, kein Slash) als auch alle
@@ -414,6 +430,11 @@ Tatsächlich ausgeführt gegen einen echten, lokal gestarteten Relay:
   für einen selbst betriebenen Relay).
 - **Mitgliederbeschränkte App-Spaces, praktisch**: [`examples/todo-lib.mjs`](./examples/todo-lib.mjs)
   (rein lokal) — dasselbe `createSpace()`-Muster, das Schritt 3 oben zeigt.
+- **Fertige Bausteine statt Neubau**: [`src/modules/README.md`](./src/modules/README.md) —
+  Discovery/Mitgliedschaft (`space-membership.js`), Presence/Lesebestätigungen
+  (`presence.js`), Profil-Attribute + Verzeichnis (`profiles.js`),
+  Geräte-Wechsel (`identity-transfer.js`) — die Basis, auf der ein
+  gemeinsames ToDo, ein Forum oder ein Chat gleichermaßen aufbaut.
 - **Zeit-Sharding für wachsende Daten**: [README, Abschnitt 7](./README.md#7-datenstruktur-für-wachsende-collections-z-b-ein-forum)
   und [`examples/forum-lib.mjs`](./examples/forum-lib.mjs).
 - **Einen Relay produktiv betreiben** (statt des minimalen Beispiels oben):

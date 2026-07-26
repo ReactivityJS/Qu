@@ -226,15 +226,29 @@ export class QuSpace {
    */
   on(callback, opts) {
     if (opts?.raw) return this.#session.on(this.#id, callback, opts);
+    return this.#subscribeResolved((targetId) => targetId, callback, opts, 'on');
+  }
+
+  /**
+   * Shared resolve-then-subscribe control flow behind on()/map(): resolve
+   * this node's id through a chained `key://` redirect exactly once, then
+   * subscribe to `buildPattern(targetId)` and fire-and-forget ask the
+   * network for it — same `cancelled`/`unsubscribeInner` guard either way
+   * (the returned unsubscribe function may run before resolution finishes,
+   * in which case it just needs to prevent the subscription from ever being
+   * set up). `label` is only for the two callers' distinct error-log
+   * prefixes ("on"/"map").
+   */
+  #subscribeResolved(buildPattern, callback, opts, label) {
     let unsubscribeInner = null;
     let cancelled = false;
     this.#resolveDispatch(this.#session, this.#id)
       .then((targetId) => {
         if (cancelled) return;
-        unsubscribeInner = this.#session.on(targetId, callback, opts);
-        this.#subscribeDispatch(this.#session, targetId).catch((e) => console.error(`[QuSpace] on(): Netzwerk-Subscribe für "${targetId}" fehlgeschlagen:`, e));
+        unsubscribeInner = this.#session.on(buildPattern(targetId), callback, opts);
+        this.#subscribeDispatch(this.#session, targetId).catch((e) => console.error(`[QuSpace] ${label}(): Netzwerk-Subscribe für "${targetId}" fehlgeschlagen:`, e));
       })
-      .catch((e) => { if (!cancelled) console.error(`[QuSpace] on(): Auflösen von "${this.#id}" fehlgeschlagen:`, e); });
+      .catch((e) => { if (!cancelled) console.error(`[QuSpace] ${label}(): Auflösen von "${this.#id}" fehlgeschlagen:`, e); });
     return () => { cancelled = true; if (unsubscribeInner) unsubscribeInner(); };
   }
 
@@ -263,16 +277,6 @@ export class QuSpace {
       const pattern = deep ? `${this.#id}/**` : `${this.#id}/*`;
       return this.#session.on(pattern, callback, { initial, ...opts });
     }
-    let unsubscribeInner = null;
-    let cancelled = false;
-    this.#resolveDispatch(this.#session, this.#id)
-      .then((targetId) => {
-        if (cancelled) return;
-        const pattern = deep ? `${targetId}/**` : `${targetId}/*`;
-        unsubscribeInner = this.#session.on(pattern, callback, { initial, ...opts });
-        this.#subscribeDispatch(this.#session, targetId).catch((e) => console.error(`[QuSpace] map(): Netzwerk-Subscribe für "${targetId}" fehlgeschlagen:`, e));
-      })
-      .catch((e) => { if (!cancelled) console.error(`[QuSpace] map(): Auflösen von "${this.#id}" fehlgeschlagen:`, e); });
-    return () => { cancelled = true; if (unsubscribeInner) unsubscribeInner(); };
+    return this.#subscribeResolved((targetId) => deep ? `${targetId}/**` : `${targetId}/*`, callback, { initial, ...opts }, 'map');
   }
 }

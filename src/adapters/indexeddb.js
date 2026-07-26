@@ -5,16 +5,9 @@
 // getAll(prefix) uses a bounded key-range cursor instead of a full scan —
 // the same "adapters that CAN filter efficiently should" reasoning
 // core/store.js documents for why it passes a concrete prefix down.
-const STORE = 'qubits';
+import { openIndexedDB, wrapIDBRequest as wrap } from './indexeddb-shared.js';
 
-function openDB(dbName) {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(dbName, 1);
-    req.onupgradeneeded = () => { req.result.createObjectStore(STORE, { keyPath: 'id' }); };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
+const STORE = 'qubits';
 
 /** Half-open range [prefix, prefix-with-last-char-incremented) — every id that starts with `prefix`, none that don't. */
 function rangeFor(prefix) {
@@ -23,18 +16,11 @@ function rangeFor(prefix) {
   return IDBKeyRange.bound(prefix, upper, false, true);
 }
 
-function wrap(req) {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
 export class IndexedDBAdapter {
   #ready;
 
   constructor({ dbName = 'qu' } = {}) {
-    this.#ready = openDB(dbName);
+    this.#ready = openIndexedDB(dbName, (db) => { db.createObjectStore(STORE, { keyPath: 'id' }); });
   }
 
   async #store(mode) {

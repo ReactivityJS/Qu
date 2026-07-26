@@ -72,6 +72,11 @@ export class QuStore {
     for (const m of this.#mounts) {
       if (seen.has(m.adapter)) continue;
       // Only ask adapters whose prefix could plausibly contain matches for this query prefix.
+      // Bidirectional on purpose — either side can be the more specific one:
+      // mount "a/b", query prefix "a"     -> "a".startsWith("a/b")     is false,
+      //                                       but "a/b".startsWith("a") is true  -> asked (mount is inside the query).
+      // mount "a/b", query prefix "a/b/c" -> "a/b/c".startsWith("a/b") is true   -> asked (query is inside the mount).
+      // mount "a/b", query prefix "x"     -> neither startsWith() holds         -> skipped.
       if (prefix && !prefix.startsWith(m.prefix) && !m.prefix.startsWith(prefix)) continue;
       seen.add(m.adapter);
       const scanFrom = prefix && prefix.length > m.prefix.length ? prefix : m.prefix;

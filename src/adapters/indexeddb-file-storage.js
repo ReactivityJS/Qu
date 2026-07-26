@@ -14,29 +14,15 @@
 // is the persistent counterpart: `hasComplete()`/`missingChunks()`
 // (data/files/manifest.js) then correctly see an already-downloaded chunk
 // as already there across reloads, and never ask the network for it again.
+import { openIndexedDB, wrapIDBRequest as wrap } from './indexeddb-shared.js';
+
 const STORE = 'chunks';
-
-function openDB(dbName) {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(dbName, 1);
-    req.onupgradeneeded = () => { req.result.createObjectStore(STORE); };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function wrap(req) {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
 
 export class IndexedDBFileStorageAdapter {
   #ready;
 
   constructor({ dbName = 'qu-files' } = {}) {
-    this.#ready = openDB(dbName);
+    this.#ready = openIndexedDB(dbName, (db) => { db.createObjectStore(STORE); });
   }
 
   async #store(mode) {

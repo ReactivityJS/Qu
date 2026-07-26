@@ -73,6 +73,13 @@ export class QuRuntime {
 
   async query(pattern) {
     assertValidPattern(pattern);
+    // Safe because assertValidPattern() (pattern.js) only accepts a `*`/`**`
+    // as a whole path SEGMENT (never mid-segment, e.g. "a*b" is rejected) —
+    // so the substring before the first `*` is always either the full
+    // pattern (no wildcard) or a clean prefix ending right before a `/`,
+    // which the trailing replace() then strips. This is only the store's
+    // coarse pre-filter (see store.js's query() prefix matching below); the
+    // regex test two lines down still does the real, precise match.
     const prefix = pattern.split(/[*]/)[0].replace(/\/$/, '');
     const all = await this.#store.query(prefix);
     const re = patternToRegExp(pattern);
