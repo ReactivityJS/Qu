@@ -104,6 +104,9 @@ const PENDING_DELIVERY_KEY = 'qu-chat-pending-delivery'; // siehe confirmDeliver
 // Default AN (bisheriges Verhalten unverändert) — siehe renderAttachment()
 // weiter unten für den Ein-Klick-statt-automatisch-Fall bei AUS.
 const AUTO_LOAD_MEDIA_KEY = 'qu-chat-auto-load-media';
+// Default AUS — der Tages-Trenner in der Liste zeigt das Datum bereits
+// einmal pro Tag, an jeder einzelnen Nachricht wäre es meist redundant.
+const SHOW_DATE_KEY = 'qu-chat-show-date';
 // Kartenanbieter für den 📍-Button (Standort teilen) — 'osm' (Default,
 // braucht keinen eigenen API-Key/Account) | 'google' | 'apple' | 'custom'
 // (MAP_CUSTOM_URL_KEY liefert dann das URL-Template mit {lat}/{lng},
@@ -235,6 +238,7 @@ const videoCallBtn = $('video-call-btn');
 const soundMessagesToggle = $('sound-messages-toggle');
 const soundCallsToggle = $('sound-calls-toggle');
 const autoLoadMediaToggle = $('auto-load-media-toggle');
+const showDateToggle = $('show-date-toggle');
 const mapProviderSelect = $('map-provider-select');
 const mapCustomUrlRow = $('map-custom-url-row');
 const mapCustomUrlInput = $('map-custom-url-input');
@@ -482,6 +486,8 @@ async function setSoundEnabled(key, enabled) { await storage.put(key, enabled ? 
 // tatsächliches Datenvolumen, nicht nur Bild-/Videowiedergabe.
 async function autoLoadMedia() { return (await storage.get(AUTO_LOAD_MEDIA_KEY)) !== '0'; }
 async function setAutoLoadMedia(enabled) { await storage.put(AUTO_LOAD_MEDIA_KEY, enabled ? '1' : '0'); }
+async function showDateInMessages() { return (await storage.get(SHOW_DATE_KEY)) === '1'; }
+async function setShowDateInMessages(enabled) { await storage.put(SHOW_DATE_KEY, enabled ? '1' : '0'); }
 
 // --- Standort teilen: welcher Kartenanbieter (App-Einstellungen) ---
 async function mapProvider() { return (await storage.get(MAP_PROVIDER_KEY)) || 'osm'; }
@@ -1651,7 +1657,7 @@ async function main() {
   }
 
   /**
-   * Kleines ✓/✓✓/🕐-Symbol NEBEN der eigenen Nachricht (`.msg-meta`) —
+   * Kleines ✓/✓✓/🕐-Symbol NEBEN der eigenen Nachricht (buildMessageMetaInline()) —
    * abonniert sich beim Einhängen auf `tickBus` (siehe dessen Doku oben)
    * und meldet sich beim Aushängen wieder ab, statt von außen über
    * renderTicks() angestoßen zu werden.
@@ -2137,6 +2143,21 @@ async function main() {
   }
 
   /**
+   * Der weitergeleitete Ausschnitt oben in der Bubble (q.value.forwardedFrom,
+   * s. dessen Doku in chat.js) — anders als buildReplyQuote() OHNE
+   * Klick-zum-Original: das Original kann in einem GANZ ANDEREN Raum
+   * liegen (Weiterleiten wechselt bewusst den Raum), ein lokales
+   * scrollToMessage() in DIESEM Chat träfe es also grundsätzlich nie.
+   */
+  function buildForwardedQuote(forwardedFrom) {
+    const quote = el('div', 'msg-quote msg-forwarded');
+    quote.appendChild(el('div', 'msg-quote-author', `↪️ Weitergeleitet von ${authorNameFor(forwardedFrom.writer)}`));
+    quote.appendChild(el('div', 'msg-quote-time', `${fmtDayLabel(forwardedFrom.ts)} · ${fmtTime(forwardedFrom.ts)}`));
+    if (forwardedFrom.text) quote.appendChild(el('div', 'msg-quote-text', forwardedFrom.text));
+    return quote;
+  }
+
+  /**
    * Löst eine mögliche Bearbeitung auf — sucht in `list` (derselbe Raum,
    * bereits chronologisch sortiert) nach dem NEUESTEN Eintrag mit
    * `value.editOf === q.id`, dessen verifizierter `writer` MIT dem der
@@ -2155,7 +2176,7 @@ async function main() {
     return latest ? { text: latest.value.text ?? '', edited: true } : { text: q.value?.text ?? '', edited: false };
   }
 
-  /** ⋮-Button in der .msg-meta-Reihe — öffnet das gemeinsame Aktionsmenü (openMessageActionsMenu() unten) für GENAU diese Nachricht. */
+  /** ⋮-Button in der Kopfzeile (buildMessageHeader()) — öffnet das gemeinsame Aktionsmenü (openMessageActionsMenu() unten) für GENAU diese Nachricht. */
   function buildMessageActionsBtn(q, roomId) {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -2166,23 +2187,88 @@ async function main() {
     return btn;
   }
 
+  /** Kopfzeile über der Bubble: Absender (Link ins volle Profil in examples/people) links, ⋮-Aktionsmenü rechts — für JEDE Nachricht, nicht nur in Gruppen (konsistente Optik, "Du" bei eigenen Nachrichten). */
+  function buildMessageHeader(q, roomId) {
+    const header = el('div', 'msg-header');
+    const authorLink = document.createElement('a');
+    authorLink.className = 'msg-author';
+    authorLink.href = `../people/index.html#/${encodeURIComponent(q.writer)}`;
+    authorLink.target = '_blank';
+    authorLink.rel = 'noopener';
+    authorLink.textContent = authorNameFor(q.writer);
+    authorLink.addEventListener('click', (ev) => ev.stopPropagation());
+    header.appendChild(authorLink);
+    header.appendChild(buildMessageActionsBtn(q, roomId));
+    return header;
+  }
+
+  /**
+   * Uhrzeit (optional + Datum, s. showDateInMessages()-Einstellung) als
+   * klickbarer Anker-Link auf GENAU diese Nachricht (`/<roomId>/msg/<id>`,
+   * dieselbe Route wie ein geteilter Direktlink/ein Suchtreffer) — ein
+   * Klick "holt die Nachricht nach oben": renderRoute() öffnet den Chat
+   * (hier schon offen, also ein No-Op) und scrollToMessage() springt an
+   * den Anfang der Liste (s. dessen aktualisierte block: 'start'-Doku),
+   * mit kurzem Hervorheben.
+   */
+  function buildMessageTimeLink(q, roomId, showDate) {
+    const a = document.createElement('a');
+    a.className = 'msg-time';
+    a.href = buildPath(roomId, 'msg', q.id);
+    a.textContent = showDate ? `${fmtDayLabel(q.ts)}, ${fmtTime(q.ts)}` : fmtTime(q.ts);
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      navigate(roomId, 'msg', q.id);
+    });
+    return a;
+  }
+
+  /**
+   * Uhrzeit/Datum-Link + "bearbeitet"-Marker + Häkchen, als EIN Bündel —
+   * wird entweder als letztes Kind DIREKT in den Textfluss von .msg-text
+   * eingehängt (float: right, klassischer Messenger-Trick: der Text davor
+   * bricht um dieses Element herum, landet unten rechts INNERHALB der
+   * Bubble statt in einer eigenen Zeile außerhalb) oder — wenn es keinen
+   * Text gibt, dem Text also nichts zum Umbrechen bliebe (reiner Anhang,
+   * reiner Standort-Link) — als eigene rechtsbündige Zeile am Ende der
+   * Bubble (buildMessageItem() unten entscheidet das).
+   */
+  function buildMessageMetaInline(q, roomId, showDate, edited, mine) {
+    const span = el('span', 'msg-time-row');
+    if (edited) span.appendChild(el('span', 'msg-edited', '✏️ bearbeitet '));
+    span.appendChild(buildMessageTimeLink(q, roomId, showDate));
+    if (mine) {
+      const tick = document.createElement('qu-msg-tick');
+      tick.dataset.id = q.id;
+      tick.dataset.ts = q.ts;
+      tick.dataset.roomId = roomId;
+      span.appendChild(tick);
+    }
+    return span;
+  }
+
   /**
    * Baut genau ein `<li class="msg">` — geteilt zwischen dem vollständigen
    * Neuaufbau (renderMessageList()) und dem Anhängen einer einzelnen neuen
    * Live-Nachricht (appendLiveMessage()), damit beide garantiert dasselbe
    * Markup erzeugen. `list` (derselbe Raum, für resolveMessageText() — s.
-   * dessen Doku für eine mögliche Bearbeitung) explizit vom Aufrufer
-   * übergeben statt hier selbst aus messagesByRoom nachzuschlagen: beide
-   * Aufrufer kennen die passende Liste ohnehin schon.
+   * dessen Doku für eine mögliche Bearbeitung) und `showDate` (die
+   * "Datum anzeigen"-Einstellung, EINMAL pro Render-Durchgang gelesen statt
+   * pro Nachricht) explizit vom Aufrufer übergeben — beide kennen sie
+   * ohnehin schon.
    */
-  async function buildMessageItem(q, roomId, list) {
+  async function buildMessageItem(q, roomId, list, showDate) {
     const mine = q.writer === qu.fingerprint;
     const li = el('li', `msg${mine ? ' mine' : ''}`);
     li.dataset.ts = q.ts;
     li.dataset.id = q.id;
+    li.appendChild(buildMessageHeader(q, roomId));
     const bubble = el('div', 'msg-bubble');
+    if (q.value?.forwardedFrom) bubble.appendChild(buildForwardedQuote(q.value.forwardedFrom));
     if (q.value?.replyTo) bubble.appendChild(buildReplyQuote(q.value.replyTo));
     const { text: displayText, edited } = resolveMessageText(list, q);
+    let metaInsertedInline = false;
     if (displayText) {
       // Ein Text, der NUR aus einem einzelnen Link besteht (z. B. genau
       // das, was der 📍-Standort-Button verschickt), bräuchte sonst die
@@ -2195,7 +2281,9 @@ async function main() {
       if (!isBareLink) {
         const textEl = el('div', 'msg-text');
         renderMessageText(textEl, displayText);
+        textEl.appendChild(buildMessageMetaInline(q, roomId, showDate, edited, mine));
         bubble.appendChild(textEl);
+        metaInsertedInline = true;
       }
       const preview = buildLinkPreview(displayText);
       if (preview) bubble.appendChild(preview);
@@ -2212,19 +2300,12 @@ async function main() {
       badge.dataset.roomId = roomId;
       bubble.appendChild(badge);
     }
-    li.appendChild(bubble);
-    const meta = el('div', 'msg-meta');
-    meta.appendChild(buildMessageActionsBtn(q, roomId));
-    if (edited) meta.appendChild(el('span', 'msg-edited', '✏️ bearbeitet'));
-    meta.appendChild(document.createTextNode(fmtTime(q.ts)));
-    if (mine) {
-      const tick = document.createElement('qu-msg-tick');
-      tick.dataset.id = q.id;
-      tick.dataset.ts = q.ts;
-      tick.dataset.roomId = roomId;
-      meta.appendChild(tick);
+    if (!metaInsertedInline) {
+      const metaRow = el('div', 'msg-meta-row');
+      metaRow.appendChild(buildMessageMetaInline(q, roomId, showDate, edited, mine));
+      bubble.appendChild(metaRow);
     }
-    li.appendChild(meta);
+    li.appendChild(bubble);
     return li;
   }
 
@@ -2245,17 +2326,20 @@ async function main() {
     messageListEl.textContent = '';
     lastRenderedDay = null;
     const list = messagesByRoom.get(roomId) ?? [];
+    const showDate = await showDateInMessages();
     let scrollTargetLi = null;
     for (const q of list) {
       if (q.value?.editOf) continue; // eine Bearbeitung ist keine eigene Bubble, s. resolveMessageText()
       const dayLabel = fmtDayLabel(q.ts);
       if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-      const li = await buildMessageItem(q, roomId, list);
+      const li = await buildMessageItem(q, roomId, list, showDate);
       messageListEl.appendChild(li);
       if (scrollToId && q.id === scrollToId) scrollTargetLi = li;
     }
     if (scrollTargetLi) {
-      scrollTargetLi.scrollIntoView({ block: 'center' });
+      // 'start' statt 'center' — die ausgewählte Nachricht soll direkt
+      // unter der Kopfzeile erscheinen, nicht in der Mitte der Liste.
+      scrollTargetLi.scrollIntoView({ block: 'start' });
       scrollTargetLi.querySelector('.msg-bubble')?.classList.add('jump-highlight');
     } else {
       // Ein frisch geöffneter Chat ohne (auffindbares) ungelesenes Ziel
@@ -2271,7 +2355,7 @@ async function main() {
     const stick = isNearBottom();
     const dayLabel = fmtDayLabel(q.ts);
     if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-    messageListEl.appendChild(await buildMessageItem(q, roomId, messagesByRoom.get(roomId) ?? []));
+    messageListEl.appendChild(await buildMessageItem(q, roomId, messagesByRoom.get(roomId) ?? [], await showDateInMessages()));
     if (stick) messageListEl.scrollTop = messageListEl.scrollHeight;
   }
 
@@ -2291,6 +2375,7 @@ async function main() {
     // fälschlich weiter angezeigt/mitgesendet.
     if (replyTarget && replyTarget.roomId !== roomId) { replyTarget = null; renderReplyPreview(); }
     if (editTarget && editTarget.roomId !== roomId) { editTarget = null; textInput.value = ''; autoGrow(); renderReplyPreview(); }
+    if (forwardTarget && forwardTarget.roomId !== roomId) { forwardTarget = null; renderReplyPreview(); }
     activeRoomId = roomId;
     renderRoomHeader(room);
     peerStatusEl.textContent = '…';
@@ -2470,7 +2555,9 @@ async function main() {
       if (retry) setTimeout(() => scrollToMessage(id, false), 800);
       return;
     }
-    li.scrollIntoView({ block: 'center' });
+    // 'start' statt 'center' — landet direkt unter der Kopfzeile statt in
+    // der Mitte der Liste (konsistent mit renderMessageList()s Sprungziel).
+    li.scrollIntoView({ block: 'start' });
     const bubble = li.querySelector('.msg-bubble');
     // Klasse erst entfernen+reflow+wieder setzen, sonst startet die
     // CSS-Animation beim zweiten Sprung auf DIESELBE Nachricht nicht neu.
@@ -2508,11 +2595,26 @@ async function main() {
   // Bearbeiten sind bewusst gegenseitig exklusive Composer-Zustände (immer
   // nur EINER von beiden aktiv, s. beide Handler unten).
   let editTarget = null;
+  // --- Weiterleiten ---
+  // forwardTarget: { writer, ts, text, roomId } — Schnappschuss der
+  // weiterzuleitenden Nachricht (aus einem ANDEREN Raum, s.
+  // msgActionForwardBtn/applyShareToRoom()). Composer-Text bleibt dabei
+  // LEER (rein optionaler eigener Kommentar) — anders als replyTarget/
+  // editTarget, wo der Text entweder selbst getippt oder vorausgefüllt
+  // ist. Dieselbe gegenseitige Exklusivität wie zwischen Antworten und
+  // Bearbeiten: immer nur EINER der drei Composer-Zustände aktiv.
+  let forwardTarget = null;
   function renderReplyPreview() {
     if (editTarget) {
       replyPreviewEl.hidden = false;
       replyPreviewAuthorEl.textContent = '✏️ Nachricht bearbeiten';
       replyPreviewTextEl.textContent = editTarget.text;
+      return;
+    }
+    if (forwardTarget) {
+      replyPreviewEl.hidden = false;
+      replyPreviewAuthorEl.textContent = `↪️ Weiterleiten von ${authorNameFor(forwardTarget.writer)}`;
+      replyPreviewTextEl.textContent = forwardTarget.text;
       return;
     }
     replyPreviewEl.hidden = !replyTarget;
@@ -2524,14 +2626,17 @@ async function main() {
     // Eine abgebrochene Bearbeitung räumt auch den vorausgefüllten Text
     // wieder weg — anders als bei "Antworten abbrechen", wo der Composer-
     // Text unabhängig vom Zitat war (der User hat ihn selbst getippt, der
-    // bleibt beim Abbrechen stehen).
+    // bleibt beim Abbrechen stehen). Ein abgebrochener Forward hatte nie
+    // vorausgefüllten Text (nur einen optionalen Kommentar), braucht also
+    // dieselbe Behandlung wie "Antworten abbrechen".
     if (editTarget) { textInput.value = ''; autoGrow(); }
     replyTarget = null;
     editTarget = null;
+    forwardTarget = null;
     renderReplyPreview();
   });
 
-  // --- Aktionsmenü einer Nachricht (⋮ in .msg-meta, s. buildMessageActionsBtn()) ---
+  // --- Aktionsmenü einer Nachricht (⋮ in der Kopfzeile, s. buildMessageActionsBtn()) ---
   let messageActionsContext = null; // { q, roomId } für die Nachricht, deren Menü gerade offen ist
   function openMessageActionsMenu(q, roomId, btn) {
     messageActionsContext = { q, roomId };
@@ -2622,19 +2727,24 @@ async function main() {
    * "Teilen an QU Chat"-Share (share-target-modal/pendingShare/
    * applyShareToRoom(), s. dort), nur AD-HOC statt über den Router
    * (shareTargetIsRouted = false, s. closeShareTargetModal()) — dieselbe
-   * Chat-Auswahl + Composer-Übernahme, ohne den Umweg über
-   * Service-Worker/Cache, der nur für einen ECHTEN externen Share nötig
-   * ist. Anhänge werden dabei bewusst NICHT mit weitergeleitet (bräuchte
-   * ein erneutes Herunterladen+Entschlüsseln+Hochladen der Originaldatei
-   * — als klar kommunizierte Einschränkung einfacher als eine
-   * halbfertige/unzuverlässige Variante).
+   * Chat-Auswahl, aber statt den rohen Text direkt in den Composer zu
+   * übernehmen (das würde "mein Kommentar" und "weitergeleiteter Inhalt"
+   * ununterscheidbar vermischen), setzt applyShareToRoom() unten für einen
+   * Forward stattdessen `forwardTarget` — die Nachricht wird dadurch beim
+   * Senden explizit als Weiterleitung markiert (chat.js's `forwardedFrom`)
+   * und im Ziel-Chat als eigener Zitat-Block angezeigt, der Composer-Text
+   * bleibt ein rein OPTIONALER eigener Kommentar dazu. Anhänge werden dabei
+   * bewusst NICHT mit weitergeleitet (bräuchte ein erneutes Herunterladen+
+   * Entschlüsseln+Hochladen der Originaldatei — als klar kommunizierte
+   * Einschränkung einfacher als eine halbfertige/unzuverlässige Variante).
    */
   msgActionForwardBtn.addEventListener('click', () => {
-    const { q } = messageActionsContext;
+    const { q, roomId } = messageActionsContext;
     closeMessageActionsMenu();
-    if (!q.value?.text) return; // keine reine Anhang-Nachricht ohne Text weiterleitbar, s. o.
+    const { text } = resolveMessageText(messagesByRoom.get(roomId) ?? [], q); // die evtl. bearbeitete, aktuell sichtbare Fassung
+    if (!text) return; // keine reine Anhang-Nachricht ohne Text weiterleitbar, s. o.
     shareTargetIsRouted = false;
-    pendingShare = { text: q.value.text, url: '', title: '', files: [] };
+    pendingShare = { text: '', url: '', title: '', files: [], forwardedFrom: { writer: q.writer, ts: q.ts, text } };
     shareTargetSummaryEl.textContent = q.refs?.length
       ? 'Nachricht weiterleiten (nur Text — Anhänge werden nicht mit übernommen)'
       : 'Nachricht weiterleiten';
@@ -2948,7 +3058,10 @@ async function main() {
       return;
     }
     const files = pendingFiles;
-    if (!text && !files.length) return;
+    // Ein aktiver Forward darf auch OHNE eigenen Kommentar UND ohne Anhänge
+    // gesendet werden — forwardedFrom trägt in dem Fall den gesamten
+    // Inhalt (ein "reiner" Forward, s. forwardTarget's eigene Doku).
+    if (!text && !files.length && !forwardTarget) return;
     const roomId = activeRoomId;
     const room = roomById(roomId);
     sendBtn.disabled = true;
@@ -2976,6 +3089,7 @@ async function main() {
         // replyTarget's eigene Doku) gehört NICHT in die gespeicherte
         // Nachricht — innerhalb eines Raums ohnehin immer derselbe.
         replyTo: replyTarget ? { id: replyTarget.id, writer: replyTarget.writer, ts: replyTarget.ts, text: replyTarget.text } : undefined,
+        forwardedFrom: forwardTarget ? { writer: forwardTarget.writer, ts: forwardTarget.ts, text: forwardTarget.text } : undefined,
         // Fortschritt für lokales Verschlüsseln/Zerstückeln GROSSER Anhänge
         // (z. B. ein Video) — ohne das sah ein größerer Upload nach einem
         // hängenden Sendevorgang aus, weil die UI vorher bis zum Schluss
@@ -3000,6 +3114,7 @@ async function main() {
       pendingFiles = [];
       renderPendingFiles();
       replyTarget = null;
+      forwardTarget = null;
       renderReplyPreview();
 
       // "Beim Relay angekommen?"-Status: als unbestätigt eintragen (auch
@@ -3095,6 +3210,7 @@ async function main() {
     soundMessagesToggle.checked = await soundEnabled(SOUND_MESSAGES_KEY);
     soundCallsToggle.checked = await soundEnabled(SOUND_CALLS_KEY);
     autoLoadMediaToggle.checked = await autoLoadMedia();
+    showDateToggle.checked = await showDateInMessages();
     mapProviderSelect.value = await mapProvider();
     mapCustomUrlInput.value = await mapCustomUrlTemplate();
     mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
@@ -3107,6 +3223,13 @@ async function main() {
   soundMessagesToggle.addEventListener('change', () => setSoundEnabled(SOUND_MESSAGES_KEY, soundMessagesToggle.checked));
   soundCallsToggle.addEventListener('change', () => setSoundEnabled(SOUND_CALLS_KEY, soundCallsToggle.checked));
   autoLoadMediaToggle.addEventListener('change', () => setAutoLoadMedia(autoLoadMediaToggle.checked));
+  // Betrifft ALLE Nachrichten des gerade offenen Chats sofort — ein
+  // erneutes Öffnen des Chats wäre sonst der einzige Weg, die neue
+  // Darstellung zu sehen.
+  showDateToggle.addEventListener('change', async () => {
+    await setShowDateInMessages(showDateToggle.checked);
+    if (activeRoomId) renderMessageList(activeRoomId);
+  });
   mapProviderSelect.addEventListener('change', () => {
     setMapProvider(mapProviderSelect.value);
     mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
@@ -3371,6 +3494,19 @@ async function main() {
     shareTargetModal.hidden = true;
     if (!share) return;
     await redirectTo(roomId); // kein eigener Verlaufseintrag — "zurück" soll nicht auf dieses (bereits übernommene) Auswahl-Formular führen
+    if (share.forwardedFrom) {
+      // Weiterleitung (msgActionForwardBtn) statt eines externen Shares —
+      // der Composer-Text bleibt LEER (rein optionaler eigener Kommentar,
+      // kein vermischter Text wie bei einem externen Share), replyTarget/
+      // editTarget weichen einer Weiterleitung (dieselbe gegenseitige
+      // Exklusivität wie zwischen Antworten und Bearbeiten).
+      replyTarget = null;
+      editTarget = null;
+      forwardTarget = { ...share.forwardedFrom, roomId };
+      renderReplyPreview();
+      textInput.focus();
+      return;
+    }
     const textParts = [share.text, share.url].filter(Boolean);
     if (textParts.length) {
       const shared = textParts.join(' ');
