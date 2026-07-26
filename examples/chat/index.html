@@ -128,6 +128,7 @@
           <input id="file-input" type="file" multiple hidden accept="image/*,video/*,audio/*" />
           <button id="location-btn" class="icon-btn" type="button" title="Standort teilen"><span class="icon-btn-glyph">📍</span><span class="icon-btn-label">Standort teilen</span></button>
           <button id="voice-btn" class="icon-btn" type="button" title="Sprachnachricht aufnehmen"><span class="icon-btn-glyph">🎤</span><span class="icon-btn-label">Sprachnachricht</span></button>
+          <button id="hunt-btn" class="icon-btn" type="button" title="Verfolgungsjagd-Spiel einladen"><span class="icon-btn-glyph">🎯</span><span class="icon-btn-label">Hunter-Spiel</span></button>
         </div>
         <textarea id="text-input" rows="1" placeholder="Nachricht schreiben …"></textarea>
         <button id="send-btn" class="send-btn" type="submit" title="Senden">&#10148;</button>
@@ -169,6 +170,33 @@
       <div class="modal-actions">
         <button id="profile-cancel-btn" class="btn btn-secondary" type="button">Schließen</button>
         <button id="profile-save-btn" class="btn btn-primary" type="button">Speichern</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fremdes Profil, inline als Unterseite DIESES Chats — #/<roomId>/profile/<fp>
+       (statt wie bisher ein externer Link/neuer Tab zu examples/people).
+       Nur-Lese-Ansicht (öffentliche Attribute) — Bearbeiten bleibt weiterhin
+       Sache der eigenen Identität in examples/people, dorthin verlinkt
+       #chat-profile-view-external-link als Ausweiche. Schließen per
+       Zurück-Button ODER Browser-"Zurück" (closeScreen() = history.back(),
+       dasselbe Muster wie jeder andere Chat-Unterpfad). -->
+  <div id="profile-view-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <button id="profile-view-back-btn" class="back-btn" type="button">&larr;</button>
+      <div class="profile-avatar-row">
+        <div id="profile-view-avatar" class="avatar lg"></div>
+        <div>
+          <h2 id="profile-view-alias">…</h2>
+          <div class="fp-display" id="profile-view-fp">…</div>
+        </div>
+      </div>
+      <h3>Attribute</h3>
+      <ul id="profile-view-attr-list" class="attr-list"></ul>
+      <div id="profile-view-attr-empty" class="modal-hint">Keine öffentlichen Attribute.</div>
+      <p class="modal-hint"><a id="profile-view-external-link" href="#" target="_blank" rel="noopener">In der People-App öffnen →</a></p>
+      <div class="modal-actions">
+        <button id="profile-view-close-btn" class="btn btn-secondary" type="button">Schließen</button>
       </div>
     </div>
   </div>
@@ -349,7 +377,13 @@
     <button type="button" class="reaction-picker-item" data-emoji="🙏">🙏</button>
     <button type="button" class="reaction-picker-item" data-emoji="🔥">🔥</button>
     <button type="button" class="reaction-picker-item" data-emoji="✅">✅</button>
+    <button id="reaction-picker-more-btn" class="reaction-picker-item reaction-picker-more" type="button" title="Weitere Emojis">+</button>
   </div>
+
+  <!-- Erweiterte Emoji-Auswahl fürs Reagieren — öffnet sich über das "+" in
+       #reaction-picker, gefüllt aus derselben EMOJIS-Liste wie der normale
+       Emoji-Picker im Composer (app.mjs's buildReactionExtendedPicker()). -->
+  <div id="reaction-picker-extended" class="reaction-picker-extended" hidden></div>
 
   <!-- Liste ALLER angehefteten Nachrichten dieses Chats — geöffnet über den
        Zähler-Button in #pinned-bar, wenn mehr als eine angeheftet ist.
