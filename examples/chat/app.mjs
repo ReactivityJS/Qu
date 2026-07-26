@@ -104,6 +104,9 @@ const PENDING_DELIVERY_KEY = 'qu-chat-pending-delivery'; // siehe confirmDeliver
 // Default AN (bisheriges Verhalten unverändert) — siehe renderAttachment()
 // weiter unten für den Ein-Klick-statt-automatisch-Fall bei AUS.
 const AUTO_LOAD_MEDIA_KEY = 'qu-chat-auto-load-media';
+// Default AUS — der Tages-Trenner in der Liste zeigt das Datum bereits
+// einmal pro Tag, an jeder einzelnen Nachricht wäre es meist redundant.
+const SHOW_DATE_KEY = 'qu-chat-show-date';
 // Kartenanbieter für den 📍-Button (Standort teilen) — 'osm' (Default,
 // braucht keinen eigenen API-Key/Account) | 'google' | 'apple' | 'custom'
 // (MAP_CUSTOM_URL_KEY liefert dann das URL-Template mit {lat}/{lng},
@@ -235,6 +238,7 @@ const videoCallBtn = $('video-call-btn');
 const soundMessagesToggle = $('sound-messages-toggle');
 const soundCallsToggle = $('sound-calls-toggle');
 const autoLoadMediaToggle = $('auto-load-media-toggle');
+const showDateToggle = $('show-date-toggle');
 const mapProviderSelect = $('map-provider-select');
 const mapCustomUrlRow = $('map-custom-url-row');
 const mapCustomUrlInput = $('map-custom-url-input');
@@ -482,6 +486,8 @@ async function setSoundEnabled(key, enabled) { await storage.put(key, enabled ? 
 // tatsächliches Datenvolumen, nicht nur Bild-/Videowiedergabe.
 async function autoLoadMedia() { return (await storage.get(AUTO_LOAD_MEDIA_KEY)) !== '0'; }
 async function setAutoLoadMedia(enabled) { await storage.put(AUTO_LOAD_MEDIA_KEY, enabled ? '1' : '0'); }
+async function showDateInMessages() { return (await storage.get(SHOW_DATE_KEY)) === '1'; }
+async function setShowDateInMessages(enabled) { await storage.put(SHOW_DATE_KEY, enabled ? '1' : '0'); }
 
 // --- Standort teilen: welcher Kartenanbieter (App-Einstellungen) ---
 async function mapProvider() { return (await storage.get(MAP_PROVIDER_KEY)) || 'osm'; }
@@ -1651,7 +1657,7 @@ async function main() {
   }
 
   /**
-   * Kleines ✓/✓✓/🕐-Symbol NEBEN der eigenen Nachricht (`.msg-meta`) —
+   * Kleines ✓/✓✓/🕐-Symbol NEBEN der eigenen Nachricht (buildMessageMetaInline()) —
    * abonniert sich beim Einhängen auf `tickBus` (siehe dessen Doku oben)
    * und meldet sich beim Aushängen wieder ab, statt von außen über
    * renderTicks() angestoßen zu werden.
@@ -2155,7 +2161,7 @@ async function main() {
     return latest ? { text: latest.value.text ?? '', edited: true } : { text: q.value?.text ?? '', edited: false };
   }
 
-  /** ⋮-Button in der .msg-meta-Reihe — öffnet das gemeinsame Aktionsmenü (openMessageActionsMenu() unten) für GENAU diese Nachricht. */
+  /** ⋮-Button in der Kopfzeile (buildMessageHeader()) — öffnet das gemeinsame Aktionsmenü (openMessageActionsMenu() unten) für GENAU diese Nachricht. */
   function buildMessageActionsBtn(q, roomId) {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -2166,23 +2172,87 @@ async function main() {
     return btn;
   }
 
+  /** Kopfzeile über der Bubble: Absender (Link ins volle Profil in examples/people) links, ⋮-Aktionsmenü rechts — für JEDE Nachricht, nicht nur in Gruppen (konsistente Optik, "Du" bei eigenen Nachrichten). */
+  function buildMessageHeader(q, roomId) {
+    const header = el('div', 'msg-header');
+    const authorLink = document.createElement('a');
+    authorLink.className = 'msg-author';
+    authorLink.href = `../people/index.html#/${encodeURIComponent(q.writer)}`;
+    authorLink.target = '_blank';
+    authorLink.rel = 'noopener';
+    authorLink.textContent = authorNameFor(q.writer);
+    authorLink.addEventListener('click', (ev) => ev.stopPropagation());
+    header.appendChild(authorLink);
+    header.appendChild(buildMessageActionsBtn(q, roomId));
+    return header;
+  }
+
+  /**
+   * Uhrzeit (optional + Datum, s. showDateInMessages()-Einstellung) als
+   * klickbarer Anker-Link auf GENAU diese Nachricht (`/<roomId>/msg/<id>`,
+   * dieselbe Route wie ein geteilter Direktlink/ein Suchtreffer) — ein
+   * Klick "holt die Nachricht nach oben": renderRoute() öffnet den Chat
+   * (hier schon offen, also ein No-Op) und scrollToMessage() springt an
+   * den Anfang der Liste (s. dessen aktualisierte block: 'start'-Doku),
+   * mit kurzem Hervorheben.
+   */
+  function buildMessageTimeLink(q, roomId, showDate) {
+    const a = document.createElement('a');
+    a.className = 'msg-time';
+    a.href = buildPath(roomId, 'msg', q.id);
+    a.textContent = showDate ? `${fmtDayLabel(q.ts)}, ${fmtTime(q.ts)}` : fmtTime(q.ts);
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      navigate(roomId, 'msg', q.id);
+    });
+    return a;
+  }
+
+  /**
+   * Uhrzeit/Datum-Link + "bearbeitet"-Marker + Häkchen, als EIN Bündel —
+   * wird entweder als letztes Kind DIREKT in den Textfluss von .msg-text
+   * eingehängt (float: right, klassischer Messenger-Trick: der Text davor
+   * bricht um dieses Element herum, landet unten rechts INNERHALB der
+   * Bubble statt in einer eigenen Zeile außerhalb) oder — wenn es keinen
+   * Text gibt, dem Text also nichts zum Umbrechen bliebe (reiner Anhang,
+   * reiner Standort-Link) — als eigene rechtsbündige Zeile am Ende der
+   * Bubble (buildMessageItem() unten entscheidet das).
+   */
+  function buildMessageMetaInline(q, roomId, showDate, edited, mine) {
+    const span = el('span', 'msg-time-row');
+    if (edited) span.appendChild(el('span', 'msg-edited', '✏️ bearbeitet '));
+    span.appendChild(buildMessageTimeLink(q, roomId, showDate));
+    if (mine) {
+      const tick = document.createElement('qu-msg-tick');
+      tick.dataset.id = q.id;
+      tick.dataset.ts = q.ts;
+      tick.dataset.roomId = roomId;
+      span.appendChild(tick);
+    }
+    return span;
+  }
+
   /**
    * Baut genau ein `<li class="msg">` — geteilt zwischen dem vollständigen
    * Neuaufbau (renderMessageList()) und dem Anhängen einer einzelnen neuen
    * Live-Nachricht (appendLiveMessage()), damit beide garantiert dasselbe
    * Markup erzeugen. `list` (derselbe Raum, für resolveMessageText() — s.
-   * dessen Doku für eine mögliche Bearbeitung) explizit vom Aufrufer
-   * übergeben statt hier selbst aus messagesByRoom nachzuschlagen: beide
-   * Aufrufer kennen die passende Liste ohnehin schon.
+   * dessen Doku für eine mögliche Bearbeitung) und `showDate` (die
+   * "Datum anzeigen"-Einstellung, EINMAL pro Render-Durchgang gelesen statt
+   * pro Nachricht) explizit vom Aufrufer übergeben — beide kennen sie
+   * ohnehin schon.
    */
-  async function buildMessageItem(q, roomId, list) {
+  async function buildMessageItem(q, roomId, list, showDate) {
     const mine = q.writer === qu.fingerprint;
     const li = el('li', `msg${mine ? ' mine' : ''}`);
     li.dataset.ts = q.ts;
     li.dataset.id = q.id;
+    li.appendChild(buildMessageHeader(q, roomId));
     const bubble = el('div', 'msg-bubble');
     if (q.value?.replyTo) bubble.appendChild(buildReplyQuote(q.value.replyTo));
     const { text: displayText, edited } = resolveMessageText(list, q);
+    let metaInsertedInline = false;
     if (displayText) {
       // Ein Text, der NUR aus einem einzelnen Link besteht (z. B. genau
       // das, was der 📍-Standort-Button verschickt), bräuchte sonst die
@@ -2195,7 +2265,9 @@ async function main() {
       if (!isBareLink) {
         const textEl = el('div', 'msg-text');
         renderMessageText(textEl, displayText);
+        textEl.appendChild(buildMessageMetaInline(q, roomId, showDate, edited, mine));
         bubble.appendChild(textEl);
+        metaInsertedInline = true;
       }
       const preview = buildLinkPreview(displayText);
       if (preview) bubble.appendChild(preview);
@@ -2212,19 +2284,12 @@ async function main() {
       badge.dataset.roomId = roomId;
       bubble.appendChild(badge);
     }
-    li.appendChild(bubble);
-    const meta = el('div', 'msg-meta');
-    meta.appendChild(buildMessageActionsBtn(q, roomId));
-    if (edited) meta.appendChild(el('span', 'msg-edited', '✏️ bearbeitet'));
-    meta.appendChild(document.createTextNode(fmtTime(q.ts)));
-    if (mine) {
-      const tick = document.createElement('qu-msg-tick');
-      tick.dataset.id = q.id;
-      tick.dataset.ts = q.ts;
-      tick.dataset.roomId = roomId;
-      meta.appendChild(tick);
+    if (!metaInsertedInline) {
+      const metaRow = el('div', 'msg-meta-row');
+      metaRow.appendChild(buildMessageMetaInline(q, roomId, showDate, edited, mine));
+      bubble.appendChild(metaRow);
     }
-    li.appendChild(meta);
+    li.appendChild(bubble);
     return li;
   }
 
@@ -2245,17 +2310,20 @@ async function main() {
     messageListEl.textContent = '';
     lastRenderedDay = null;
     const list = messagesByRoom.get(roomId) ?? [];
+    const showDate = await showDateInMessages();
     let scrollTargetLi = null;
     for (const q of list) {
       if (q.value?.editOf) continue; // eine Bearbeitung ist keine eigene Bubble, s. resolveMessageText()
       const dayLabel = fmtDayLabel(q.ts);
       if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-      const li = await buildMessageItem(q, roomId, list);
+      const li = await buildMessageItem(q, roomId, list, showDate);
       messageListEl.appendChild(li);
       if (scrollToId && q.id === scrollToId) scrollTargetLi = li;
     }
     if (scrollTargetLi) {
-      scrollTargetLi.scrollIntoView({ block: 'center' });
+      // 'start' statt 'center' — die ausgewählte Nachricht soll direkt
+      // unter der Kopfzeile erscheinen, nicht in der Mitte der Liste.
+      scrollTargetLi.scrollIntoView({ block: 'start' });
       scrollTargetLi.querySelector('.msg-bubble')?.classList.add('jump-highlight');
     } else {
       // Ein frisch geöffneter Chat ohne (auffindbares) ungelesenes Ziel
@@ -2271,7 +2339,7 @@ async function main() {
     const stick = isNearBottom();
     const dayLabel = fmtDayLabel(q.ts);
     if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-    messageListEl.appendChild(await buildMessageItem(q, roomId, messagesByRoom.get(roomId) ?? []));
+    messageListEl.appendChild(await buildMessageItem(q, roomId, messagesByRoom.get(roomId) ?? [], await showDateInMessages()));
     if (stick) messageListEl.scrollTop = messageListEl.scrollHeight;
   }
 
@@ -2470,7 +2538,9 @@ async function main() {
       if (retry) setTimeout(() => scrollToMessage(id, false), 800);
       return;
     }
-    li.scrollIntoView({ block: 'center' });
+    // 'start' statt 'center' — landet direkt unter der Kopfzeile statt in
+    // der Mitte der Liste (konsistent mit renderMessageList()s Sprungziel).
+    li.scrollIntoView({ block: 'start' });
     const bubble = li.querySelector('.msg-bubble');
     // Klasse erst entfernen+reflow+wieder setzen, sonst startet die
     // CSS-Animation beim zweiten Sprung auf DIESELBE Nachricht nicht neu.
@@ -2531,7 +2601,7 @@ async function main() {
     renderReplyPreview();
   });
 
-  // --- Aktionsmenü einer Nachricht (⋮ in .msg-meta, s. buildMessageActionsBtn()) ---
+  // --- Aktionsmenü einer Nachricht (⋮ in der Kopfzeile, s. buildMessageActionsBtn()) ---
   let messageActionsContext = null; // { q, roomId } für die Nachricht, deren Menü gerade offen ist
   function openMessageActionsMenu(q, roomId, btn) {
     messageActionsContext = { q, roomId };
@@ -3095,6 +3165,7 @@ async function main() {
     soundMessagesToggle.checked = await soundEnabled(SOUND_MESSAGES_KEY);
     soundCallsToggle.checked = await soundEnabled(SOUND_CALLS_KEY);
     autoLoadMediaToggle.checked = await autoLoadMedia();
+    showDateToggle.checked = await showDateInMessages();
     mapProviderSelect.value = await mapProvider();
     mapCustomUrlInput.value = await mapCustomUrlTemplate();
     mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
@@ -3107,6 +3178,13 @@ async function main() {
   soundMessagesToggle.addEventListener('change', () => setSoundEnabled(SOUND_MESSAGES_KEY, soundMessagesToggle.checked));
   soundCallsToggle.addEventListener('change', () => setSoundEnabled(SOUND_CALLS_KEY, soundCallsToggle.checked));
   autoLoadMediaToggle.addEventListener('change', () => setAutoLoadMedia(autoLoadMediaToggle.checked));
+  // Betrifft ALLE Nachrichten des gerade offenen Chats sofort — ein
+  // erneutes Öffnen des Chats wäre sonst der einzige Weg, die neue
+  // Darstellung zu sehen.
+  showDateToggle.addEventListener('change', async () => {
+    await setShowDateInMessages(showDateToggle.checked);
+    if (activeRoomId) renderMessageList(activeRoomId);
+  });
   mapProviderSelect.addEventListener('change', () => {
     setMapProvider(mapProviderSelect.value);
     mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
