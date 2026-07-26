@@ -99,6 +99,16 @@ const MANIFEST_ROLES = ['writers', 'readers', 'admins'];
  * itself already requires being listed in `admins` per
  * createSpaceACLResolver() above, so an unauthorized call fails exactly
  * the same way any other unauthorized manifest write would.
+ *
+ * KNOWN, accepted race (read-then-write, no compare-and-swap): two
+ * concurrent calls — e.g. two admins each independently adding a different
+ * fingerprint — both read the same manifest snapshot and each publish
+ * based on it; whichever publish() lands second (by ts, see core/clock.js)
+ * wins outright and the other's role change is silently lost, not merged.
+ * Same class of trade-off as createSpaceACLResolver's documented
+ * first-write-wins bootstrap race, just on an ongoing edit instead of
+ * Space creation — a caller that needs both changes to survive must
+ * re-read the manifest and retry, this function does not do so itself.
  */
 async function patchManifestRole(session, spaceId, role, mutate) {
   if (!MANIFEST_ROLES.includes(role)) {

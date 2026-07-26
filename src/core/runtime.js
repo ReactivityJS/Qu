@@ -43,6 +43,15 @@ export class QuRuntime {
 
   /** The one write path. `qubit` may or may not already carry sig/writer/pubKey — verify middleware decides whether that's required. */
   async ingest(qubit) {
+    // A non-finite `ts` (NaN, +/-Infinity — reachable from any writer,
+    // local or remote) breaks compareQubits()'s total order: both
+    // `x < NaN` and `NaN < x` are false, so a NaN-ts qubit, once accepted
+    // for an id, would unconditionally "win" against every future write to
+    // that id, INCLUDING a stale replay with an old but valid ts — a
+    // permanent LWW break for that id, not just a rejected one bad write.
+    if (!Number.isFinite(qubit.ts)) {
+      throw new Error(`[Runtime] ingest() rejected: non-finite ts (${qubit.ts}) for ${qubit.id}`);
+    }
     const ctx = { qubit: { ...qubit }, requireSignature: false };
     try {
       await this.#pipeline.run(ctx, async () => {});
@@ -113,10 +122,28 @@ export class QuRuntime {
   get store() { return this.#store; }
 }
 
+// Memoized: query() is on the hot path (every session.query()/session.on()
+// with `initial`/`once` goes through it), and the same handful of patterns
+// (a Space's own collection paths) get queried repeatedly over an app's
+// lifetime — recompiling the identical RegExp from scratch every single
+// call was pure waste. Bounded (not an unbounded cache) because a pattern
+// CAN be a one-off, caller-constructed string (e.g. built from a
+// user-chosen id) — an app that queries many distinct patterns over a long
+// session must not grow this map forever; simple FIFO eviction (delete the
+// oldest key) once full, not true LRU, since query patterns being reused
+// heavily/rarely doesn't need anything more precise than "keep it bounded".
+const regexCache = new Map();
+const REGEX_CACHE_MAX = 1000;
+
 function patternToRegExp(pattern) {
+  const cached = regexCache.get(pattern);
+  if (cached) return cached;
   const escaped = pattern
     .split('/')
     .map((seg) => (seg === '**' ? '.*' : seg === '*' ? '[^/]+' : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     .join('/');
-  return new RegExp(`^${escaped}$`);
+  const re = new RegExp(`^${escaped}$`);
+  if (regexCache.size >= REGEX_CACHE_MAX) regexCache.delete(regexCache.keys().next().value);
+  regexCache.set(pattern, re);
+  return re;
 }

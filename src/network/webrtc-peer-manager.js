@@ -129,7 +129,7 @@ export class PeerConnectionManager {
     return this.#establish(peerFingerprint, opts);
   }
 
-  async #establish(peerFingerprint, { pushTopics = [], group = `peer:${peerFingerprint}`, metric = 10, initialSignals = [] } = {}) {
+  async #establish(peerFingerprint, { pushTopics = [], group = `peer:${peerFingerprint}`, metric = 10, initialSignals = [], connectTimeoutMs = 20000 } = {}) {
     const isOutgoing = initialSignals.length === 0;
     // Markiert, solange DIESE Seite selbst gerade eine Verbindung zu
     // `peerFingerprint` aufbaut (via connectDirect(), nicht reaktiv) —
@@ -156,7 +156,26 @@ export class PeerConnectionManager {
         initiator: isOutgoing,
       });
 
-      await channel.connect(); // wartet auf offenen Datenkanal
+      // Ohne diesen Timeout hängt ein Peer ohne funktionierenden P2P-Pfad
+      // (kein TURN hinter symmetrischem NAT, ICE kommt nie zum Abschluss)
+      // hier fest — `await channel.connect()` löst sich dann NIE auf, also
+      // läuft dieser async-Funktionskörper auch nie bis zum `finally`
+      // unten weiter, und #pendingOutgoing behält diesen Fingerprint
+      // dauerhaft als "im Aufbau" (ein erneuter connectDirect() würde eine
+      // zweite, ebenso hängende RTCPeerConnection aufbauen statt die erste
+      // wiederzuverwenden oder sauber fehlzuschlagen).
+      let timeoutHandle;
+      const timeout = new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error(`[PeerConnectionManager] Verbindungsaufbau zu ${peerFingerprint} nach ${connectTimeoutMs}ms abgebrochen (kein offener Datenkanal)`)), connectTimeoutMs);
+      });
+      try {
+        await Promise.race([channel.connect(), timeout]); // wartet auf offenen Datenkanal
+      } catch (e) {
+        channel.close();
+        throw e;
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
       debug('webrtc-pm', 'establish-datachannel-open', { peerFingerprint });
 
       const provenFp = await authenticateChannel(channel, this.#qu.identity);

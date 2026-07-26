@@ -50,10 +50,16 @@ export async function authenticateChannel(channel, identity = null, { timeoutMs 
     }
   });
 
-  await channel.send({ type: 'qu.auth.hello', challenge: myChallenge });
   try {
+    await channel.send({ type: 'qu.auth.hello', challenge: myChallenge });
     return await theirsPromise;
   } finally {
+    // Must also run if send() itself throws (e.g. the channel is already
+    // closing) — previously the try only wrapped theirsPromise, so a
+    // throwing send() skipped off() entirely and left this onMessage
+    // listener (plus the pending setTimeout until it fires into nothing)
+    // registered on the channel forever.
+    clearTimeout(timer);
     off();
   }
 }

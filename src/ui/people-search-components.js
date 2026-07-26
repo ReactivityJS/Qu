@@ -121,6 +121,16 @@ export class QuPeopleSearchElement extends HTMLElement {
     let entries = []; // [{ fingerprint }] — modules/profiles.js's listDirectory()
     const aliasCache = new Map(); // fp -> alias
     const aliasUnsubs = new Map(); // fp -> unsub, nur solange der Eintrag noch im Verzeichnis ist
+    // refresh() ist fire-and-forget (siehe unten) und hängt während seines
+    // `await qu.listDirectory()` in der Luft — trifft in dieser Zeit ein
+    // erneutes _mount() ein (z. B. attributeChangedCallback), erzeugt das
+    // NEUE entries/aliasCache/aliasUnsubs/this._off, während dieser
+    // veraltete refresh()-Aufruf noch auf die ALTEN Closures zeigt. Ohne
+    // diese Flagge würde er nach dem Aufwachen trotzdem noch
+    // aliasUnsubs.set(...)/qu.get(...).on(...) auf der bereits verwaisten,
+    // alten Map ausführen — Subscriptions, die nie wieder aufgeräumt
+    // werden, weil this._off nur noch die neuen Closures kennt.
+    let mounted = true;
 
     // Fingerprint: `startsWith`, nicht `includes` — ein Fingerprint ist
     // eine ID, kein Fließtext; die ersten paar Zeichen einzutippen (wie
@@ -165,7 +175,15 @@ export class QuPeopleSearchElement extends HTMLElement {
     };
 
     async function refresh() {
-      entries = await qu.listDirectory();
+      let fetched;
+      try {
+        fetched = await qu.listDirectory();
+      } catch (e) {
+        if (mounted) console.error('[qu-people-search] listDirectory() failed:', e);
+        return;
+      }
+      if (!mounted) return; // _unmount() ran while this was in flight — stale, discard
+      entries = fetched;
       const currentFps = new Set(entries.map((e) => e.fingerprint));
       for (const fp of [...aliasUnsubs.keys()]) {
         if (!currentFps.has(fp)) { aliasUnsubs.get(fp)?.(); aliasUnsubs.delete(fp); aliasCache.delete(fp); }
@@ -185,6 +203,7 @@ export class QuPeopleSearchElement extends HTMLElement {
     input.addEventListener('input', render);
     const offDirectory = qu.onDirectoryChange(() => refresh());
     this._off = () => {
+      mounted = false;
       offDirectory();
       for (const off of aliasUnsubs.values()) off();
       aliasUnsubs.clear();

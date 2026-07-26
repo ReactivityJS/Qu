@@ -97,9 +97,13 @@ export class DefaultFileTransfer {
       let ready = false;
       let have = 0;
       let total = 0;
-      if (visible && manifestQ) {
-        total = manifestQ.value.chunks.length;
-        for (const hash of manifestQ.value.chunks) {
+      // Same optional-chaining guard as the chunk-request handler above —
+      // a qubit at `msg.manifestId` that's visible but not actually a file
+      // manifest (no `chunks` array) must not throw while answering a peer.
+      const chunks = manifestQ?.value?.chunks;
+      if (visible && Array.isArray(chunks)) {
+        total = chunks.length;
+        for (const hash of chunks) {
           if (await this.#fileStorage.hasChunk(hash)) have++;
         }
         ready = have === total;

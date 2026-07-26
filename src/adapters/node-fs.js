@@ -33,7 +33,17 @@ export class FileSystemStorageAdapter {
   async #load() {
     await fsp.mkdir(path.dirname(this.#filePath), { recursive: true });
     let text = '';
-    try { text = await fsp.readFile(this.#filePath, 'utf8'); } catch { /* no file yet */ }
+    try {
+      text = await fsp.readFile(this.#filePath, 'utf8');
+    } catch (e) {
+      // Only ENOENT ("no file yet") is the expected, silent case — a
+      // permissions error, a disk error, or any other real I/O failure
+      // must not be treated the same way: silently starting up with an
+      // empty in-memory store, while the log file itself (and everything
+      // previously persisted to it) is still sitting there unreadable,
+      // is worse than a loud failure here.
+      if (e.code !== 'ENOENT') throw e;
+    }
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
       try {

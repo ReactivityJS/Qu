@@ -28,7 +28,11 @@ export async function getReadReceipts(space) {
   const rows = await space.session.query(`${space.id}/reads/**`);
   const receipts = {};
   for (const q of rows) {
-    if (!q.writer) continue;
+    // Any member can technically write anywhere in the room (see file doc
+    // above) — a malformed entry (not an object, or missing `upTo`, e.g.
+    // from a buggy client or a tombstone-style `put(null)`) must not throw
+    // and break EVERY other member's read receipts, just be skipped.
+    if (!q.writer || typeof q.value?.upTo !== 'number') continue;
     const existing = receipts[q.writer];
     if (existing === undefined || q.value.upTo > existing) receipts[q.writer] = q.value.upTo;
   }
@@ -61,7 +65,9 @@ export async function getPresence(space, { staleAfterMs = DEFAULT_STALE_MS } = {
   const now = Date.now();
   const presence = {};
   for (const q of rows) {
-    if (!q.writer) continue;
+    // Same "malformed entry must not break every other member's read"
+    // reasoning as getReadReceipts() above.
+    if (!q.writer || typeof q.value?.lastSeen !== 'number') continue;
     const isFresh = now - q.value.lastSeen < staleAfterMs;
     presence[q.writer] = { status: q.value.status, lastSeen: q.value.lastSeen, online: isFresh && q.value.status === 'online' };
   }

@@ -34,7 +34,14 @@ export function createVerifyPlugin(known = {}) {
       return next();
     }
 
-    let pubKey = known[q.writer];
+    // Object.hasOwn(), not `known[q.writer]` alone: `q.writer` is
+    // attacker-controlled, and a plain object's `[...]` lookup also
+    // resolves inherited Object.prototype properties — `q.writer ===
+    // 'constructor'` (or `'toString'`, `'__proto__'`, ...) would otherwise
+    // silently return a truthy-but-wrong value and skip both the "no
+    // public key" branch AND the fingerprint-derivation/binding check
+    // below, which is this plugin's entire point.
+    let pubKey = Object.hasOwn(known, q.writer) ? known[q.writer] : undefined;
     if (!pubKey) {
       if (!q.pubKey) throw new Error(`[Verify] No public key available for writer ${q.writer}`);
       pubKey = await crypto.subtle.importKey('jwk', q.pubKey, ECDSA, true, ['verify']);

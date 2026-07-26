@@ -201,7 +201,22 @@ export class QuSession {
   async #decrypt(qubit) {
     if (!qubit || !qubit.value || qubit.value.__qu_enc !== 1) return qubit;
     if (!this.#identity) return { ...qubit, value: undefined, encrypted: true };
-    const plain = await decryptWith(this.#identity, qubit.value);
+    // A malformed/corrupted envelope (missing `keys`, truncated `iv`/
+    // `ciphertext`, ...) makes decryptWith() throw instead of resolving —
+    // any writer with ACCESS to this id can produce this once (accidentally
+    // or not). Left uncaught, that one bad qubit would reject query()'s
+    // Promise.all() for EVERY row in the batch, and on()'s per-event
+    // decrypt would surface as an unhandled-rejection-shaped error instead
+    // of the same "can't read this one" outcome a wrong-recipient qubit
+    // already produces below. Treat it the same way: undecryptable, not
+    // fatal to the caller.
+    let plain;
+    try {
+      plain = await decryptWith(this.#identity, qubit.value);
+    } catch (e) {
+      debug('session', 'decrypt-error', { id: qubit.id, error: e.message });
+      return { ...qubit, value: undefined, encrypted: true };
+    }
     if (plain === undefined) return { ...qubit, value: undefined, encrypted: true }; // not an addressed recipient
     return { ...qubit, value: plain };
   }

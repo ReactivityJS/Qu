@@ -991,14 +991,20 @@ Real gemessen (esbuild, `--bundle --minify`, nicht geschätzt):
 
 | Bundle | minifiziert | + gzip |
 |---|---|---|
-| Core (Runtime/Store/Session/Identity/Space-Handle/Clock/ACL/Verify/Crypto/Sign + `qu.js` + Memory/Null-Adapter) | 17,5 KB | 6,2 KB |
-| + Store (Local/Session/IndexedDB/MemoryFileStorage) | 20,0 KB | 6,8 KB |
-| + Network (`createNetworkPlugin()` + Spaces, **ohne** WebRTC) | 27,6 KB | 9,2 KB |
-| + `createWebRTCPlugin()` obendrauf | 32,6 KB | 10,8 KB |
+| Core (Runtime/Store/Session/Identity/Space-Handle/Clock/ACL/Verify/Crypto/Sign + `qu.js` + Memory/Null-Adapter) | 20,9 KB | 7,4 KB |
+| + Store (Local/Session/IndexedDB/MemoryFileStorage) | 23,2 KB | 8,1 KB |
+| + Network (`createNetworkPlugin()` + Spaces, **ohne** WebRTC) | 33,6 KB | 11,3 KB |
+| + `createWebRTCPlugin()` obendrauf | 41,9 KB | 13,8 KB |
+
+(Diese Tabelle wächst mit jeder echten Funktionserweiterung mit — die
+Zahlen sind ein Ist-Stand, kein Zielwert; ein leichter Anstieg gegenüber
+einer älteren Messung hier ist normal, sobald Code hinzukommt, etwa neue
+Härtungs-Prüfungen. Zur Reproduktion: `npm run build`, dann `wc -c` /
+`gzip -c | wc -c` auf `dist/*.min.js`.)
 
 WebRTC ist deshalb ein eigenes Plugin (siehe oben): Apps, die nur über
 einen eigenen Relay per WebSocket synchronisieren — der häufigste Fall —
-zahlen die ~5 KB minifiziert / ~1,6 KB gzip für `RTCPeerConnection`-Code
+zahlen die ~8,3 KB minifiziert / ~2,5 KB gzip für `RTCPeerConnection`-Code
 nicht mit, den sie nie aufrufen. Vor dieser Trennung importierte
 `createNetworkPlugin()` `PeerConnectionManager` unbedingt, wodurch **jede**
 `qu.connect()`-Nutzung WebRTC zwangsweise mitbündelte — real gemessen
