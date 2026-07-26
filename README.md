@@ -1213,6 +1213,31 @@ Neustart/Redeploy änderbar, nicht über das Wire-Protokoll — eine
 kompromittierte Admin-Identität könnte sich sonst dauerhaft selbst
 Rechte hinzufügen.
 
+**Relay-Admin-UI** (`examples/relay-admin/`) — eine Browser-App, um Services
+per Klick statt von Hand signierter/verschlüsselter Events umzuschalten.
+Dieselbe lokal persistierte Identität wie jede andere Qu-App (kein eigener
+Login) — ob sie tatsächlich administrieren darf, entscheidet ausschließlich
+das Relay beim Schreibversuch (`QU_RELAY_ADMINS`), nicht die Seite selbst:
+Verstecken der Seite (Kategorie `'admin'`, taucht deshalb nie im normalen
+Services-Tab auf) ist eine Auffindbarkeits-Entscheidung, keine
+Sicherheitsgrenze — statisches Datei-Ausliefern hat keine Möglichkeit,
+einen Fingerprint vorab zu prüfen (der beweist sich erst, wenn die Seite
+selbst sich mit dem Relay verbindet). Ein per Klick ausgelöster Toggle
+wirft bei Ablehnung KEINEN Fehler auf `publish()` selbst — ein
+zurückgewiesener Push scheitert asynchron, serverseitig, ohne Rückmeldung
+an den Absender (`network/replication/default.js`s Push-Pfad ist
+Fire-and-Forget) — die UI liest deshalb den Katalog nach jedem Versuch neu
+und zeigt Erfolg/Fehlschlag anhand des TATSÄCHLICHEN neuen Zustands an,
+nicht anhand des Ausbleibens einer Exception. Erfordert clientseitig
+`createSpacesPlugin()`, obwohl kein einziger Space angelegt wird — sonst
+lehnt bereits der LOKALE Core-Default (`~<fp>/**`-Beschränkung) jeden
+`admin/service/<id>`-Schreibversuch ab, bevor er das Netzwerk überhaupt
+erreicht (die Bootstrap-Regel für einen manifestlosen generischen Space
+lässt den lokalen Write durch — die eigentliche Autorisierung bleibt
+vollständig die Relay-seitige ACL-Prüfung oben, siehe
+`test/relay-admin-flow.test.mjs`, das genau diese Lücke einmal real
+gefangen hat).
+
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,
 browserfähigen `src/index.js` exportiert — jede Seite, die davon

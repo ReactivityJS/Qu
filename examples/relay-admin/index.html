@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Relay-Admin — Services ein-/ausschalten über signierte, verschlüsselte Admin-Kommandos." />
+  <title>QU — Relay-Admin</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main>
+    <h1>🛠️ Relay-Admin</h1>
+    <p class="lede">
+      Services dieses Relays ein-/ausschalten. Jede Änderung ist ein signiertes,
+      NUR für diesen Relay verschlüsseltes Kommando (<a href="/docs/view.html?file=/README.md">Details im README</a>)
+      — wirkt nur, wenn deine Identität als <code>QU_RELAY_ADMINS</code>-Fingerprint
+      beim Relay hinterlegt ist. Diese Seite selbst prüft das nicht (kann sie
+      nicht — sie zeigt einfach, was das Relay bei Ablehnung meldet).
+    </p>
+
+    <section id="identity-panel" class="panel">
+      <div><span class="label">Deine Identität</span> <code id="my-fp">…</code></div>
+      <div><span class="label">Relay</span> <code id="relay-fp">…</code></div>
+      <div><span class="label">Verbindung</span> <span id="conn-status">verbindet …</span></div>
+    </section>
+
+    <section id="status" class="status" hidden></section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Services</h2>
+        <button id="refresh-btn" type="button">↻ Aktualisieren</button>
+      </div>
+      <ul id="service-list" class="service-list"></ul>
+    </section>
+  </main>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
