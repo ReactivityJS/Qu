@@ -92,6 +92,26 @@ export async function createRelay({
   // else) — a degraded but harmless fallback, not a crash.
   sendPush = null,
   pushSubscriptions = new Map(),
+  // Fingerprints allowed to administer THIS relay — currently just
+  // "write the runtime-maintained service catalog" (relay-services/<id>,
+  // see below), server/service-registry.mjs's `attachStore()`. Empty by
+  // default: an operator who never sets this simply gets no dynamic
+  // service management, not an open-write hole (nobody can ever satisfy
+  // `writers: []`, same "empty means nobody" convention core ACL already
+  // uses elsewhere). A signed+encrypted admin-EVENT protocol for more
+  // sensitive actions (toggling a code-level service, tuning a fail2ban
+  // plugin) is a separate, later mechanism — this option only governs
+  // ordinary signed writes to the plain-data service catalog, which
+  // carries no secret content and so needs no encryption, only write-ACL.
+  relayAdmins = [],
+  // Optional server/service-registry.mjs instance — if given, its
+  // routes()/ingestGates() are NOT automatically wired in here (an HTTP
+  // route composition is server/*.mjs's job, not this file's — see
+  // index.js), only its dynamic (store-backed) half is: attachStore()
+  // below makes `relay-services/<id>` writes show up in the registry
+  // live, and the ACL branch just below is what makes those writes
+  // require a relayAdmins fingerprint in the first place.
+  serviceRegistry = null,
 } = {}) {
   const relay = (await Qu.create({ store, identity })).use(createSpacesPlugin()); // generic (non-User) rooms — the relay's own Runtime enforces this on every incoming push, exactly like any other write
 
@@ -108,11 +128,23 @@ export async function createRelay({
   // (its whole point, see qu.js), so capturing it as a "base" BEFORE
   // calling setACLResolver() below would only alias back to this very
   // wrapper once installed, recursing into itself forever.
+  //
+  // `relay-services/<id>` (server/service-registry.mjs's attachStore()):
+  // readable by anyone (the portal's catalog is public), writable only by
+  // a relayAdmins fingerprint — deliberately NOT mounted on a NullAdapter
+  // like push-subscription/signal above, because this data SHOULD persist
+  // across a restart (it's the actual runtime-maintained service catalog,
+  // not ephemeral control-plane traffic) and stay ordinary, replicable
+  // Space content — the same real `store` mount as everything else.
   const spacesACL = createSpaceACLResolver(relay.runtime);
   relay.setACLResolver(async (id) => {
     const m = /^push-subscription\/([0-9a-f]{24})$/i.exec(id);
-    return m ? { writers: [m[1]], readers: ['*'] } : spacesACL(id);
+    if (m) return { writers: [m[1]], readers: ['*'] };
+    if (id.startsWith('relay-services/')) return { writers: relayAdmins, readers: ['*'] };
+    return spacesACL(id);
   });
+
+  if (serviceRegistry) serviceRegistry.attachStore(relay.runtime);
 
   const hub = new ReplicationHub(relay.runtime, {
     identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter, ingestGate,

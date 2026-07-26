@@ -1157,6 +1157,34 @@ legitime Mesh-/Gossip-Weiterleitung) und wie eine eigene `ingestGate`-Regel
 aussieht, stehen in
 [API.md](./API.md#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate).
 
+**Services-Registry** (`server/service-registry.mjs`) — eine einzige
+Quelle der Wahrheit dafür, welche Services/Beispiele/Dokumentation ein
+Deployment anbietet, statt der früheren, zweifach (server- UND
+client-seitig, unabhängig voneinander) von Hand gepflegten Liste. Zwei
+Arten von Einträgen:
+- **Code-definiert** (in `index.js`, kann eigene HTTP-Routen/Ingest-Gates
+  mitbringen) — nur das `enabled`-Flag ist zur Laufzeit umschaltbar
+  (`QU_SERVICES_DISABLED=forum,hunt` beim Start), eine neue Route/ein neuer
+  Gate-Code braucht weiterhin einen Neustart.
+- **Store-definiert** (reine Daten: Name, Pfad, ein `entry`-Link-Ziel,
+  z. B. ein Verweis auf eine woanders gehostete Instanz) — lebt als
+  gewöhnliches, signiertes QuBit unter `relay-services/<id>`, im echten
+  (persistenten) Store, nicht auf einem `NullAdapter` — übersteht also
+  einen Neustart. Schreibrecht hat nur eine per `QU_RELAY_ADMINS`
+  (kommagetrennte Fingerprints) gepinnte Identität (`relay/relay.mjs`s
+  ACL-Zweig für dieses Präfix); Leserecht ist öffentlich, da der Katalog
+  (`GET /relay/services`) für den Portal-Client sichtbar sein muss. Ein
+  solcher Eintrag ist damit **ganz ohne Neustart** hinzufügbar/editierbar
+  — genau der Fall, in dem "runtime pflegen" tatsächlich sicher möglich
+  ist, weil dabei keine ausführbare Logik übers Netz transportiert wird,
+  nur Daten.
+
+Die Relay-Identität selbst ist stabil über Neustarts hinweg
+(`relay/relay-identity.mjs`, `.relay-data/relay-identity.json`, dasselbe
+Muster wie die VAPID-Schlüssel oben) — Voraussetzung dafür, dass ein
+Admin künftig etwas gezielt AN diesen Relay verschlüsseln kann
+(`~<relayFp>/epub`, per `publishProfile()` beim Start veröffentlicht).
+
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,
 browserfähigen `src/index.js` exportiert — jede Seite, die davon

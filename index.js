@@ -19,7 +19,9 @@ import { createTestRoutes } from './server/test-runner.mjs';
 import { createPushRoutes } from './server/push-routes.mjs';
 import { createWebRTCRoutes } from './server/webrtc-routes.mjs';
 import { createPortalRoutes } from './server/portal-routes.mjs';
+import { createServiceRegistry } from './server/service-registry.mjs';
 import { createRelay } from './relay/relay.mjs';
+import { loadOrGenerateRelayIdentity } from './relay/relay-identity.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
 import { sendWebPush, generateVapidKeys } from './relay/webpush.mjs';
@@ -59,6 +61,43 @@ if (process.env.QU_DEBUG !== '0') {
 // into the former; anything else (including unset) keeps the previous,
 // always-persistent default so existing deployments see no behavior change.
 const persistent = process.env.QU_STORE !== 'memory';
+
+// The Services/Examples/Documentation catalog (portal.mjs, server/
+// portal-routes.mjs) — the single source of truth every consumer reads
+// from, replacing what used to be two independently hand-maintained
+// SERVICE_APPS objects (see server/service-registry.mjs's file doc for
+// the full history). `entry`-only definitions here are the code-level
+// "seed" catalog; an operator with a relayAdmins fingerprint can add
+// FURTHER pure-data (link-only) entries at runtime, no restart, by
+// publishing to `relay-services/<id>` (see relay/relay.mjs) — this array
+// is not the only source once the relay is running, just the bootstrap
+// one. QU_SERVICES_DISABLED (comma-separated ids) turns any of these off
+// at startup, e.g. `QU_SERVICES_DISABLED=forum,hunt`.
+const registry = createServiceRegistry([
+  { id: 'chat', category: 'service', label: '💬 Messenger', description: 'Verschlüsselter 1:1- und Gruppen-Chat, Anrufe, Dateiübertragung — installierbar als PWA.', entry: '/examples/chat/index.html' },
+  { id: 'people', category: 'service', label: '👥 People', description: 'Globales, opt-in Identitäten-Verzeichnis — ein Profil (Alias, Avatar, Zusatz-Attribute), wiederverwendbar über jede Qu-App hinweg.', entry: '/examples/people/index.html' },
+  { id: 'forum', category: 'service', label: '🗂️ Forum', description: 'Themen mit Titel + Antworten auf einem geteilten Space.', entry: '/examples/forum/index.html' },
+  { id: 'cms', category: 'service', label: '📄 CMS', description: 'Seiten/Templates auf einem geteilten Space, mehrere Autoren.', entry: '/examples/cms/index.html' },
+  { id: 'hunt', category: 'service', label: '🗺️ Hunt', description: 'Standort-basiertes Fang-Spiel auf einem geteilten Space.', entry: '/examples/hunt/index.html' },
+  { id: 'example-modules', category: 'example', label: 'Beispiel-Module', description: 'Sechs kurze, fokussierte Module (ToDo-Liste, Forum, App-Space, Sub-Space-Index, Space-App-Basis, CMS-Erweiterung) — Logik getrennt von jeder Oberfläche, mit node --test nachvollziehbar.', entry: '/docs/examples.html' },
+  { id: 'lab', category: 'example', label: 'Interaktives Lab', description: 'Core, Storage, Spaces/ACL, Netzwerk/Relay/Mirror — Schritt für Schritt im Browser, mit echten Objekten in der Konsole zum Weiterprobieren.', entry: '/docs/lab/index.html' },
+  { id: 'playground', category: 'example', label: 'Playground', description: 'Eine fertig initialisierte qu-Instanz in der Konsole, dazu Copy-Paste-Beispiele für get/put/set/on/map, Spaces, Referenzen, Dateien und eine echte Relay-Verbindung.', entry: '/docs/playground.html' },
+  { id: 'readme', category: 'documentation', label: 'README', description: 'Schnelleinstieg, Projektstruktur, Kernprinzipien.', entry: '/docs/view.html?file=/README.md' },
+  { id: 'api', category: 'documentation', label: 'API-Referenz', description: 'Jede öffentliche Funktion/Klasse — Parameter, Rückgabewerte, Beispiele.', entry: '/docs/view.html?file=/API.md' },
+  { id: 'app-guide', category: 'documentation', label: 'App-Guide', description: 'Eine vernetzte App bauen: mehrere Instanzen tauschen Daten über einen echten Relay und einen gemeinsamen App-Space aus.', entry: '/docs/view.html?file=/APP-GUIDE.md' },
+  { id: 'whitepaper', category: 'documentation', label: 'Whitepaper', description: 'Architektur-Spezifikation — Contracts, Sicherheitsmodell, Spaces, Facade.', entry: '/docs/view.html?file=/qu-whitepaper-v0.6.md' },
+  { id: 'tests', category: 'documentation', label: 'Tests', description: 'Dieselbe Testsuite wie npm test, hier im Browser ausgeführt.', entry: '/test/index.html' },
+]);
+for (const id of (process.env.QU_SERVICES_DISABLED || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+  registry.setEnabled(id, false);
+}
+
+// Fingerprints allowed to administer this relay (currently: write the
+// runtime-maintained service catalog, relay-services/<id> — see
+// relay/relay.mjs's relayAdmins option). Empty/unset by default — no admin
+// capability at all until an operator explicitly pins at least one
+// fingerprint here.
+const relayAdmins = (process.env.QU_RELAY_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 
 /** Loads an existing `{ publicKey, privateKey }` from `filePath`, or generates + saves a fresh one on first run. Used only in persistent mode — see the VAPID block below for why memory mode skips this entirely. */
 function loadOrGenerateVapidKeys(filePath) {
@@ -139,7 +178,7 @@ const server = startServer({
     ...createTestRoutes({ root }),
     ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null }),
     ...createWebRTCRoutes({ iceServers }),
-    ...createPortalRoutes({ root }),
+    ...createPortalRoutes({ root, registry }),
   ],
 });
 
@@ -190,8 +229,22 @@ const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 // "Bob" step and examples/relay-space-demo-lib.mjs's runtime-created App-Spaces
 // rely on. Still fully ACL-gated per push, never a wider grant than the
 // static case (README "Sync, Mirror, Relay").
-const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions });
+// A relay that regenerates a fresh identity every restart has no stable
+// fingerprint anything can address it by (an admin encrypting a command
+// "only this relay can read", a peer that pinned it once via trustPeer())
+// — persisted the same way the VAPID keypair above already is, and only
+// in persistent mode for the same reason (see relay-identity.mjs's own
+// doc comment). `publishProfile()` right after makes the relay's own
+// `~<fingerprint>/epub` discoverable — the one thing anything encrypting
+// TO this relay in the future needs to look up.
+const relayIdentity = persistent ? await loadOrGenerateRelayIdentity(path.join(dataDir, 'relay-identity.json')) : undefined;
+
+const relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions, relayAdmins, serviceRegistry: registry });
+if (relayIdentity) await relayApi.relay.publishProfile();
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
+console.log(relayIdentity
+  ? `[Relay] Stable identity: ${relayIdentity.fingerprint}${relayAdmins.length ? ` (${relayAdmins.length} admin fingerprint(s) configured)` : ' (no QU_RELAY_ADMINS configured — no admin write access to relay-services/)'}`
+  : '[Relay] Ephemeral identity (QU_STORE=memory) — a fresh fingerprint every restart.');
 console.log(pushEnabled
   ? `[Relay] Web Push enabled (${pushSubscriptions.size} stored subscription(s))`
   : '[Relay] Web Push disabled (QU_PUSH=0)');
