@@ -2143,6 +2143,21 @@ async function main() {
   }
 
   /**
+   * Der weitergeleitete Ausschnitt oben in der Bubble (q.value.forwardedFrom,
+   * s. dessen Doku in chat.js) — anders als buildReplyQuote() OHNE
+   * Klick-zum-Original: das Original kann in einem GANZ ANDEREN Raum
+   * liegen (Weiterleiten wechselt bewusst den Raum), ein lokales
+   * scrollToMessage() in DIESEM Chat träfe es also grundsätzlich nie.
+   */
+  function buildForwardedQuote(forwardedFrom) {
+    const quote = el('div', 'msg-quote msg-forwarded');
+    quote.appendChild(el('div', 'msg-quote-author', `↪️ Weitergeleitet von ${authorNameFor(forwardedFrom.writer)}`));
+    quote.appendChild(el('div', 'msg-quote-time', `${fmtDayLabel(forwardedFrom.ts)} · ${fmtTime(forwardedFrom.ts)}`));
+    if (forwardedFrom.text) quote.appendChild(el('div', 'msg-quote-text', forwardedFrom.text));
+    return quote;
+  }
+
+  /**
    * Löst eine mögliche Bearbeitung auf — sucht in `list` (derselbe Raum,
    * bereits chronologisch sortiert) nach dem NEUESTEN Eintrag mit
    * `value.editOf === q.id`, dessen verifizierter `writer` MIT dem der
@@ -2250,6 +2265,7 @@ async function main() {
     li.dataset.id = q.id;
     li.appendChild(buildMessageHeader(q, roomId));
     const bubble = el('div', 'msg-bubble');
+    if (q.value?.forwardedFrom) bubble.appendChild(buildForwardedQuote(q.value.forwardedFrom));
     if (q.value?.replyTo) bubble.appendChild(buildReplyQuote(q.value.replyTo));
     const { text: displayText, edited } = resolveMessageText(list, q);
     let metaInsertedInline = false;
@@ -2359,6 +2375,7 @@ async function main() {
     // fälschlich weiter angezeigt/mitgesendet.
     if (replyTarget && replyTarget.roomId !== roomId) { replyTarget = null; renderReplyPreview(); }
     if (editTarget && editTarget.roomId !== roomId) { editTarget = null; textInput.value = ''; autoGrow(); renderReplyPreview(); }
+    if (forwardTarget && forwardTarget.roomId !== roomId) { forwardTarget = null; renderReplyPreview(); }
     activeRoomId = roomId;
     renderRoomHeader(room);
     peerStatusEl.textContent = '…';
@@ -2578,11 +2595,26 @@ async function main() {
   // Bearbeiten sind bewusst gegenseitig exklusive Composer-Zustände (immer
   // nur EINER von beiden aktiv, s. beide Handler unten).
   let editTarget = null;
+  // --- Weiterleiten ---
+  // forwardTarget: { writer, ts, text, roomId } — Schnappschuss der
+  // weiterzuleitenden Nachricht (aus einem ANDEREN Raum, s.
+  // msgActionForwardBtn/applyShareToRoom()). Composer-Text bleibt dabei
+  // LEER (rein optionaler eigener Kommentar) — anders als replyTarget/
+  // editTarget, wo der Text entweder selbst getippt oder vorausgefüllt
+  // ist. Dieselbe gegenseitige Exklusivität wie zwischen Antworten und
+  // Bearbeiten: immer nur EINER der drei Composer-Zustände aktiv.
+  let forwardTarget = null;
   function renderReplyPreview() {
     if (editTarget) {
       replyPreviewEl.hidden = false;
       replyPreviewAuthorEl.textContent = '✏️ Nachricht bearbeiten';
       replyPreviewTextEl.textContent = editTarget.text;
+      return;
+    }
+    if (forwardTarget) {
+      replyPreviewEl.hidden = false;
+      replyPreviewAuthorEl.textContent = `↪️ Weiterleiten von ${authorNameFor(forwardTarget.writer)}`;
+      replyPreviewTextEl.textContent = forwardTarget.text;
       return;
     }
     replyPreviewEl.hidden = !replyTarget;
@@ -2594,10 +2626,13 @@ async function main() {
     // Eine abgebrochene Bearbeitung räumt auch den vorausgefüllten Text
     // wieder weg — anders als bei "Antworten abbrechen", wo der Composer-
     // Text unabhängig vom Zitat war (der User hat ihn selbst getippt, der
-    // bleibt beim Abbrechen stehen).
+    // bleibt beim Abbrechen stehen). Ein abgebrochener Forward hatte nie
+    // vorausgefüllten Text (nur einen optionalen Kommentar), braucht also
+    // dieselbe Behandlung wie "Antworten abbrechen".
     if (editTarget) { textInput.value = ''; autoGrow(); }
     replyTarget = null;
     editTarget = null;
+    forwardTarget = null;
     renderReplyPreview();
   });
 
@@ -2692,19 +2727,24 @@ async function main() {
    * "Teilen an QU Chat"-Share (share-target-modal/pendingShare/
    * applyShareToRoom(), s. dort), nur AD-HOC statt über den Router
    * (shareTargetIsRouted = false, s. closeShareTargetModal()) — dieselbe
-   * Chat-Auswahl + Composer-Übernahme, ohne den Umweg über
-   * Service-Worker/Cache, der nur für einen ECHTEN externen Share nötig
-   * ist. Anhänge werden dabei bewusst NICHT mit weitergeleitet (bräuchte
-   * ein erneutes Herunterladen+Entschlüsseln+Hochladen der Originaldatei
-   * — als klar kommunizierte Einschränkung einfacher als eine
-   * halbfertige/unzuverlässige Variante).
+   * Chat-Auswahl, aber statt den rohen Text direkt in den Composer zu
+   * übernehmen (das würde "mein Kommentar" und "weitergeleiteter Inhalt"
+   * ununterscheidbar vermischen), setzt applyShareToRoom() unten für einen
+   * Forward stattdessen `forwardTarget` — die Nachricht wird dadurch beim
+   * Senden explizit als Weiterleitung markiert (chat.js's `forwardedFrom`)
+   * und im Ziel-Chat als eigener Zitat-Block angezeigt, der Composer-Text
+   * bleibt ein rein OPTIONALER eigener Kommentar dazu. Anhänge werden dabei
+   * bewusst NICHT mit weitergeleitet (bräuchte ein erneutes Herunterladen+
+   * Entschlüsseln+Hochladen der Originaldatei — als klar kommunizierte
+   * Einschränkung einfacher als eine halbfertige/unzuverlässige Variante).
    */
   msgActionForwardBtn.addEventListener('click', () => {
-    const { q } = messageActionsContext;
+    const { q, roomId } = messageActionsContext;
     closeMessageActionsMenu();
-    if (!q.value?.text) return; // keine reine Anhang-Nachricht ohne Text weiterleitbar, s. o.
+    const { text } = resolveMessageText(messagesByRoom.get(roomId) ?? [], q); // die evtl. bearbeitete, aktuell sichtbare Fassung
+    if (!text) return; // keine reine Anhang-Nachricht ohne Text weiterleitbar, s. o.
     shareTargetIsRouted = false;
-    pendingShare = { text: q.value.text, url: '', title: '', files: [] };
+    pendingShare = { text: '', url: '', title: '', files: [], forwardedFrom: { writer: q.writer, ts: q.ts, text } };
     shareTargetSummaryEl.textContent = q.refs?.length
       ? 'Nachricht weiterleiten (nur Text — Anhänge werden nicht mit übernommen)'
       : 'Nachricht weiterleiten';
@@ -3018,7 +3058,10 @@ async function main() {
       return;
     }
     const files = pendingFiles;
-    if (!text && !files.length) return;
+    // Ein aktiver Forward darf auch OHNE eigenen Kommentar UND ohne Anhänge
+    // gesendet werden — forwardedFrom trägt in dem Fall den gesamten
+    // Inhalt (ein "reiner" Forward, s. forwardTarget's eigene Doku).
+    if (!text && !files.length && !forwardTarget) return;
     const roomId = activeRoomId;
     const room = roomById(roomId);
     sendBtn.disabled = true;
@@ -3046,6 +3089,7 @@ async function main() {
         // replyTarget's eigene Doku) gehört NICHT in die gespeicherte
         // Nachricht — innerhalb eines Raums ohnehin immer derselbe.
         replyTo: replyTarget ? { id: replyTarget.id, writer: replyTarget.writer, ts: replyTarget.ts, text: replyTarget.text } : undefined,
+        forwardedFrom: forwardTarget ? { writer: forwardTarget.writer, ts: forwardTarget.ts, text: forwardTarget.text } : undefined,
         // Fortschritt für lokales Verschlüsseln/Zerstückeln GROSSER Anhänge
         // (z. B. ein Video) — ohne das sah ein größerer Upload nach einem
         // hängenden Sendevorgang aus, weil die UI vorher bis zum Schluss
@@ -3070,6 +3114,7 @@ async function main() {
       pendingFiles = [];
       renderPendingFiles();
       replyTarget = null;
+      forwardTarget = null;
       renderReplyPreview();
 
       // "Beim Relay angekommen?"-Status: als unbestätigt eintragen (auch
@@ -3449,6 +3494,19 @@ async function main() {
     shareTargetModal.hidden = true;
     if (!share) return;
     await redirectTo(roomId); // kein eigener Verlaufseintrag — "zurück" soll nicht auf dieses (bereits übernommene) Auswahl-Formular führen
+    if (share.forwardedFrom) {
+      // Weiterleitung (msgActionForwardBtn) statt eines externen Shares —
+      // der Composer-Text bleibt LEER (rein optionaler eigener Kommentar,
+      // kein vermischter Text wie bei einem externen Share), replyTarget/
+      // editTarget weichen einer Weiterleitung (dieselbe gegenseitige
+      // Exklusivität wie zwischen Antworten und Bearbeiten).
+      replyTarget = null;
+      editTarget = null;
+      forwardTarget = { ...share.forwardedFrom, roomId };
+      renderReplyPreview();
+      textInput.focus();
+      return;
+    }
     const textParts = [share.text, share.url].filter(Boolean);
     if (textParts.length) {
       const shared = textParts.join(' ');

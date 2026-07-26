@@ -522,6 +522,14 @@ button { font-family: inherit; }
 .msg-quote-author { font-size: 0.76rem; color: var(--accent-strong); font-weight: 600; }
 .msg-quote-time { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.1rem; }
 .msg-quote-text { font-size: 0.82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Weitergeleitet (q.value.forwardedFrom) — eigener Rahmen-Akzent (grau/
+   neutral statt Accent-Farbe) UND kein "cursor: pointer"/Hover-Effekt der
+   Basis-.msg-quote, da hier NICHT zum Original gesprungen werden kann
+   (buildForwardedQuote()s eigene Doku: das liegt evtl. in einem anderen
+   Raum). */
+.msg-forwarded { border-left-color: var(--muted); cursor: default; }
+.msg-forwarded:hover { background: #00000030; }
+.msg-forwarded .msg-quote-author { color: var(--muted); }
 
 /* Immer sichtbar (nicht nur bei Hover) — Touch-Geräte haben kein Hover,
    siehe die übrige Composer-/Popup-Gestaltung dieser App. In der

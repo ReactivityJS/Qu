@@ -53,8 +53,14 @@ function randomId() {
  * space-membership.js/chat.js already apply everywhere else); an edit from
  * anyone else is just an ignorable, harmless extra QuBit. Not meant to be
  * combined with `attachments`/`replyTo` — an edit only ever carries `text`.
+ *
+ * `forwardedFrom`, if given, is a snapshot (`{ writer, ts, text }`, same
+ * shape/reasoning as `replyTo`) of a message forwarded from ANOTHER room —
+ * `text` here is the forwarding user's own OPTIONAL comment, not the
+ * forwarded content itself, so unlike a normal message this may legitimately
+ * be sent with an empty `text` (a bare forward, no added comment).
  */
-export async function sendMessage(space, { text, attachments = [], encryptFor, onAttachmentProgress, replyTo, editOf } = {}) {
+export async function sendMessage(space, { text, attachments = [], encryptFor, onAttachmentProgress, replyTo, editOf, forwardedFrom } = {}) {
   const fp = space.session.fingerprint;
   const refs = [];
   for (let i = 0; i < attachments.length; i++) {
@@ -77,7 +83,7 @@ export async function sendMessage(space, { text, attachments = [], encryptFor, o
     });
     refs.push(manifestId);
   }
-  const result = await space.get('msgs').set({ text, replyTo, editOf }, { refs: refs.length ? refs : undefined, encryptFor });
+  const result = await space.get('msgs').set({ text, replyTo, editOf, forwardedFrom }, { refs: refs.length ? refs : undefined, encryptFor });
   return { ...result, refs };
 }
 
