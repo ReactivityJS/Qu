@@ -1157,6 +1157,62 @@ legitime Mesh-/Gossip-Weiterleitung) und wie eine eigene `ingestGate`-Regel
 aussieht, stehen in
 [API.md](./API.md#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate).
 
+**Services-Registry** (`server/service-registry.mjs`) — eine einzige
+Quelle der Wahrheit dafür, welche Services/Beispiele/Dokumentation ein
+Deployment anbietet, statt der früheren, zweifach (server- UND
+client-seitig, unabhängig voneinander) von Hand gepflegten Liste. Zwei
+Arten von Einträgen:
+- **Code-definiert** (in `index.js`, kann eigene HTTP-Routen/Ingest-Gates
+  mitbringen) — nur das `enabled`-Flag ist zur Laufzeit umschaltbar
+  (`QU_SERVICES_DISABLED=forum,hunt` beim Start), eine neue Route/ein neuer
+  Gate-Code braucht weiterhin einen Neustart.
+- **Store-definiert** (reine Daten: Name, Pfad, ein `entry`-Link-Ziel,
+  z. B. ein Verweis auf eine woanders gehostete Instanz) — lebt als
+  gewöhnliches, signiertes QuBit unter `relay-services/<id>`, im echten
+  (persistenten) Store, nicht auf einem `NullAdapter` — übersteht also
+  einen Neustart. Schreibrecht hat nur eine per `QU_RELAY_ADMINS`
+  (kommagetrennte Fingerprints) gepinnte Identität (`relay/relay.mjs`s
+  ACL-Zweig für dieses Präfix); Leserecht ist öffentlich, da der Katalog
+  (`GET /relay/services`) für den Portal-Client sichtbar sein muss. Ein
+  solcher Eintrag ist damit **ganz ohne Neustart** hinzufügbar/editierbar
+  — genau der Fall, in dem "runtime pflegen" tatsächlich sicher möglich
+  ist, weil dabei keine ausführbare Logik übers Netz transportiert wird,
+  nur Daten.
+
+Die Relay-Identität selbst ist stabil über Neustarts hinweg
+(`relay/relay-identity.mjs`, `.relay-data/relay-identity.json`, dasselbe
+Muster wie die VAPID-Schlüssel oben) — Voraussetzung dafür, dass ein
+Admin gezielt AN diesen Relay verschlüsseln kann (`~<relayFp>/epub`, per
+`publishProfile()` beim Start veröffentlicht).
+
+**Admin-Kommandos** (`admin/<...>`, `relay/relay.mjs`s `runtime.on('admin/**', ...)`-
+Listener) — für sensiblere Aktionen als die öffentlich sichtbare
+Services-Registry oben, aktuell: Ein-/Ausschalten eines CODE-definierten
+Services (`admin/service/<id>`, s.o.). Anders als `relay-services/<id>`
+ist ein Admin-Kommando sowohl **signiert als auch verschlüsselt** — nur
+eine `QU_RELAY_ADMINS`-Identität darf schreiben (dieselbe Verify+ACL-
+Pipeline wie jeder andere Write), und der Inhalt ist nur mit dem privaten
+Schlüssel DIESES Relays entschlüsselbar (`core/crypto.js`s `encryptFor`/
+`decryptWith`, adressiert an `relay.fingerprint` über dessen
+`~<relayFp>/epub`). Deliberately keine neue Wire-Form — ein Admin-Kommando
+ist ein gewöhnliches QuBit auf einem `NullAdapter`-Präfix
+(`replicate:false`, index.js), exakt derselbe Trick wie
+`push-subscription/<fp>`, nur zusätzlich verschlüsselt statt nur signiert.
+Ein `{ enabled, ttl }`-Kommando ist **temporär**: der Relay merkt sich den
+Zustand von unmittelbar davor und stellt ihn nach `ttl`ms selbst wieder
+her, außer ein neueres Kommando für dieselbe Service-Id trifft vorher ein
+(dann gewinnt das neuere, der alte geplante Revert wird verworfen). Eine
+falsch adressierte oder unverschlüsselte Nachricht auf diesem Präfix wird
+verworfen (`debug('relay', 'admin-command-*', …)`), nie als Fehler nach
+außen geworfen — ein Admin-Kanal, der durch eine fehlgeformte Nachricht
+zum Absturz gebracht werden könnte, wäre schlimmer als ein still
+ignoriertes Kommando.
+
+Die Admin-Fingerprint-Liste selbst (`QU_RELAY_ADMINS`) ist bewusst NUR per
+Neustart/Redeploy änderbar, nicht über das Wire-Protokoll — eine
+kompromittierte Admin-Identität könnte sich sonst dauerhaft selbst
+Rechte hinzufügen.
+
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,
 browserfähigen `src/index.js` exportiert — jede Seite, die davon
