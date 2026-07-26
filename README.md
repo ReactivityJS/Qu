@@ -1238,6 +1238,37 @@ vollständig die Relay-seitige ACL-Prüfung oben, siehe
 `test/relay-admin-flow.test.mjs`, das genau diese Lücke einmal real
 gefangen hat).
 
+**Custom-Services** (`server/service-registry.mjs`s Erweiterungsvertrag,
+Referenzimplementierung `relay/services/fail2ban.mjs`) — ein Dritt-Anbieter
+erweitert ein Deployment über eine eigene `createXService(opts) ->
+Definition`-Fabrik (dieselbe Namenskonvention wie `createXPlugin()`/
+`createXRoutes()`), deren Ergebnis in `createServiceRegistry([...])`
+landet. Bewusst **Code-Ebene, Deploy-Zeit** — eine NEUE Custom-Service
+braucht weiterhin einen Neustart, genau wie jede andere Option von
+`createRelay()`/`index.js`. Das ist keine Lücke, die später durch
+Remote-/Laufzeit-Registrierung "behoben" werden sollte: Ein Custom-Service
+kann über seine `ingestGates` Pushes für den GANZEN Relay ablehnen/
+annehmen (dieselbe Vertrauensstufe wie `requireDirectWriterGate`/
+`rateLimitGate`) — Code aus einer Netzwerknachricht zu laden hieße, Code
+auszuführen, den ein Admin nur BEHAUPTET zu besitzen, nicht Code, den der
+Betreiber selbst gewählt und geprüft hat. Was echt remote administrierbar
+ist, ganz ohne Neustart: das Enable/Disable-Flag eines bereits
+installierten Custom-Services (wie jeder andere Service) und eigene
+Admin-Aktionen über `onAdminEvent()` (`admin/service/<id>/<action>`,
+z. B. `fail2ban`s `unban` — Konfiguration, nie neue Logik).
+
+`fail2ban.mjs` bannt einen Fingerprint nach `maxFailuresPerWindow`
+abgelehnten Pushes innerhalb von `windowMs` für `banDurationMs` — anders
+als `rateLimiter` (zu viel LEGITIMER Traffic) geht es hier um WIEDERHOLT
+ABGELEHNTE Pushes (falsche Signatur, ACL-Verstoß, kaputte Payload). Lernt
+davon **ohne** einen neuen Hook im Core: `network/replication/default.js`s
+bestehendes `debug('replication', 'push-rejected', { writer, … })`-Event
+(derselbe Debug-Bus, den `enableConsoleDebug()` schon nutzt) trägt bereits
+alles Nötige — `attachDebugBus()` abonniert nur diesen bereits
+existierenden Bus. Standardmäßig im Demo-Deployment registriert, aber
+deaktiviert (`enabledByDefault: false`, `index.js`) — ein Betreiber schaltet
+es gezielt per Admin-Kommando ein.
+
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,
 browserfähigen `src/index.js` exportiert — jede Seite, die davon

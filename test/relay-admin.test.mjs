@@ -84,18 +84,18 @@ test('admin toggle: a ttl\'d command reverts to the prior state on its own after
   const adminSession = new QuSession(relayApi.relay.runtime, { identity: admin });
   await adminSession.trustPeer(relayApi.relay.fingerprint, await crypto.subtle.exportKey('jwk', relayApi.relay.identity.encryptionKey));
 
-  await adminSession.publish('admin/service/forum', { enabled: false, ttl: 30 }, { encryptFor: [relayApi.relay.fingerprint] });
-  await wait(10);
+  await adminSession.publish('admin/service/forum', { enabled: false, ttl: 80 }, { encryptFor: [relayApi.relay.fingerprint] });
+  await wait(20);
   assert.equal(registry.isEnabled('forum'), false, 'the temporary toggle takes effect immediately');
-  await wait(40);
+  await wait(150);
   assert.equal(registry.isEnabled('forum'), true, 'the temporary toggle must revert on its own after ttl expires');
 
   // A second ttl'd command must cancel the first's pending revert — the
   // second one's OWN revert (to whatever was true right before IT landed)
   // is what fires, not a leftover timer from the first.
-  await adminSession.publish('admin/service/forum', { enabled: false, ttl: 20 }, { encryptFor: [relayApi.relay.fingerprint] });
-  await wait(5);
-  await adminSession.publish('admin/service/forum', { enabled: true, ttl: 1000 }, { encryptFor: [relayApi.relay.fingerprint] });
-  await wait(30); // past the SECOND command's ttl (20ms), well before the third's (1000ms)
+  await adminSession.publish('admin/service/forum', { enabled: false, ttl: 60 }, { encryptFor: [relayApi.relay.fingerprint] });
+  await wait(15);
+  await adminSession.publish('admin/service/forum', { enabled: true, ttl: 5000 }, { encryptFor: [relayApi.relay.fingerprint] });
+  await wait(120); // past the SECOND command's ttl (60ms), well before the third's (5000ms)
   assert.equal(registry.isEnabled('forum'), true, 'the second command\'s pending revert must have been cancelled by the third command, not fired late and stomped its effect');
 });

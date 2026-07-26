@@ -237,7 +237,13 @@ export class DefaultReplication {
         // must never crash the connection or the process. Previously this
         // await was unguarded, so any rejection here became an unhandled
         // promise rejection (Node's default: terminate the process).
-        debug('replication', 'push-rejected', { id: msg.qubit?.id, error: e.message });
+        // `writer` included here (not just `id`/`error`) so a debug-bus
+        // listener can attribute a rejection to WHO caused it — e.g.
+        // relay/services/fail2ban.mjs bans a repeatedly-rejected writer,
+        // without this codebase needing a bespoke "ingest failure" hook:
+        // the existing debug bus (core/debug.js) already carries every
+        // rejection, this just enriches the one field a consumer needs.
+        debug('replication', 'push-rejected', { id: msg.qubit?.id, writer: msg.qubit?.writer, error: e.message });
         console.error(`[Replication] rejected incoming push for ${msg.qubit?.id}:`, e.message);
       }
       return;

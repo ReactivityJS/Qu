@@ -193,31 +193,72 @@ export async function createRelay({
       return;
     }
     debug('relay', 'admin-command', { id: q.id, writer: q.writer, command: decrypted });
+    if (!serviceRegistry) return;
 
-    const m = /^admin\/service\/([^/]+)$/.exec(q.id);
-    if (!m || !serviceRegistry) return;
-    const serviceId = m[1];
+    // `admin/service/<id>` (no further segment) -> the built-in enable/
+    // disable toggle every code-defined service already supports.
+    const toggle = /^admin\/service\/([^/]+)$/.exec(q.id);
+    if (toggle) {
+      const serviceId = toggle[1];
+      const pending = pendingReverts.get(serviceId);
+      if (pending) { clearTimeout(pending.timer); pendingReverts.delete(serviceId); }
 
-    const pending = pendingReverts.get(serviceId);
-    if (pending) { clearTimeout(pending.timer); pendingReverts.delete(serviceId); }
+      const revertTo = serviceRegistry.isEnabled(serviceId);
+      serviceRegistry.setEnabled(serviceId, !!decrypted.enabled);
+      if (decrypted.ttl > 0) {
+        const timer = setTimeout(() => {
+          pendingReverts.delete(serviceId);
+          serviceRegistry.setEnabled(serviceId, revertTo);
+          debug('relay', 'admin-command-ttl-reverted', { id: serviceId, revertedTo: revertTo });
+        }, decrypted.ttl);
+        timer.unref?.(); // Node-only; never keep the process alive just for a pending revert (same reasoning as core/heartbeat.js's own timer)
+        pendingReverts.set(serviceId, { timer, revertTo });
+      }
+      return;
+    }
 
-    const revertTo = serviceRegistry.isEnabled(serviceId);
-    serviceRegistry.setEnabled(serviceId, !!decrypted.enabled);
-    if (decrypted.ttl > 0) {
-      const timer = setTimeout(() => {
-        pendingReverts.delete(serviceId);
-        serviceRegistry.setEnabled(serviceId, revertTo);
-        debug('relay', 'admin-command-ttl-reverted', { id: serviceId, revertedTo: revertTo });
-      }, decrypted.ttl);
-      timer.unref?.(); // Node-only; never keep the process alive just for a pending revert (same reasoning as core/heartbeat.js's own timer)
-      pendingReverts.set(serviceId, { timer, revertTo });
+    // `admin/service/<id>/<action>` -> a service-specific action, handled
+    // entirely by that service's own onAdminEvent() (server/service-
+    // registry.mjs's extension contract) — e.g. relay/services/fail2ban.mjs's
+    // "unban". This relay knows nothing about what actions a given custom
+    // service supports; it only routes the (action, decrypted-payload)
+    // pair to whichever definition claims that id, same "configuration of
+    // an already-installed service, never new logic" boundary the
+    // extension contract documents.
+    const action = /^admin\/service\/([^/]+)\/([^/]+)$/.exec(q.id);
+    if (action) {
+      const [, serviceId, actionName] = action;
+      const def = serviceRegistry.get(serviceId);
+      const handled = def?.onAdminEvent ? def.onAdminEvent(actionName, decrypted) : false;
+      debug('relay', 'admin-service-action', { id: serviceId, action: actionName, handled: !!handled });
     }
   });
 
+  // A registered custom service's own ingestGates (e.g. relay/services/
+  // fail2ban.mjs's ban-check) run in the SAME per-connection pipeline as
+  // requireDirectWriter/rateLimiter/the caller's own `ingestGate` array —
+  // appended after them, same "a fourth protection is a function, not a
+  // new constructor flag" reasoning ingest-gate.js's own doc already
+  // establishes. registry.ingestGates() already wraps each one with a
+  // live `enabled` check (server/service-registry.mjs), so a service
+  // toggled off via an admin command stops enforcing immediately without
+  // this pipeline ever being rebuilt.
   const hub = new ReplicationHub(relay.runtime, {
-    identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter, ingestGate,
+    identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter,
+    ingestGate: [...ingestGate, ...(serviceRegistry?.ingestGates() ?? [])],
     allowDynamicSubscribe, maxDynamicTopics,
   });
+
+  // Lets a custom service OBSERVE real ingest rejections (e.g. fail2ban
+  // counting failures toward a ban) without this relay needing a bespoke
+  // "on ingest failure" hook — network/replication/default.js's existing
+  // debug('replication', 'push-rejected', { writer, ... }) event already
+  // carries everything needed; attachDebugBus() (if a service defines it)
+  // is just that service subscribing to the same debug bus (core/debug.js)
+  // any console-debug listener already uses.
+  if (serviceRegistry) {
+    for (const def of serviceRegistry.list()) def.attachDebugBus?.();
+  }
   const connected = new Map(); // fingerprint -> { channel, fileTransfer }
   const recentCallPushes = new Map(); // to-fingerprint -> timestamp of the last call-invite push sent them
   const CALL_PUSH_COOLDOWN_MS = 20_000; // examples/chat/app.mjs's startCall() re-announces 'call-invite' every 6s while ringing — without this, one ring would trigger a push every 6s instead of once
