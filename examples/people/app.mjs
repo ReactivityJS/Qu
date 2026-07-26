@@ -272,11 +272,22 @@ async function main() {
     const attrs = await qu.listProfileAttrs(qu.fingerprint);
     renderAttrList(attrListEl, attrEmptyEl, attrs, { removable: true });
   }
+  /**
+   * `attrs`: `{ key: { value, private } }` (s. listProfileAttrs()'s Doku in
+   * profiles.js). `private` ist nur für die EIGENE Liste (`removable: true`)
+   * überhaupt von Interesse — ein privates Feld eines FREMDEN Profils
+   * erreicht diese Funktion sowieso nie (Entschlüsselung schlägt für eine
+   * nicht adressierte Leserin fehl, listProfileAttrs() filtert es schon
+   * heraus), ein Sichtbarkeits-Hinweis wäre dort also immer nur "🌐
+   * Öffentlich" auf jeder Zeile — redundant, deshalb dort bewusst
+   * ausgeblendet statt es trotzdem anzuzeigen.
+   */
   function renderAttrList(listEl, emptyEl, attrs, { removable = false } = {}) {
     const keys = Object.keys(attrs);
     listEl.textContent = '';
     emptyEl.hidden = keys.length > 0;
     for (const key of keys) {
+      const { value, private: isPrivate } = attrs[key];
       const li = document.createElement('li');
       li.className = 'attr-row';
       const keyEl = document.createElement('span');
@@ -284,9 +295,22 @@ async function main() {
       keyEl.textContent = key;
       const valueEl = document.createElement('span');
       valueEl.className = 'attr-value';
-      valueEl.textContent = attrs[key];
+      valueEl.textContent = value;
       li.append(keyEl, valueEl);
       if (removable) {
+        // Umschalten schreibt denselben Wert einfach mit umgekehrter
+        // encryptFor-Einstellung neu (put() derselben Schlüssel-Adresse,
+        // s. setProfileAttr()) — kein Entfernen+Neuanlegen nötig.
+        const privacyBtn = document.createElement('button');
+        privacyBtn.type = 'button';
+        privacyBtn.className = 'attr-privacy-btn';
+        privacyBtn.title = isPrivate ? 'Privat — antippen, um öffentlich zu machen' : 'Öffentlich — antippen, um privat zu machen';
+        privacyBtn.textContent = isPrivate ? '🔒 Privat' : '🌐 Öffentlich';
+        privacyBtn.addEventListener('click', async () => {
+          await qu.setProfileAttr(key, value, isPrivate ? {} : { encryptFor: [qu.fingerprint] });
+          await renderOwnAttrs();
+        });
+        li.appendChild(privacyBtn);
         const removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.className = 'attr-remove-btn';
