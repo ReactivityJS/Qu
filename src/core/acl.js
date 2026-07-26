@@ -34,7 +34,19 @@ export async function filterForReader(qubits, readerFingerprint, getACL) {
 
   const out = [];
   for (const [space, group] of bySpace) {
-    const acl = await getACL(group[0].id);
+    // A getACL() failure for ONE Space in this batch (storage I/O error, an
+    // unexpected manifest shape) must not reject the whole call — that
+    // would silently withhold every OTHER Space's qubits in the same sync
+    // response too, not just this one's. Fail closed for the affected
+    // Space only (same as "no acl found" below), same class of fix as
+    // session.js's #decrypt().
+    let acl;
+    try {
+      acl = await getACL(group[0].id);
+    } catch (e) {
+      console.error(`[ACL] getACL() failed for Space "${space}", excluding its ${group.length} qubit(s) from this read:`, e);
+      continue;
+    }
     if (!acl || !acl.readers || acl.readers.includes('*') || acl.readers.includes(readerFingerprint)) {
       out.push(...group);
     }

@@ -12,6 +12,15 @@ export function openIndexedDB(dbName, upgrade) {
     req.onupgradeneeded = () => upgrade(req.result);
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+    // Fires instead of onsuccess/onupgradeneeded if another tab holds an
+    // older-version connection open — this promise (and every adapter
+    // method awaiting it) would otherwise hang forever with zero
+    // diagnostic. Not resolved/rejected here on purpose: the browser keeps
+    // waiting for the other tab to close/upgrade too, and may still
+    // succeed once it does — this is only a visibility improvement, not a
+    // behavior change, so a caller who needs a hard failure/timeout for
+    // this case still has to add one themselves.
+    req.onblocked = () => console.warn(`[IndexedDB] open("${dbName}") blocked by another open connection (e.g. another tab) — waiting for it to close.`);
   });
 }
 

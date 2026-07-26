@@ -49,7 +49,15 @@ export function subscribeWithOptions({ queryFn, subscribeFn, pattern, callback, 
       if (seen.has(`${q.id}|${q.ts}`)) return;
       callback(q);
     });
-  })();
+  })().catch((e) => {
+    // queryFn() (a network-backed query, in particular) can reject — without
+    // this, that became an unhandled promise rejection, which Node
+    // terminates the process on by default (see core/channel.js's own doc
+    // comment on exactly this failure mode). A failed catch-up must not
+    // crash the caller; it just means no initial batch (and no live
+    // subscription either, matching subscribeFn() never having run).
+    if (!cancelled) console.error(`[subscribeWithOptions] catch-up query for "${pattern}" failed:`, e);
+  });
 
   return () => {
     cancelled = true;
