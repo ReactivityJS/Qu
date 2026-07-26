@@ -121,7 +121,19 @@ for (const id of (process.env.QU_SERVICES_DISABLED || '').split(',').map((s) => 
 // relay/relay.mjs's relayAdmins option). Empty/unset by default — no admin
 // capability at all until an operator explicitly pins at least one
 // fingerprint here.
-const relayAdmins = (process.env.QU_RELAY_ADMINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+// `.toLowerCase()` matters: a fingerprint is ALWAYS lowercase hex
+// (core/identity.js's fingerprintOfPublicKey() builds it via
+// `byte.toString(16)`, which never produces uppercase) — but a
+// hand-typed or copy-pasted env var (a docker-compose.yml value, a
+// clipboard that auto-capitalized, ...) can easily end up with different
+// casing that LOOKS identical at a glance in a long hex string, and
+// `acl.writers.includes(q.writer)` (core/acl.js) is a plain, case-
+// SENSITIVE string comparison — a single differently-cased character
+// silently makes every write from that admin fail, with no visual cue
+// in a side-by-side comparison. Normalizing here costs nothing (a
+// fingerprint is public, not a secret whose case ever needs preserving)
+// and removes an entire class of "looks the same but isn't" bug reports.
+const relayAdmins = (process.env.QU_RELAY_ADMINS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 /** Loads an existing `{ publicKey, privateKey }` from `filePath`, or generates + saves a fresh one on first run. Used only in persistent mode — see the VAPID block below for why memory mode skips this entirely. */
 function loadOrGenerateVapidKeys(filePath) {
@@ -279,7 +291,17 @@ const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 const relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions, relayAdmins, serviceRegistry: registry });
 await relayApi.relay.publishProfile(); // makes ~<fingerprint>/epub discoverable — the one thing anything encrypting TO this relay needs to look up (also directly served at /relay/info above, no sync required)
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
-console.log(`[Relay] Identity: ${relayIdentity.fingerprint}${persistent ? ' (stable across restarts)' : ' (ephemeral — QU_STORE=memory, a fresh fingerprint every restart)'}${relayAdmins.length ? `, ${relayAdmins.length} admin fingerprint(s) configured` : ' — no QU_RELAY_ADMINS configured, no admin write access to relay-services/ or admin/'}`);
+console.log(`[Relay] Identity: ${relayIdentity.fingerprint}${persistent ? ' (stable across restarts)' : ' (ephemeral — QU_STORE=memory, a fresh fingerprint every restart)'}`);
+// The FULL list, not just a count — a count ("2 admin fingerprint(s)
+// configured") can never reveal a subtle mismatch (wrong case, a stray
+// quote character from a docker-compose quoting mistake, an extra
+// space) between what an operator THINKS is configured and what
+// actually landed in process.env; printing the exact strings this relay
+// will compare against is what makes that kind of bug visible at a
+// glance instead of needing a second debugging round trip.
+console.log(relayAdmins.length
+  ? `[Relay] Admin fingerprints configured (${relayAdmins.length}): ${relayAdmins.join(', ')}`
+  : '[Relay] No QU_RELAY_ADMINS configured — no admin write access to relay-services/ or admin/');
 console.log(pushEnabled
   ? `[Relay] Web Push enabled (${pushSubscriptions.size} stored subscription(s))`
   : '[Relay] Web Push disabled (QU_PUSH=0)');
