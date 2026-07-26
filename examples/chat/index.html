@@ -74,10 +74,18 @@
           <span id="voice-timer">0:00</span>
         </div>
         <audio id="voice-preview-audio" hidden controls></audio>
-        <button id="voice-start-btn" class="icon-btn voice-start-btn" type="button" title="Aufnahme starten">⏺</button>
-        <button id="voice-pause-btn" class="icon-btn" type="button" title="Pause" hidden>⏸</button>
-        <button id="voice-resume-btn" class="icon-btn voice-start-btn" type="button" title="Fortsetzen" hidden>▶</button>
-        <button id="voice-stop-btn" class="icon-btn voice-stop-btn" type="button" title="Aufnahme beenden" hidden>⏹</button>
+        <!-- Als CSS-gezeichnete Formen statt Unicode-Glyphen (⏺⏸▶⏹) — die
+             sehen je nach Gerät/Schriftart unterschiedlich (teils gar nicht
+             oder verwechselbar ähnlich) aus. Kreis/Balken/Dreieck/Quadrat
+             sind auf jedem Gerät exakt gleich UND folgen der aus jeder
+             Aufnahme-App bekannten Konvention: roter Kreis = aufnehmen,
+             rotes Quadrat = beenden — bewusst unterschiedliche SILHOUETTEN,
+             nicht nur unterschiedliche Farben (auch für Farbenblinde klar
+             unterscheidbar). -->
+        <button id="voice-start-btn" class="icon-btn voice-record-btn" type="button" title="Aufnahme starten"><span class="voice-icon voice-icon-record"></span></button>
+        <button id="voice-pause-btn" class="icon-btn" type="button" title="Pause" hidden><span class="voice-icon voice-icon-pause"></span></button>
+        <button id="voice-resume-btn" class="icon-btn voice-resume-btn" type="button" title="Aufnahme fortsetzen" hidden><span class="voice-icon voice-icon-play"></span></button>
+        <button id="voice-stop-btn" class="icon-btn voice-stop-btn" type="button" title="Aufnahme beenden (noch nicht senden)" hidden><span class="voice-icon voice-icon-stop"></span></button>
         <button id="voice-send-btn" class="send-btn" type="button" title="Senden" hidden>&#10148;</button>
       </div>
       <form id="composer" class="composer">

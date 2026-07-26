@@ -471,7 +471,30 @@ button { font-family: inherit; }
 .voice-status.paused .voice-rec-dot { background: var(--danger); opacity: 0.5; }
 @keyframes voice-rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .voice-recorder audio { flex: 1; height: 2.35rem; }
-.voice-stop-btn, .voice-start-btn { color: var(--danger); border: 1px solid var(--danger) !important; }
+/* Start/Stop rot umrandet (an der Aufnahme selbst dreht sich hier etwas),
+   Fortsetzen bewusst NICHT rot (nur "weiter", nichts Neues/Riskantes) —
+   Farbe UND Form (Kreis/Quadrat/Dreieck unten) tragen die Unterscheidung
+   gemeinsam, keine der beiden allein. */
+.voice-record-btn, .voice-stop-btn { border: 1px solid var(--danger) !important; }
+.voice-resume-btn { border: 1px solid var(--accent) !important; }
+
+/* Als Formen statt Textzeichen gezeichnet (s. index.html's Doku dazu) —
+   0.85rem Kantenlänge/Durchmesser, mittig über .icon-btn's eigenes
+   display:flex/align-items/justify-content zentriert. */
+.voice-icon { width: 0.8rem; height: 0.8rem; position: relative; }
+.voice-icon-record { border-radius: 50%; background: var(--danger); }
+.voice-icon-stop { border-radius: 2px; background: var(--danger); }
+.voice-icon-pause::before, .voice-icon-pause::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 0.22rem; background: var(--text); border-radius: 1px;
+}
+.voice-icon-pause::before { left: 0.08rem; }
+.voice-icon-pause::after { right: 0.08rem; }
+.voice-icon-play {
+  width: 0; height: 0;
+  border-top: 0.45rem solid transparent;
+  border-bottom: 0.45rem solid transparent;
+  border-left: 0.7rem solid var(--accent);
+}
 
 .status-bar { font-size: 0.72rem; color: var(--muted); padding: 0.3rem 1rem; text-align: center; }
 .status-bar.err { color: var(--danger); }
