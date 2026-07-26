@@ -13,7 +13,7 @@
 import { createNetworkPlugin, createSpacesPlugin, createWebSocketChannel } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 
-const IDENTITY_KEY = 'qu-relay-admin-identity'; // eigener Key — bewusst NICHT dieselbe Identität wie examples/chat/people (ein Relay-Admin ist keine "normale" App-Identität)
+const IDENTITY_KEY = 'qu-identity'; // siehe examples/chat/app.mjs's IDENTITY_KEY-Doku — bewusst DERSELBE Wert wie chat/people: EIN Fingerprint fürs gesamte Ökosystem, kein pro-App-Konto. Ein früherer eigener Key hier ('qu-relay-admin-identity') war ein Fehler — QU_RELAY_ADMINS wird typischerweise mit dem Fingerprint gepinnt, den man schon aus Chat/People kennt; ein zweiter, abweichender Key hätte hier still eine ANDERE Identität angelegt, die nie zu QU_RELAY_ADMINS passt, egal was dort eingetragen ist.
 
 function $(id) { return document.getElementById(id); }
 const myFpEl = $('my-fp');
