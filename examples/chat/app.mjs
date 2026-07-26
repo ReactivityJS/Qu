@@ -118,6 +118,24 @@ const MAP_CUSTOM_URL_KEY = 'qu-chat-map-custom-url';
 // Online-Status anderer Mitglieder sieht (renderPresence()), ist davon
 // unabhängig und bleibt immer an, das ist reines Lesen, keine Preisgabe.
 const PRESENCE_SHARING_KEY = 'qu-chat-presence-sharing';
+// Ablagefach für geteilte Inhalte zwischen sw.js's handleShareTarget()
+// (schreibt) und showShareTargetScreen() unten (liest + löscht) — siehe
+// dessen Doku. Auch der Träger für den Opt-out-Schalter unten: localStorage
+// ist aus einem Service Worker heraus NICHT lesbar (kein synchroner Zugriff
+// im SW-Global-Scope), Cache Storage dagegen schon — derselbe Cache trägt
+// deshalb zusätzlich einen kleinen `/share-target-enabled`-Eintrag als
+// Spiegel des unten stehenden localStorage-Werts.
+const SHARE_CACHE_NAME = 'qu-chat-share-target';
+// Default AN (anders als die übrigen Datenschutz-Schalter hier) — Teilen
+// funktioniert ohne diese Einstellung überhaupt zu berühren bereits wie
+// erwartet; wer NICHT will, dass Android/iOS QU Chat im System-"Teilen"-
+// Dialog anbietet, kann hier bewusst abschalten. Wichtig: das entfernt QU
+// Chat NICHT aus diesem Dialog selbst (das steuert das Betriebssystem
+// anhand des installierten manifest.webmanifest, nicht diese Laufzeit-
+// Einstellung) — es sorgt aber dafür, dass ein trotzdem eingehender Share
+// von sw.js's handleShareTarget() sofort verworfen wird, BEVOR irgendein
+// Byte des geteilten Inhalts überhaupt in einen Cache geschrieben wird.
+const SHARE_TARGET_KEY = 'qu-chat-share-target-enabled';
 // Enger als modules/chat.js's eigene Defaults (8s/20s) — ein Kontakt soll
 // sichtbar zügig als "offline" erkannt werden, nicht erst nach bis zu 20s
 // Unschärfe. 3x Heartbeat als Stale-Schwelle lässt trotzdem genug
@@ -210,6 +228,7 @@ const mapProviderSelect = $('map-provider-select');
 const mapCustomUrlRow = $('map-custom-url-row');
 const mapCustomUrlInput = $('map-custom-url-input');
 const presenceSharingToggle = $('presence-sharing-toggle');
+const shareTargetToggle = $('share-target-toggle');
 
 // --- Screens/Modals — jeder ist ein eigener Router-Pfad, siehe main()s
 // navigate()/renderRoute() weiter unten für das vollständige Pfadschema. ---
@@ -463,6 +482,26 @@ async function setMapCustomUrlTemplate(template) { await storage.put(MAP_CUSTOM_
 async function presenceSharingEnabled() { return (await storage.get(PRESENCE_SHARING_KEY)) === '1'; }
 async function setPresenceSharingEnabled(enabled) { await storage.put(PRESENCE_SHARING_KEY, enabled ? '1' : '0'); }
 
+// --- "Teilen an QU Chat" (Web Share Target) an-/abschaltbar: Default AN ---
+async function shareTargetEnabled() { return (await storage.get(SHARE_TARGET_KEY)) !== '0'; }
+/**
+ * Persistiert UND spiegelt sofort in den SHARE_CACHE_NAME-Cache (sw.js's
+ * einzige Möglichkeit, diesen Wert zu lesen — kein localStorage-Zugriff
+ * aus einem Service Worker heraus). Ohne dieses Spiegeln würde ein
+ * frisch abgeschalteter Schalter erst nach dem nächsten vollständigen
+ * App-Start wirken (siehe syncShareTargetFlagToCache()-Aufruf in main()),
+ * statt sofort einen laufenden Share-Versuch zu blockieren.
+ */
+async function setShareTargetEnabled(enabled) {
+  await storage.put(SHARE_TARGET_KEY, enabled ? '1' : '0');
+  await syncShareTargetFlagToCache(enabled);
+}
+async function syncShareTargetFlagToCache(enabled) {
+  if (!('caches' in window)) return;
+  const cache = await caches.open(SHARE_CACHE_NAME);
+  await cache.put('/share-target-enabled', new Response(enabled ? '1' : '0'));
+}
+
 let audioCtx = null;
 function getAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext ?? window.webkitAudioContext)();
@@ -670,6 +709,13 @@ async function main() {
   function isRoomEncrypted() { return true; }
 
   registerServiceWorker(); // so früh wie möglich, unabhängig von der restlichen Chat-Initialisierung — siehe dessen Doku oben
+  // Cache-Spiegel (sw.js's einzige Lesequelle für diesen Schalter, s.
+  // setShareTargetEnabled()) beim Start IMMER neu aus dem persistierten
+  // Wert aufbauen — nicht nur bei einer tatsächlichen Änderung, sonst
+  // bliebe ein gelöschter/nie befüllter Cache (z. B. nach "App
+  // zurücksetzen" oder auf einem neuen Gerät) fälschlich beim
+  // sw.js-seitigen Default statt beim wirklich gespeicherten Wert.
+  shareTargetEnabled().then(syncShareTargetFlagToCache).catch(() => {});
 
   meFpShortEl.textContent = shortFp(qu.fingerprint, 10) + '…';
   const savedAlias = await storage.get(ALIAS_KEY);
@@ -1145,6 +1191,7 @@ async function main() {
     search: () => showSearchScreen(),
     'add-contact': (prefillFp) => showAddContactScreen(prefillFp),
     share: (id) => showShareTargetScreen(id),
+    'share-blocked': () => showShareBlockedScreen(),
     'new-group': () => showNewGroupScreen(),
   };
 
@@ -2708,6 +2755,7 @@ async function main() {
     mapCustomUrlInput.value = await mapCustomUrlTemplate();
     mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
     presenceSharingToggle.checked = await presenceSharingEnabled();
+    shareTargetToggle.checked = await shareTargetEnabled();
   }
   settingsBtn.addEventListener('click', () => navigate('settings'));
   $('app-settings-close-btn').addEventListener('click', closeScreen);
@@ -2735,6 +2783,7 @@ async function main() {
       stopHeartbeatByRoom.clear();
     }
   });
+  shareTargetToggle.addEventListener('change', () => setShareTargetEnabled(shareTargetToggle.checked));
 
   /**
    * "App zurücksetzen" — für den Fall, dass ein Update (Anruf-Code, ein
@@ -2891,7 +2940,6 @@ async function main() {
   // normalen Composer (dieselbe pendingFiles/textInput-Übernahme wie ein
   // manuell gewählter Anhang oder eingegebener Text — keine eigene
   // Versand-Logik).
-  const SHARE_CACHE_NAME = 'qu-chat-share-target';
   let pendingShare = null; // { text, url, title, files: File[] } zwischen showShareTargetScreen() und applyShareToRoom()
 
   async function loadSharePayload(id) {
@@ -2953,6 +3001,22 @@ async function main() {
     if (share.text || share.url) parts.push('Text/Link');
     shareTargetSummaryEl.textContent = parts.length ? `Geteilt: ${parts.join(' + ')}` : 'Kein Inhalt zum Teilen gefunden.';
     renderShareTargetRoomList();
+  }
+
+  /**
+   * `/share-blocked` — sw.js's handleShareTarget() leitet HIERHIN um,
+   * wenn shareTargetEnabled() zum Zeitpunkt des eingehenden Shares AUS
+   * war (Einstellungen → Privatsphäre → "Teilen an QU Chat entgegennehmen").
+   * Der geteilte Inhalt wurde in diesem Fall nie in einen Cache
+   * geschrieben — es gibt hier also nichts auszulesen, nur eine
+   * Bestätigung, dass bewusst nichts passiert ist (kein stiller
+   * Fehlschlag ohne Erklärung).
+   */
+  function showShareBlockedScreen() {
+    shareTargetSummaryEl.textContent = '"Teilen an QU Chat" ist deaktiviert (Einstellungen → Privatsphäre). Es wurde nichts übernommen.';
+    shareTargetRoomListEl.textContent = '';
+    shareTargetErrorEl.textContent = '';
+    shareTargetModal.hidden = false;
   }
 
   async function applyShareToRoom(roomId) {

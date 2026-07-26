@@ -49,8 +49,21 @@ self.addEventListener('fetch', (event) => {
  * deren Router (app.mjs's ROOT_ROUTES.share) diese Id danach ausliest.
  * Leere/fehlende Felder werden bewusst nicht ausgefiltert — text/url/title
  * einzeln optional, genau wie ein "Teilen"-Dialog sie liefert.
+ *
+ * Erste Prüfung: der Opt-out (Einstellungen → Privatsphäre → "Teilen an QU
+ * Chat entgegennehmen", app.mjs's shareTargetEnabled()/setShareTargetEnabled()).
+ * Android/iOS entfernen QU Chat dadurch NICHT aus ihrem System-Teilen-Dialog
+ * (das steuert allein das installierte manifest.webmanifest) — dieser
+ * Schalter sorgt aber dafür, dass ein trotzdem eingehender Share sofort mit
+ * `#/share-blocked` beantwortet wird, OHNE `request.formData()` überhaupt
+ * erst auszulesen: kein Byte des geteilten Inhalts landet dann in irgendeinem
+ * Cache oder sonst wo.
  */
 async function handleShareTarget(request) {
+  const enabledRes = await (await caches.open(SHARE_CACHE_NAME)).match('/share-target-enabled');
+  const enabled = !enabledRes || (await enabledRes.text()) !== '0'; // kein Eintrag (noch nie ein Tab geladen) -> Default AN, s. app.mjs's shareTargetEnabled()
+  if (!enabled) return Response.redirect('./#/share-blocked', 303);
+
   const formData = await request.formData();
   const id = crypto.randomUUID();
   const files = formData.getAll('files').filter((f) => f instanceof File && f.size > 0);
