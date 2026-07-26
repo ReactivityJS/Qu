@@ -41,8 +41,20 @@ function randomId() {
  * quote (author/time/snippet) without an extra lookup, and keeps it
  * displayable even if the original message is later deleted locally on
  * this device.
+ *
+ * `editOf`, if given, marks this QuBit as an EDIT of an earlier message
+ * (its id) rather than a new standalone message — deliberately a separate
+ * new QuBit, not an overwrite of the original one's own put()/set() slot.
+ * Every writer listed on a room Space can technically write to ANY path in
+ * it (§8, "path is addressing, not trust") — overwriting the original's own
+ * slot would let ANY member clobber ANY other member's message. A UI must
+ * therefore only treat an edit as valid when its verified `writer` matches
+ * the ORIGINAL message's verified `writer` (exactly the same principle
+ * space-membership.js/chat.js already apply everywhere else); an edit from
+ * anyone else is just an ignorable, harmless extra QuBit. Not meant to be
+ * combined with `attachments`/`replyTo` — an edit only ever carries `text`.
  */
-export async function sendMessage(space, { text, attachments = [], encryptFor, onAttachmentProgress, replyTo } = {}) {
+export async function sendMessage(space, { text, attachments = [], encryptFor, onAttachmentProgress, replyTo, editOf } = {}) {
   const fp = space.session.fingerprint;
   const refs = [];
   for (let i = 0; i < attachments.length; i++) {
@@ -65,7 +77,7 @@ export async function sendMessage(space, { text, attachments = [], encryptFor, o
     });
     refs.push(manifestId);
   }
-  const result = await space.get('msgs').set({ text, replyTo }, { refs: refs.length ? refs : undefined, encryptFor });
+  const result = await space.get('msgs').set({ text, replyTo, editOf }, { refs: refs.length ? refs : undefined, encryptFor });
   return { ...result, refs };
 }
 

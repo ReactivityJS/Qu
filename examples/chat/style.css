@@ -310,6 +310,7 @@ button { font-family: inherit; }
 .msg-meta .tick { color: var(--muted); }
 .msg-meta .tick.read { color: var(--accent-strong); }
 .msg-meta .tick.pending { opacity: 0.55; }
+.msg-edited { font-style: italic; opacity: 0.75; }
 .sync-badge { display: block; margin-top: 0.35rem; font-size: 0.72rem; color: var(--accent-strong); background: color-mix(in srgb, var(--accent-strong) 12%, transparent); border-radius: 6px; padding: 0.3rem 0.5rem; }
 .msg-sender { font-size: 0.72rem; color: var(--accent); margin-bottom: 0.15rem; }
 
