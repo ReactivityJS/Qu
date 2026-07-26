@@ -59,10 +59,14 @@
 
       <div id="pending-files" class="pending-files"></div>
       <!-- Sprachnachricht: löst den normalen Composer ab (siehe .composer/
-           .voice-recorder in style.css), solange aufgenommen oder die
-           Aufnahme vor dem Senden abgehört wird — dieselben drei Zustände
-           (Aufnahme läuft / Vorhören / weg), die app.mjs' Recorder-Handler
-           steuern. -->
+           .voice-recorder in style.css). Fünf Zustände (app.mjs'
+           setVoiceRecorderState()): "armed" (Mikrofon freigegeben, aber
+           noch NICHTS aufgenommen — erst ein bewusster Tipp auf Start
+           beginnt die Aufnahme, kein Loslegen direkt beim Antippen von 🎤,
+           damit die ersten Sekunden nicht überraschend verpasst werden) ->
+           "recording" -> optional "paused" (⏸/▶, falls der Browser
+           MediaRecorder#pause() unterstützt) -> "preview" (Vorhören,
+           Verwerfen oder Senden). -->
       <div id="voice-recorder" class="voice-recorder" hidden>
         <button id="voice-discard-btn" class="icon-btn" type="button" title="Verwerfen">🗑</button>
         <div id="voice-status" class="voice-status">
@@ -70,7 +74,10 @@
           <span id="voice-timer">0:00</span>
         </div>
         <audio id="voice-preview-audio" hidden controls></audio>
-        <button id="voice-stop-btn" class="icon-btn voice-stop-btn" type="button" title="Aufnahme beenden">⏹</button>
+        <button id="voice-start-btn" class="icon-btn voice-start-btn" type="button" title="Aufnahme starten">⏺</button>
+        <button id="voice-pause-btn" class="icon-btn" type="button" title="Pause" hidden>⏸</button>
+        <button id="voice-resume-btn" class="icon-btn voice-start-btn" type="button" title="Fortsetzen" hidden>▶</button>
+        <button id="voice-stop-btn" class="icon-btn voice-stop-btn" type="button" title="Aufnahme beenden" hidden>⏹</button>
         <button id="voice-send-btn" class="send-btn" type="button" title="Senden" hidden>&#10148;</button>
       </div>
       <form id="composer" class="composer">
@@ -163,6 +170,9 @@
         <input type="text" id="map-custom-url-input" placeholder="https://karte.example.org/?lat={lat}&amp;lng={lng}" autocomplete="off" />
       </div>
       <p class="modal-hint">Der 📍-Button im Chat sendet den eigenen Standort als Karten-Link mit dem hier gewählten Anbieter.</p>
+      <label>Privatsphäre</label>
+      <label class="toggle-row"><input type="checkbox" id="presence-sharing-toggle" /> Online-Status mit Kontakten teilen</label>
+      <p class="modal-hint">Standardmäßig aus. Aus: Kontakte sehen bei dir kein grünes "online" mehr, du siehst deren Online-Status aber weiterhin ganz normal (das ist unabhängig davon). Gilt geräteübergreifend erst nach dem nächsten Verbinden.</p>
       <label>Fehlerbehebung</label>
       <div class="modal-actions">
         <button id="reset-app-btn" class="btn btn-secondary" type="button">App zurücksetzen</button>
@@ -240,8 +250,8 @@
       </div>
 
       <label class="toggle-row"><input type="checkbox" id="chat-mute-toggle" /> Diesen Chat stummschalten</label>
-      <label class="toggle-row"><input type="checkbox" id="chat-encryption-toggle" checked /> Ende-zu-Ende verschlüsselt</label>
-      <p class="modal-hint" id="chat-encryption-hint">Deine künftigen Nachrichten werden Ende-zu-Ende verschlüsselt — lesbar nur für die Mitglieder dieses Chats, nicht für den Relay-Betreiber.</p>
+      <label class="toggle-row"><input type="checkbox" id="chat-encryption-toggle" checked disabled /> Ende-zu-Ende verschlüsselt</label>
+      <p class="modal-hint" id="chat-encryption-hint">Deine künftigen Nachrichten werden Ende-zu-Ende verschlüsselt — lesbar nur für die Mitglieder dieses Chats, nicht für den Relay-Betreiber. Kann nicht deaktiviert werden.</p>
 
       <label>Chat löschen</label>
       <div class="modal-actions">

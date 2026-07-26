@@ -110,6 +110,14 @@ const AUTO_LOAD_MEDIA_KEY = 'qu-chat-auto-load-media';
 // siehe buildLocationUrl() in chat-lib.mjs).
 const MAP_PROVIDER_KEY = 'qu-chat-map-provider';
 const MAP_CUSTOM_URL_KEY = 'qu-chat-map-custom-url';
+// Default AUS — anders als jede andere Einstellung hier (die alle einen
+// Default AN haben) ist "wer online ist" persönliche Information über den
+// eigenen Aufenthalt/Gerätezustand, die man erst bewusst freigeben sollte,
+// nicht automatisch von der ersten Sekunde an. Betrifft nur das eigene
+// SENDEN des "online"-Heartbeats (ensureRoom() unten) — ob man SELBST den
+// Online-Status anderer Mitglieder sieht (renderPresence()), ist davon
+// unabhängig und bleibt immer an, das ist reines Lesen, keine Preisgabe.
+const PRESENCE_SHARING_KEY = 'qu-chat-presence-sharing';
 // Enger als modules/chat.js's eigene Defaults (8s/20s) — ein Kontakt soll
 // sichtbar zügig als "offline" erkannt werden, nicht erst nach bis zu 20s
 // Unschärfe. 3x Heartbeat als Stale-Schwelle lässt trotzdem genug
@@ -152,6 +160,9 @@ const voiceDiscardBtn = $('voice-discard-btn');
 const voiceStatusEl = $('voice-status');
 const voiceTimerEl = $('voice-timer');
 const voicePreviewAudio = $('voice-preview-audio');
+const voiceStartBtn = $('voice-start-btn');
+const voicePauseBtn = $('voice-pause-btn');
+const voiceResumeBtn = $('voice-resume-btn');
 const voiceStopBtn = $('voice-stop-btn');
 const voiceSendBtn = $('voice-send-btn');
 const emojiBtn = $('emoji-btn');
@@ -198,6 +209,7 @@ const autoLoadMediaToggle = $('auto-load-media-toggle');
 const mapProviderSelect = $('map-provider-select');
 const mapCustomUrlRow = $('map-custom-url-row');
 const mapCustomUrlInput = $('map-custom-url-input');
+const presenceSharingToggle = $('presence-sharing-toggle');
 
 // --- Screens/Modals — jeder ist ein eigener Router-Pfad, siehe main()s
 // navigate()/renderRoute() weiter unten für das vollständige Pfadschema. ---
@@ -224,8 +236,6 @@ const groupMemberListEl = $('group-member-list');
 const groupAddMemberInput = $('group-add-member-input');
 const groupDetailsError = $('group-details-error');
 const chatMuteToggle = $('chat-mute-toggle');
-const chatEncryptionToggle = $('chat-encryption-toggle');
-const chatEncryptionHint = $('chat-encryption-hint');
 const chatDeleteBtn = $('chat-delete-btn');
 const callOverlay = $('call-overlay');
 const callAvatarEl = $('call-avatar');
@@ -378,10 +388,9 @@ function closeLightbox() {
 // eine Identität voraus, die vor main() noch nicht existiert, kein reines
 // Top-Level-await möglich). upsertContact()/upsertRoom()/roomById()/
 // contactByFp()/isGroupRoom()/roomDisplayName()/roomDisplayAvatar()/
-// isRoomMuted()/setRoomMuted()/isRoomEncrypted()/setRoomEncrypted() sind
-// entsprechend jetzt dort definiert.
+// isRoomMuted()/setRoomMuted() sind entsprechend jetzt dort definiert.
 
-// --- Verschlüsselung pro Chat (Default: AN) ---
+// --- Verschlüsselung pro Chat: fest an, kein Opt-out ---
 // core/session.js's Session#publish() verschlüsselt automatisch für
 // exakt die `readers` eines Space, SOBALD `encryptFor` beim Schreiben
 // weggelassen wird — ABER nur, wenn `readers` eine konkrete Liste ist,
@@ -392,22 +401,13 @@ function closeLightbox() {
 // ein QuBit nur weiterleiten darf, wenn es selbst in dessen `readers`
 // steht (siehe ensureRoom()), und `['*']` das ohne hartkodierten
 // Relay-Fingerprint löst. Deshalb übergibt der Composer unten explizit
-// `encryptFor: [eigener Fingerprint, Peer]` statt sich auf die
-// automatische Ableitung zu verlassen — genau dieser explizite Aufruf
-// ist der Schalter, den dieses Feature umlegt: `null` (siehe
-// Session#publish()s eigene Doku: "explizit `null`/`[]` ist ein
-// bewusster Opt-out") statt der Empfängerliste lässt die Nachricht
-// unverschlüsselt, GENAU dort, wo `readers: ['*']` ohnehin schon
-// erlaubt, dass sie jeder mit Lesezugriff auf den Space sieht (Relay
-// eingeschlossen) — Schreiben bleibt weiterhin auf die Chat-Mitglieder
-// beschränkt (`writers`), nur die Vertraulichkeit des INHALTS entfällt.
-// Gilt NUR für die eigenen, künftigen Nachrichten dieses Geräts — jede
-// Seite entscheidet für ihre eigenen Schreibvorgänge unabhängig, und
-// bereits gesendete Nachrichten bleiben, wie sie geschrieben wurden.
-// isRoomEncrypted()/setRoomEncrypted() sind jetzt Teil des Raum-Objekts
-// (siehe main()) statt eines eigenen Sets/Storage-Keys, aus demselben
-// Grund wie isRoomMuted()/setRoomMuted() dort — beides "pro Chat"-
-// Metadaten, die jetzt im selben QuBit wie der Rest des Raums leben.
+// `encryptFor: [eigener Fingerprint, Peer/Mitglieder]` statt sich auf die
+// automatische Ableitung zu verlassen. Ein früherer Opt-out (Verschlüsselung
+// pro Chat abschaltbar) wurde entfernt — schon gesendete Nachrichten bleiben
+// für immer im Modus, in dem sie geschrieben wurden, ein Hin-und-Her hätte
+// beide Zustände unsichtbar für die Nutzerin in einem Chat gemischt.
+// isRoomEncrypted() (main()) liefert daher jetzt unbedingt `true`,
+// chat-encryption-toggle (index.html) ist entsprechend `disabled`.
 
 // --- "Beim Relay angekommen?"-Status eigener Nachrichten (siehe
 // confirmDelivery() weiter unten) ---
@@ -454,6 +454,10 @@ async function mapProvider() { return (await storage.get(MAP_PROVIDER_KEY)) || '
 async function setMapProvider(provider) { await storage.put(MAP_PROVIDER_KEY, provider); }
 async function mapCustomUrlTemplate() { return (await storage.get(MAP_CUSTOM_URL_KEY)) || ''; }
 async function setMapCustomUrlTemplate(template) { await storage.put(MAP_CUSTOM_URL_KEY, template); }
+
+// --- Online-Status teilen: Default AUS (s. PRESENCE_SHARING_KEY oben) ---
+async function presenceSharingEnabled() { return (await storage.get(PRESENCE_SHARING_KEY)) === '1'; }
+async function setPresenceSharingEnabled(enabled) { await storage.put(PRESENCE_SHARING_KEY, enabled ? '1' : '0'); }
 
 let audioCtx = null;
 function getAudioCtx() {
@@ -650,8 +654,16 @@ async function main() {
   }
   function isRoomMuted(roomId) { return roomById(roomId)?.muted ?? false; }
   function setRoomMuted(roomId, muted) { upsertRoom(roomId, { muted }); }
-  function isRoomEncrypted(roomId) { return roomById(roomId)?.encrypted ?? true; }
-  function setRoomEncrypted(roomId, encrypted) { upsertRoom(roomId, { encrypted }); }
+  // Forced Encryption: kein Opt-out mehr (siehe chat-encryption-toggle in
+  // index.html, jetzt `disabled` — die Möglichkeit, Verschlüsselung pro
+  // Chat abzuschalten und wieder einzuschalten, konnte zu inkonsistentem
+  // Zustand führen: schon gesendete Nachrichten bleiben unverändert in
+  // ihrem jeweiligen Modus, ein Hin-und-Her mischt beide Zustände in
+  // einem Chat, ohne dass das für die Nutzerin sichtbar wäre). Ein
+  // historisch per Storage gespeichertes `encrypted: false` (aus einer
+  // älteren Version) wird hier bewusst NICHT mehr gelesen — jeder Chat
+  // gilt ab sofort als verschlüsselt.
+  function isRoomEncrypted() { return true; }
 
   registerServiceWorker(); // so früh wie möglich, unabhängig von der restlichen Chat-Initialisierung — siehe dessen Doku oben
 
@@ -1305,8 +1317,14 @@ async function main() {
     await qu.ensureSpace(roomId, room.members);
 
     receiptsByRoom.set(roomId, await qu.getReadReceipts(roomId));
-    renderPresence(roomId);
-    stopHeartbeatByRoom.set(roomId, qu.startHeartbeat(roomId, { intervalMs: PRESENCE_HEARTBEAT_MS }));
+    renderPresence(roomId); // Lesen des Online-Status ANDERER ist immer an, unabhängig von presenceSharingEnabled() unten — reines Anzeigen, keine eigene Preisgabe.
+    // Eigenen "online"-Heartbeat nur senden, wenn explizit freigegeben (App-
+    // Einstellungen, presence-sharing-toggle) — Default AUS, siehe
+    // PRESENCE_SHARING_KEY oben. Ohne Freigabe bleibt renderPresence() für
+    // andere Mitglieder einfach dauerhaft "offline"/grau für diese Identität.
+    if (await presenceSharingEnabled()) {
+      stopHeartbeatByRoom.set(roomId, qu.startHeartbeat(roomId, { intervalMs: PRESENCE_HEARTBEAT_MS }));
+    }
 
     // In den Briefkasten (space-membership.js's inboxId()) JEDES anderen
     // Mitglieds schreiben, damit ein von UNS gestarteter Chat spätestens
@@ -2382,15 +2400,58 @@ async function main() {
   let mediaRecorder = null;
   let recordedChunks = [];
   let recordingStream = null;
-  let recordingStartedAt = 0;
+  // Aufsummierte Dauer VOR dem aktuell laufenden Recording-Segment (0, oder
+  // > 0 nach einer/mehreren Pausen) — die tatsächlich verstrichene Zeit ist
+  // das PLUS die Zeit seit recordingSegmentStartedAt, solange gerade
+  // aufgenommen wird (currentElapsedMs() unten). Getrennt von einer
+  // einzelnen laufenden Uhr, weil Pause/Fortsetzen sonst entweder die
+  // gesamte bisherige Dauer verwirft oder während der Pause weiterzählt.
+  let recordingElapsedMs = 0;
+  let recordingSegmentStartedAt = 0;
   let recordingTimerInterval = null;
   let recordedBlob = null;
   let recordedUrl = null;
   let discardOnStop = false;
+  // 'idle' | 'armed' (Mikrofon frei, noch nichts aufgenommen) | 'recording'
+  // | 'paused' | 'preview' — s. setVoiceRecorderState().
+  let voiceRecorderState = 'idle';
 
   function fmtRecTimer(ms) {
     const s = Math.max(0, Math.floor(ms / 1000));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+  function currentElapsedMs() {
+    return recordingElapsedMs + (voiceRecorderState === 'recording' ? Date.now() - recordingSegmentStartedAt : 0);
+  }
+  function updateVoiceTimerDisplay() { voiceTimerEl.textContent = fmtRecTimer(currentElapsedMs()); }
+
+  /**
+   * Zentrale Zustandsanzeige für den gesamten Recorder — jede Aktion
+   * (Start/Pause/Fortsetzen/Stop/Verwerfen/Senden) ruft NUR das hier auf,
+   * statt selbst einzelne `hidden`-Flags zu setzen; verhindert, dass ein
+   * Zustand (z. B. "Vorhören" UND "Aufnahme läuft" gleichzeitig sichtbar)
+   * an einer der mehreren Aufrufstellen vergessen wird. Pause/Fortsetzen
+   * nur sichtbar, wenn der Browser MediaRecorder#pause() überhaupt anbietet
+   * (Safari-Versionen vor 14.5 nicht) — sonst bleibt nur Start+Stop, exakt
+   * wie ein Recorder ohne Pause-Fähigkeit aussehen sollte, statt eines
+   * wirkungslosen Knopfs.
+   */
+  function setVoiceRecorderState(state) {
+    voiceRecorderState = state;
+    const canPause = typeof mediaRecorder?.pause === 'function';
+    voiceRecorderEl.hidden = state === 'idle';
+    composer.hidden = state !== 'idle';
+    voiceDiscardBtn.hidden = state === 'idle';
+    voiceStatusEl.hidden = state === 'preview';
+    voicePreviewAudio.hidden = state !== 'preview';
+    voiceStartBtn.hidden = state !== 'armed';
+    voicePauseBtn.hidden = !(state === 'recording' && canPause);
+    voiceResumeBtn.hidden = state !== 'paused';
+    voiceStopBtn.hidden = !(state === 'recording' || state === 'paused');
+    voiceSendBtn.hidden = state !== 'preview';
+    voiceStatusEl.classList.toggle('recording', state === 'recording');
+    voiceStatusEl.classList.toggle('paused', state === 'paused');
+    updateVoiceTimerDisplay();
   }
 
   function resetVoiceRecorder() {
@@ -2399,19 +2460,22 @@ async function main() {
     if (recordedUrl) { URL.revokeObjectURL(recordedUrl); recordedUrl = null; }
     recordedBlob = null;
     recordedChunks = [];
+    recordingElapsedMs = 0;
     stopStream(recordingStream);
     recordingStream = null;
     mediaRecorder = null;
     discardOnStop = false;
-    voiceRecorderEl.hidden = true;
-    composer.hidden = false;
-    voicePreviewAudio.hidden = true;
     voicePreviewAudio.src = '';
-    voiceStatusEl.hidden = false;
-    voiceStopBtn.hidden = false;
-    voiceSendBtn.hidden = true;
+    setVoiceRecorderState('idle');
   }
 
+  /**
+   * 🎤 fragt NUR das Mikrofon an und versetzt den Recorder in "armed" —
+   * die eigentliche Aufnahme beginnt erst mit einem bewussten Tipp auf
+   * Start (voiceStartBtn unten), damit die ersten Sekunden nach dem Antippen
+   * nicht überraschend unaufgenommen bleiben (vorher startete MediaRecorder
+   * hier sofort automatisch mit).
+   */
   voiceBtn.addEventListener('click', async () => {
     if (!activeRoomId) return;
     if (typeof MediaRecorder === 'undefined') { statusBar.textContent = 'Sprachnachrichten werden von diesem Browser nicht unterstützt.'; return; }
@@ -2424,6 +2488,7 @@ async function main() {
     }
     recordingStream = stream;
     recordedChunks = [];
+    recordingElapsedMs = 0;
     const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
     mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     mediaRecorder.addEventListener('dataavailable', (ev) => { if (ev.data.size) recordedChunks.push(ev.data); });
@@ -2435,27 +2500,46 @@ async function main() {
       recordedBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
       recordedUrl = URL.createObjectURL(recordedBlob);
       voicePreviewAudio.src = recordedUrl;
-      voicePreviewAudio.hidden = false;
-      voiceStatusEl.hidden = true;
-      voiceStopBtn.hidden = true;
-      voiceSendBtn.hidden = false;
+      setVoiceRecorderState('preview');
     });
-    mediaRecorder.start();
-    composer.hidden = true;
-    voiceRecorderEl.hidden = false;
-    voicePreviewAudio.hidden = true;
-    voiceStatusEl.hidden = false;
-    voiceStopBtn.hidden = false;
-    voiceSendBtn.hidden = true;
-    recordingStartedAt = Date.now();
-    voiceTimerEl.textContent = '0:00';
-    recordingTimerInterval = setInterval(() => { voiceTimerEl.textContent = fmtRecTimer(Date.now() - recordingStartedAt); }, 250);
+    setVoiceRecorderState('armed');
   });
 
-  voiceStopBtn.addEventListener('click', () => { if (mediaRecorder?.state === 'recording') mediaRecorder.stop(); });
+  voiceStartBtn.addEventListener('click', () => {
+    if (!mediaRecorder || mediaRecorder.state !== 'inactive') return;
+    mediaRecorder.start();
+    recordingSegmentStartedAt = Date.now();
+    setVoiceRecorderState('recording');
+    recordingTimerInterval = setInterval(updateVoiceTimerDisplay, 250);
+  });
+
+  voicePauseBtn.addEventListener('click', () => {
+    if (mediaRecorder?.state !== 'recording') return;
+    mediaRecorder.pause();
+    recordingElapsedMs += Date.now() - recordingSegmentStartedAt;
+    clearInterval(recordingTimerInterval);
+    setVoiceRecorderState('paused');
+  });
+
+  voiceResumeBtn.addEventListener('click', () => {
+    if (mediaRecorder?.state !== 'paused') return;
+    mediaRecorder.resume();
+    recordingSegmentStartedAt = Date.now();
+    setVoiceRecorderState('recording');
+    recordingTimerInterval = setInterval(updateVoiceTimerDisplay, 250);
+  });
+
+  voiceStopBtn.addEventListener('click', () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  });
 
   voiceDiscardBtn.addEventListener('click', () => {
-    if (mediaRecorder?.state === 'recording') { discardOnStop = true; mediaRecorder.stop(); }
+    // "armed" (noch nie gestartet) oder "preview" (schon fertig gestoppt):
+    // MediaRecorder ist bereits 'inactive', kein stop()-Event mehr nötig —
+    // direkt zurücksetzen. Sonst (recording/paused) erst sauber stoppen,
+    // markiert für Verwerfen statt Vorschau (s. discardOnStop im
+    // 'stop'-Handler oben).
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') { discardOnStop = true; mediaRecorder.stop(); }
     else resetVoiceRecorder();
   });
 
@@ -2490,16 +2574,13 @@ async function main() {
       // readers ist bewusst ['*'] (siehe ensureRoom()) — Vertraulichkeit
       // kommt hier ausschließlich aus dem expliziten encryptFor, nicht aus
       // einer restriktiven Space-ACL (die Default-Auto-Verschlüsselung in
-      // core/session.js griffe nur bei eingeschränkten `readers`). `null`
-      // statt der Empfängerliste, wenn diese Seite für DIESEN Chat
-      // Verschlüsselung bewusst abgeschaltet hat (isRoomEncrypted() oben,
-      // per mute-chat-btn-Pendant im Header) — session.js's eigene Doku
-      // nennt genau das den vorgesehenen expliziten Opt-out. Alle
-      // Mitglieder (nicht mehr nur EIN Peer) — bei einem DM ist das
-      // exakt der bisherige Zwei-Empfänger-Fall, bei einer Gruppe sind
-      // es entsprechend mehr.
+      // core/session.js griffe nur bei eingeschränkten `readers`).
+      // Verschlüsselung ist fest an (isRoomEncrypted(), kein Opt-out mehr,
+      // s. dessen Doku) — alle Mitglieder (nicht mehr nur EIN Peer): bei
+      // einem DM ist das exakt der bisherige Zwei-Empfänger-Fall, bei
+      // einer Gruppe sind es entsprechend mehr.
       const sent = await qu.sendMessage(roomId, {
-        text, attachments, encryptFor: isRoomEncrypted(roomId) ? [qu.fingerprint, ...room.members] : null,
+        text, attachments, encryptFor: [qu.fingerprint, ...room.members],
         // Fortschritt für lokales Verschlüsseln/Zerstückeln GROSSER Anhänge
         // (z. B. ein Video) — ohne das sah ein größerer Upload nach einem
         // hängenden Sendevorgang aus, weil die UI vorher bis zum Schluss
@@ -2620,6 +2701,7 @@ async function main() {
     mapProviderSelect.value = await mapProvider();
     mapCustomUrlInput.value = await mapCustomUrlTemplate();
     mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
+    presenceSharingToggle.checked = await presenceSharingEnabled();
   }
   settingsBtn.addEventListener('click', () => navigate('settings'));
   $('app-settings-close-btn').addEventListener('click', closeScreen);
@@ -2632,6 +2714,21 @@ async function main() {
     mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
   });
   mapCustomUrlInput.addEventListener('change', () => setMapCustomUrlTemplate(mapCustomUrlInput.value.trim()));
+  // Wirkt sofort auf alle schon offenen Räume (ensuredRooms), nicht erst
+  // nach einem Neuladen — sonst bräuchte "online teilen ausschalten" einen
+  // Reload, um wirklich sofort aufzuhören zu senden.
+  presenceSharingToggle.addEventListener('change', async () => {
+    const enabled = presenceSharingToggle.checked;
+    await setPresenceSharingEnabled(enabled);
+    if (enabled) {
+      for (const roomId of ensuredRooms) {
+        if (!stopHeartbeatByRoom.has(roomId)) stopHeartbeatByRoom.set(roomId, qu.startHeartbeat(roomId, { intervalMs: PRESENCE_HEARTBEAT_MS }));
+      }
+    } else {
+      for (const stop of stopHeartbeatByRoom.values()) stop();
+      stopHeartbeatByRoom.clear();
+    }
+  });
 
   /**
    * "App zurücksetzen" — für den Fall, dass ein Update (Anruf-Code, ein
@@ -2909,23 +3006,9 @@ async function main() {
   });
 
   // --- Chat-Einstellungen — `/<roomId>/settings` (Router). Stumm/
-  // Verschlüsselung/Löschen für JEDEN Chat, Umbenennen/Mitglieder nur für
-  // eine Gruppe (chatSettingsGroupSection wird für einen DM versteckt). ---
-  /**
-   * `encrypted` optional übergebbar (statt aus `isRoomEncrypted(roomId)`
-   * gelesen) — setRoomEncrypted() schreibt jetzt asynchron über den
-   * Raum-Space (siehe dessen Doku); direkt danach `isRoomEncrypted(roomId)`
-   * erneut zu lesen, würde für einen kurzen Moment noch den ALTEN Wert
-   * liefern (die zentrale rooms-Subscription hat ihn noch nicht
-   * aktualisiert). Der Aufrufer, der den neuen Wert gerade selbst gesetzt
-   * hat, kennt ihn aber ohnehin schon — direkt übergeben vermeidet diesen
-   * kurzen Anzeige-Bug.
-   */
-  function renderChatEncryptionHint(roomId, encrypted = isRoomEncrypted(roomId)) {
-    chatEncryptionHint.textContent = encrypted
-      ? 'Deine künftigen Nachrichten sind Ende-zu-Ende verschlüsselt — lesbar nur für die Mitglieder dieses Chats, nicht für den Relay-Betreiber.'
-      : 'Deine künftigen Nachrichten werden im Klartext übertragen und gespeichert — lesbar für den Relay-Betreiber und für jeden mit Lesezugriff auf diesen Raum. Bereits gesendete Nachrichten bleiben unverändert. Gilt nur für DEINE Seite.';
-  }
+  // Verschlüsselung (fest an, s. isRoomEncrypted())/Löschen für JEDEN
+  // Chat, Umbenennen/Mitglieder nur für eine Gruppe (chatSettingsGroupSection
+  // wird für einen DM versteckt). ---
 
   function renderGroupMemberList(roomId) {
     groupMemberListEl.textContent = '';
@@ -2970,8 +3053,6 @@ async function main() {
       renderGroupMemberList(roomId);
     }
     chatMuteToggle.checked = isRoomMuted(roomId);
-    chatEncryptionToggle.checked = isRoomEncrypted(roomId);
-    renderChatEncryptionHint(roomId);
     chatSettingsModal.hidden = false;
   }
   $('chat-settings-close-btn').addEventListener('click', closeScreen);
@@ -2979,23 +3060,6 @@ async function main() {
   chatMuteToggle.addEventListener('change', () => {
     if (!activeRoomId) return;
     setRoomMuted(activeRoomId, chatMuteToggle.checked);
-  });
-  chatEncryptionToggle.addEventListener('change', () => {
-    if (!activeRoomId) return;
-    const roomId = activeRoomId;
-    // Nur beim AUSSCHALTEN warnen — wieder EINschalten ist immer die
-    // sichere Richtung, braucht keine Bestätigung.
-    if (!chatEncryptionToggle.checked) {
-      const name = roomDisplayName(roomById(roomId));
-      const confirmed = confirm(
-        `Verschlüsselung für den Chat "${name}" deaktivieren?\n\n` +
-        'Deine künftigen Nachrichten in diesem Chat werden dann im Klartext übertragen und gespeichert — lesbar für den Relay-Betreiber und für jeden mit Lesezugriff auf diesen Raum, nicht mehr nur für die Mitglieder. ' +
-        'Bereits gesendete Nachrichten bleiben unverändert (weiterhin verschlüsselt). Das gilt nur für DEINE Seite — jedes andere Mitglied entscheidet unabhängig für seine eigenen Nachrichten.',
-      );
-      if (!confirmed) { chatEncryptionToggle.checked = true; return; }
-    }
-    setRoomEncrypted(roomId, chatEncryptionToggle.checked);
-    renderChatEncryptionHint(roomId, chatEncryptionToggle.checked);
   });
   chatDeleteBtn.addEventListener('click', () => {
     if (!activeRoomId) return;
