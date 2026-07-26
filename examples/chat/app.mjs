@@ -223,6 +223,10 @@ const addContactModal = $('add-contact-modal');
 const contactFpInput = $('contact-fp-input');
 const contactAliasInput = $('contact-alias-input');
 const addContactError = $('add-contact-error');
+const shareTargetModal = $('share-target-modal');
+const shareTargetSummaryEl = $('share-target-summary');
+const shareTargetRoomListEl = $('share-target-room-list');
+const shareTargetErrorEl = $('share-target-error');
 const newGroupModal = $('new-group-modal');
 const newGroupNameInput = $('new-group-name-input');
 const newGroupContactListEl = $('new-group-contact-list');
@@ -1130,6 +1134,7 @@ async function main() {
     appSettingsModal.hidden = true;
     searchOverlay.hidden = true;
     addContactModal.hidden = true;
+    shareTargetModal.hidden = true;
     newGroupModal.hidden = true;
     chatSettingsModal.hidden = true;
   }
@@ -1139,6 +1144,7 @@ async function main() {
     settings: () => showAppSettingsScreen(),
     search: () => showSearchScreen(),
     'add-contact': (prefillFp) => showAddContactScreen(prefillFp),
+    share: (id) => showShareTargetScreen(id),
     'new-group': () => showNewGroupScreen(),
   };
 
@@ -2872,6 +2878,101 @@ async function main() {
   });
 
   initPush();
+
+  // --- "Teilen an QU Chat" — `/share/<id>` (Router) ---
+  //
+  // Gegenstück zu sw.js's handleShareTarget(): der System-Teilen-Dialog
+  // (Galerie, ein anderer Browser, eine andere App) landet über
+  // manifest.webmanifest's share_target zuerst dort, der Service Worker
+  // legt den Inhalt kurz im SHARE_CACHE_NAME-Cache ab und leitet auf genau
+  // diese Route um. Hier wird er einmalig ausgelesen (und dabei aus dem
+  // Cache gelöscht — kein Verbleib über diesen Moment hinaus), die
+  // Nutzerin wählt EINEN Chat, danach läuft alles Weitere über den ganz
+  // normalen Composer (dieselbe pendingFiles/textInput-Übernahme wie ein
+  // manuell gewählter Anhang oder eingegebener Text — keine eigene
+  // Versand-Logik).
+  const SHARE_CACHE_NAME = 'qu-chat-share-target';
+  let pendingShare = null; // { text, url, title, files: File[] } zwischen showShareTargetScreen() und applyShareToRoom()
+
+  async function loadSharePayload(id) {
+    if (!('caches' in window)) return null;
+    const cache = await caches.open(SHARE_CACHE_NAME);
+    const metaRes = await cache.match(`/share-payload/${id}`);
+    if (!metaRes) return null;
+    const meta = await metaRes.json();
+    await cache.delete(`/share-payload/${id}`);
+    const files = [];
+    for (let i = 0; i < meta.fileCount; i++) {
+      const key = `/share-file/${id}/${i}`;
+      const fileRes = await cache.match(key);
+      if (!fileRes) continue; // einzelne Datei fehlt (z. B. vorzeitig abgebrochen) — Rest bleibt trotzdem nutzbar
+      const blob = await fileRes.blob();
+      files.push(new File([blob], meta.fileNames[i] || `Datei-${i + 1}`, { type: meta.fileTypes[i] || blob.type }));
+      await cache.delete(key);
+    }
+    return { text: meta.text || '', url: meta.url || '', title: meta.title || '', files };
+  }
+
+  function renderShareTargetRoomList() {
+    shareTargetRoomListEl.textContent = '';
+    shareTargetErrorEl.textContent = '';
+    const withNames = rooms.map((r) => ({ ...r, alias: roomDisplayName(r) }));
+    const sorted = sortByActivity(withNames);
+    if (!sorted.length) {
+      shareTargetErrorEl.textContent = 'Noch kein Chat vorhanden — zuerst einen Chat starten, dann erneut teilen.';
+      return;
+    }
+    for (const r of sorted) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'share-target-room-btn';
+      const avatar = el('div', 'avatar sm');
+      setAvatar(avatar, r.alias, roomDisplayAvatar(r));
+      btn.appendChild(avatar);
+      btn.appendChild(el('span', '', r.alias));
+      btn.addEventListener('click', () => applyShareToRoom(r.id));
+      li.appendChild(btn);
+      shareTargetRoomListEl.appendChild(li);
+    }
+  }
+
+  async function showShareTargetScreen(id) {
+    shareTargetSummaryEl.textContent = 'Lädt …';
+    shareTargetRoomListEl.textContent = '';
+    shareTargetErrorEl.textContent = '';
+    shareTargetModal.hidden = false;
+    const share = await loadSharePayload(id);
+    if (!share) {
+      shareTargetSummaryEl.textContent = 'Geteilter Inhalt nicht mehr verfügbar (z. B. schon verwendet oder der Tab wurde neu geladen).';
+      return;
+    }
+    pendingShare = share;
+    const parts = [];
+    if (share.files.length) parts.push(`${share.files.length} Datei${share.files.length === 1 ? '' : 'en'}`);
+    if (share.text || share.url) parts.push('Text/Link');
+    shareTargetSummaryEl.textContent = parts.length ? `Geteilt: ${parts.join(' + ')}` : 'Kein Inhalt zum Teilen gefunden.';
+    renderShareTargetRoomList();
+  }
+
+  async function applyShareToRoom(roomId) {
+    const share = pendingShare;
+    pendingShare = null;
+    shareTargetModal.hidden = true;
+    if (!share) return;
+    await redirectTo(roomId); // kein eigener Verlaufseintrag — "zurück" soll nicht auf dieses (bereits übernommene) Auswahl-Formular führen
+    const textParts = [share.text, share.url].filter(Boolean);
+    if (textParts.length) {
+      const shared = textParts.join(' ');
+      textInput.value = textInput.value ? `${textInput.value} ${shared}` : shared;
+      autoGrow();
+    }
+    if (share.files.length) { pendingFiles.push(...share.files); renderPendingFiles(); }
+    textInput.focus();
+  }
+
+  $('share-target-cancel-btn').addEventListener('click', () => { pendingShare = null; closeScreen(); });
+  shareTargetModal.addEventListener('click', (ev) => { if (ev.target === shareTargetModal) { pendingShare = null; closeScreen(); } });
 
   // --- Neuer 1:1-Chat — `/add-contact[/<fp>]` (Router; die zweite Form ist
   // auch das Ziel eines geteilten Einladungslinks, siehe share-link-btn) ---
