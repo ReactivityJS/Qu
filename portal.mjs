@@ -41,10 +41,12 @@ const DEFAULT_CATEGORY = 'services';
 // Every localStorage key an identity might be persisted under in this
 // repo's example apps — checked read-only (never created here) so a
 // casual portal visitor who has never opened any Qu app gets no
-// side effect and no admin tab; someone who already visited
-// examples/chat, examples/people, or examples/relay-admin at least once
-// gets checked against the relay's admin list without having to visit
-// relay-admin FIRST just to find out whether they qualify.
+// side effect and no admin tab. 'qu-identity' is the shared-ecosystem
+// key examples/chat/examples/people/examples/relay-admin ALL use (one
+// fingerprint, not a per-app account, see examples/relay-admin/app.mjs's
+// IDENTITY_KEY doc) — 'qu-relay-admin-identity' is only checked for
+// BACKWARD COMPATIBILITY with a browser that opened relay-admin before
+// that shared-key fix landed; a fresh visit never writes it anymore.
 const IDENTITY_STORAGE_KEYS = ['qu-identity', 'qu-relay-admin-identity'];
 
 /** Reads (never creates) a locally persisted identity's fingerprint — `null` if the key is absent or its value isn't a valid exported keypair (space-app-browser.js's loadOrCreateIdentity() is the writer; this only ever reads). */
