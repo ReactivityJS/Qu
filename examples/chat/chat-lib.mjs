@@ -130,6 +130,25 @@ export function linkify(text) {
   return segments;
 }
 
+/**
+ * Baut einen teilbaren Karten-Link aus Koordinaten — welcher Anbieter
+ * (OpenStreetMap/Google/Apple/eigene URL) kommt aus den App-Einstellungen
+ * (map-provider-select, app.mjs). Der Link wird als normale Chat-Nachricht
+ * verschickt und braucht daher KEINE eigene Nachrichten-/Renderer-Logik —
+ * die bereits vorhandene Link-Vorschau (linkify()/buildLinkPreview() in
+ * app.mjs) greift automatisch. `customTemplate` darf `{lat}`/`{lng}`
+ * enthalten; fehlt es oder ist es leer, fällt "custom" auf OpenStreetMap
+ * zurück statt eine kaputte URL zu bauen.
+ */
+export function buildLocationUrl(provider, lat, lng, customTemplate) {
+  const latStr = String(lat);
+  const lngStr = String(lng);
+  if (provider === 'google') return `https://www.google.com/maps/search/?api=1&query=${latStr},${lngStr}`;
+  if (provider === 'apple') return `https://maps.apple.com/?ll=${latStr},${lngStr}&q=Standort`;
+  if (provider === 'custom' && customTemplate) return customTemplate.replaceAll('{lat}', latStr).replaceAll('{lng}', lngStr);
+  return `https://www.openstreetmap.org/?mlat=${latStr}&mlon=${lngStr}#map=16/${latStr}/${lngStr}`;
+}
+
 /** 'image' | 'video' | 'audio' | 'file' — bestimmt, welcher Player/welche Vorschau für einen Anhang gerendert wird. */
 export function mediaKind(mime) {
   if (!mime) return 'file';

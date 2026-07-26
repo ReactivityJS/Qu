@@ -58,11 +58,28 @@
       <ul id="message-list" class="message-list"></ul>
 
       <div id="pending-files" class="pending-files"></div>
+      <!-- Sprachnachricht: löst den normalen Composer ab (siehe .composer/
+           .voice-recorder in style.css), solange aufgenommen oder die
+           Aufnahme vor dem Senden abgehört wird — dieselben drei Zustände
+           (Aufnahme läuft / Vorhören / weg), die app.mjs' Recorder-Handler
+           steuern. -->
+      <div id="voice-recorder" class="voice-recorder" hidden>
+        <button id="voice-discard-btn" class="icon-btn" type="button" title="Verwerfen">🗑</button>
+        <div id="voice-status" class="voice-status">
+          <span id="voice-rec-dot" class="voice-rec-dot"></span>
+          <span id="voice-timer">0:00</span>
+        </div>
+        <audio id="voice-preview-audio" hidden controls></audio>
+        <button id="voice-stop-btn" class="icon-btn voice-stop-btn" type="button" title="Aufnahme beenden">⏹</button>
+        <button id="voice-send-btn" class="send-btn" type="button" title="Senden" hidden>&#10148;</button>
+      </div>
       <form id="composer" class="composer">
         <button id="emoji-btn" class="icon-btn" type="button" title="Emoji">😊</button>
         <div id="emoji-picker" class="emoji-picker" hidden></div>
         <button id="attach-btn" class="icon-btn" type="button" title="Anhang">📎</button>
         <input id="file-input" type="file" multiple hidden accept="image/*,video/*,audio/*" />
+        <button id="location-btn" class="icon-btn" type="button" title="Standort teilen">📍</button>
+        <button id="voice-btn" class="icon-btn" type="button" title="Sprachnachricht aufnehmen">🎤</button>
         <textarea id="text-input" rows="1" placeholder="Nachricht schreiben …"></textarea>
         <button id="send-btn" class="send-btn" type="submit" title="Senden">&#10148;</button>
       </form>
@@ -123,6 +140,18 @@
       <label>Medien</label>
       <label class="toggle-row"><input type="checkbox" id="auto-load-media-toggle" /> Bilder, Videos und Dateien automatisch laden</label>
       <p class="modal-hint">Aus: neue Anhänge zeigen erst Name/Größe, geladen wird nur nach einem Tipp darauf — schont mobiles Datenvolumen. Schon vorhandene/eigene Anhänge sind davon unberührt.</p>
+      <label for="map-provider-select">Standort teilen — Kartenanbieter</label>
+      <select id="map-provider-select">
+        <option value="osm">OpenStreetMap (Standard)</option>
+        <option value="google">Google Maps</option>
+        <option value="apple">Apple Maps</option>
+        <option value="custom">Eigene URL …</option>
+      </select>
+      <div id="map-custom-url-row" hidden>
+        <label for="map-custom-url-input">Eigene Karten-URL (mit <code>{lat}</code>/<code>{lng}</code>)</label>
+        <input type="text" id="map-custom-url-input" placeholder="https://karte.example.org/?lat={lat}&amp;lng={lng}" autocomplete="off" />
+      </div>
+      <p class="modal-hint">Der 📍-Button im Chat sendet den eigenen Standort als Karten-Link mit dem hier gewählten Anbieter.</p>
       <label>Fehlerbehebung</label>
       <div class="modal-actions">
         <button id="reset-app-btn" class="btn btn-secondary" type="button">App zurücksetzen</button>

@@ -414,6 +414,22 @@ button { font-family: inherit; }
 .pending-file-progress { font-size: 0.7rem; color: var(--accent-strong); font-style: italic; }
 .pending-file-progress:empty { display: none; }
 
+.voice-recorder {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  padding-bottom: max(0.6rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.voice-status { display: flex; align-items: center; gap: 0.5rem; flex: 1; color: var(--text); font-variant-numeric: tabular-nums; }
+.voice-rec-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--danger); animation: voice-rec-pulse 1.2s ease-in-out infinite; }
+@keyframes voice-rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.voice-recorder audio { flex: 1; height: 2.35rem; }
+.voice-stop-btn { color: var(--danger); border: 1px solid var(--danger) !important; }
+
 .status-bar { font-size: 0.72rem; color: var(--muted); padding: 0.3rem 1rem; text-align: center; }
 .status-bar.err { color: var(--danger); }
 
@@ -448,7 +464,7 @@ button { font-family: inherit; }
 }
 .modal h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
 .modal label { display: block; font-size: 0.78rem; color: var(--muted); margin: 0.7rem 0 0.3rem; }
-.modal input[type="text"] {
+.modal input[type="text"], .modal select {
   width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--border);
