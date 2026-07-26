@@ -1027,6 +1027,36 @@ Mehrgeräte-Sync. Anhänge brauchen zusätzlich einen `FileHandler`
 (`.put(bytes)` erkennt sie automatisch); Mehrgeräte-Sync zusätzlich einen
 `NetworkPlugin` — Chat selbst bleibt davon unwissend.
 
+Genauso "Beispielcode statt Architektur", aber nicht chat-spezifisch — die
+eigentliche Basis für jede App nach demselben Muster (ToDo, Forum, CMS,
+alles "N Fingerprints teilen sich einen Space"):
+
+- **`space-membership.js`** (`src/modules/space-membership.js`) — die
+  Discovery-/Mitgliedschaftsschicht über `spaces.js`: `ensureSpace(qu, id,
+  members)` legt einen Space mit genau den gewünschten Mitgliedern an (oder
+  no-op, falls schon vorhanden), `notifyMembers()`/`onSpaceInvite()` sorgen
+  dafür, dass jedes Mitglied einen für es angelegten Space automatisch
+  mitbekommt — ohne vorherigen Link-Austausch. Komplett Space-neutral (kein
+  "Room"/"Board"/"Liste" im Code), genau deshalb für Chat *und* ein
+  gemeinsames ToDo *und* ein Forum-Board gleichermaßen nutzbar.
+- **`presence.js`** (`src/modules/presence.js`) — Online-Status und
+  Lesebestätigungen, herausgelöst aus `chat.js`, weil beides keinerlei
+  Chat-spezifischen Inhalt hat (keine Nachrichtenform, kein Text). Jede App
+  auf `space-membership.js` kann `markRead()`/`getReadReceipts()` und
+  `setPresence()`/`onPresence()` direkt nutzen, ganz ohne Chats
+  Sende-Maschinerie mit zu importieren.
+- **`profiles.js`** (`src/modules/profiles.js`) — unabhängig von der
+  Space-Schicht oben: zusätzliche Profil-Attribute (`~<fp>/attrs/<key>`)
+  und ein optionales, global-öffentliches Identitäts-Verzeichnis
+  (opt-in, per `setDirectoryVisible(true)`).
+- **`identity-transfer.js`** (`src/modules/identity-transfer.js`) —
+  dieselbe Identität auf ein zweites Gerät übertragen (Export/Import der
+  privaten Schlüssel, optional passwortgeschützt).
+
+Wie diese Bausteine aufeinander aufbauen (und in welcher Reihenfolge eine
+neue App sie typischerweise braucht) steht in
+[`src/modules/README.md`](./src/modules/README.md).
+
 ## Im Browser (Server starten)
 
 ```
@@ -1146,7 +1176,9 @@ unzustellbarer Nachrichten bis zum ersten `onMessage()`-Aufruf — in allen
 drei Channel-Implementierungen (Loopback, WS-Server, WS-Client), nicht nur
 dort, wo es zuerst auffiel.
 
-**Presence & Lesebestätigungen** (`modules/chat.js`): Online-Status ist ein
+**Presence & Lesebestätigungen** (`modules/presence.js` — herausgelöst aus
+`modules/chat.js`, da beides keinen Chat-spezifischen Inhalt hat, siehe
+oben): Online-Status ist ein
 Heartbeat auf einen festen Pro-Mitglied-Slot (`${room}/presence/${fp}`,
 LWW) — ein Leser gilt nur als online, wenn `lastSeen` frisch genug ist,
 unabhängig vom zuletzt veröffentlichten Status (deckt auch den Fall ab, in
