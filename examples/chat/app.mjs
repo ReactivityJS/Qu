@@ -207,6 +207,7 @@ const addContactBtn = $('add-contact-btn');
 const newGroupBtn = $('new-group-btn');
 const settingsBtn = $('settings-btn');
 const chatSettingsBtn = $('chat-settings-btn');
+const chatSearchBtn = $('chat-search-btn');
 const searchBtn = $('search-btn');
 
 /**
@@ -1232,6 +1233,10 @@ async function main() {
     const room = roomById(first);
     if (!room) { await redirectTo(); return; } // unbekannte/fremde Raum-Id -> zurück zur Chatliste, kein Verlaufseintrag dafür
     if (second === 'settings') { showChatSettingsScreen(room); return; }
+    // `/<roomId>/search` — dieselbe Suche wie die globale `/search`
+    // (ROOT_ROUTES), nur auf GENAU diesen Raum eingegrenzt (s.
+    // showSearchScreen()s scopeRoomId-Parameter).
+    if (second === 'search') { showSearchScreen(room.id); return; }
     // `/<roomId>/msg/<messageId>` — Direktlink auf eine einzelne Nachricht
     // (z. B. geteilt aus der Suche, siehe openSearchResult()): öffnet den
     // Chat wie sonst auch (der startet regulär ganz unten, siehe
@@ -2436,6 +2441,7 @@ async function main() {
   // nicht in der Nachricht selbst, das würde die Suche pro Tastendruck
   // in einen Netzwerk-Vorgang verwandeln statt eines simplen Array-Filters.
   let searchFilter = 'all'; // 'all' | 'links' | 'files'
+  let searchScopeRoomId = null; // null = alle Chats durchsuchen, sonst nur dieser Raum (s. showSearchScreen())
   const SEARCH_RESULT_LIMIT = 100;
 
   function messageHasLink(q) {
@@ -2475,12 +2481,20 @@ async function main() {
 
     if (!query && searchFilter === 'all') {
       searchEmptyEl.hidden = false;
-      searchEmptyEl.textContent = 'Suche nach Text, oder wähle „Links“/„Dateien“, um zu stöbern.';
+      searchEmptyEl.textContent = searchScopeRoomId
+        ? 'Suche in diesem Chat nach Text, oder wähle „Links“/„Dateien“, um zu stöbern.'
+        : 'Suche nach Text, oder wähle „Links“/„Dateien“, um zu stöbern.';
       return;
     }
 
+    // Auf GENAU einen Raum eingegrenzt (chat-search-btn/`/<roomId>/search`)
+    // statt über messagesByRoom hinweg — sonst identischer Ablauf wie die
+    // globale Suche.
+    const roomsToSearch = searchScopeRoomId
+      ? [[searchScopeRoomId, messagesByRoom.get(searchScopeRoomId) ?? []]]
+      : messagesByRoom;
     const matches = [];
-    for (const [roomId, list] of messagesByRoom) {
+    for (const [roomId, list] of roomsToSearch) {
       for (const q of list) {
         if (matchesSearch(q, query)) matches.push({ roomId, q });
       }
@@ -2755,7 +2769,10 @@ async function main() {
   });
 
   /** Suche über alle Chats — `/search` (Router). */
-  function showSearchScreen() {
+  /** `scopeRoomId`: eingegrenzt auf GENAU diesen Raum statt aller Chats (s. renderSearchResults()) — chat-search-btn im Chat-Header, `/<roomId>/search` (Router). `undefined` = die globale Suche (searchBtn in der Seitenleiste, `/search`). */
+  function showSearchScreen(scopeRoomId) {
+    searchScopeRoomId = scopeRoomId ?? null;
+    searchInput.placeholder = searchScopeRoomId ? 'In diesem Chat suchen …' : 'Nachrichten durchsuchen …';
     searchOverlay.hidden = false;
     searchInput.value = '';
     searchFilter = 'all';
@@ -2765,6 +2782,7 @@ async function main() {
   }
 
   searchBtn.addEventListener('click', () => navigate('search'));
+  chatSearchBtn.addEventListener('click', () => { if (activeRoomId) navigate(activeRoomId, 'search'); });
   searchBackBtn.addEventListener('click', closeScreen);
   searchInput.addEventListener('input', renderSearchResults);
   searchClearBtn.addEventListener('click', () => { searchInput.value = ''; renderSearchResults(); searchInput.focus(); });
