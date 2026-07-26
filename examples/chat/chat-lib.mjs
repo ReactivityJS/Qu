@@ -149,6 +149,51 @@ export function buildLocationUrl(provider, lat, lng, customTemplate) {
   return `https://www.openstreetmap.org/?mlat=${latStr}&mlon=${lngStr}#map=16/${latStr}/${lngStr}`;
 }
 
+/**
+ * Erkennt einen von buildLocationUrl() (osm/google/apple) erzeugten
+ * Karten-Link und liefert dessen Koordinaten zurück — Grundlage für eine
+ * echte Vorschau (Kartenausschnitt + "📍 Standort" statt nur Hostname/rohe
+ * URL) in buildLinkPreview() (app.mjs). `null` bei jedem anderen Link,
+ * INKLUSIVE einer "eigenen URL" (deren Platzhalter-Schema ist beliebig,
+ * nicht zuverlässig rückwärts zu parsen) — dafür bleibt die generische
+ * Chip-Vorschau.
+ */
+export function parseLocationFromUrl(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  if (u.hostname.endsWith('openstreetmap.org')) {
+    const lat = parseFloat(u.searchParams.get('mlat'));
+    const lng = parseFloat(u.searchParams.get('mlon'));
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  } else if (u.hostname.endsWith('google.com') && u.pathname.includes('/maps/')) {
+    const [lat, lng] = (u.searchParams.get('query') ?? '').split(',').map(Number);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  } else if (u.hostname.endsWith('maps.apple.com')) {
+    const [lat, lng] = (u.searchParams.get('ll') ?? '').split(',').map(Number);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  }
+  return null;
+}
+
+/**
+ * URL einer einzelnen Slippy-Map-Kachel (dieselbe Quelle, auf die der
+ * Karten-Link selbst schon verweist — kein zusätzlicher Drittanbieter,
+ * kein eigener Vorschau-/Screenshot-Dienst nötig) — leichtgewichtige
+ * Bild-Vorschau für einen erkannten Standort-Link.
+ */
+export function staticMapTileUrl(lat, lng, zoom = 15) {
+  const n = 2 ** zoom;
+  const x = Math.floor(((lng + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return `https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
+}
+
+/** Erkennt einen per 🎤-Recorder gesendeten Anhang (app.mjs) an dessen Dateinamens-Konvention — Grundlage dafür, ihn im Chat explizit als "Sprachnachricht" statt als generischen Audio-Anhang (z. B. ein verschickter Song) zu kennzeichnen. */
+export function isVoiceMessageFilename(name) {
+  return /^Sprachnachricht-\d+\.\w+$/.test(name ?? '');
+}
+
 /** 'image' | 'video' | 'audio' | 'file' — bestimmt, welcher Player/welche Vorschau für einen Anhang gerendert wird. */
 export function mediaKind(mime) {
   if (!mime) return 'file';

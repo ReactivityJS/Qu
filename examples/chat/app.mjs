@@ -16,7 +16,7 @@ import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import {
   dmRoomId, groupRoomId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
   linkify, mediaKind, sortByActivity, buildPath, parsePathSegments, fmtCallDuration,
-  buildLocationUrl,
+  buildLocationUrl, parseLocationFromUrl, staticMapTileUrl, isVoiceMessageFilename,
 } from './chat-lib.mjs';
 import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert <qu-profile-card> (renderRoomHeader()/renderGroupMemberList()) UND <qu-people-search> (Neuer-Chat-Formular)
 
@@ -1884,6 +1884,13 @@ async function main() {
           video.addEventListener('loadedmetadata', stickToBottomIfNeeded);
           wrap.appendChild(video);
         } else if (kind === 'audio') {
+          // Ein per 🎤-Recorder gesendeter Anhang soll nicht wie ein
+          // beliebiger Audio-Anhang (z. B. ein verschickter Song) aussehen
+          // — erkennbar an dessen Dateinamens-Konvention (s.
+          // isVoiceMessageFilename() in chat-lib.mjs), bekommt er ein
+          // eigenes Label VOR dem Player statt nur dem nackten
+          // <audio controls>, das für sich genommen keinen Kontext trägt.
+          if (isVoiceMessageFilename(fileMeta.name)) wrap.appendChild(el('div', 'voice-message-label', '🎙️ Sprachnachricht'));
           const audio = document.createElement('audio');
           audio.src = url;
           audio.controls = true;
@@ -1904,12 +1911,13 @@ async function main() {
     /** Platzhalter statt eines automatischen Downloads — Dateiname/-typ/-größe kommen aus fileMeta, das schon VOR jedem Byte-Download verfügbar ist (s. o.), ein Klick löst den eigentlichen reveal() erst aus. */
     function showLoadPlaceholder() {
       wrap.textContent = '';
+      const isVoice = kind === 'audio' && isVoiceMessageFilename(fileMeta.name);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'attachment-file attachment-load-btn';
-      btn.appendChild(el('span', 'file-ic', kind === 'image' ? '🖼️' : kind === 'video' ? '🎬' : kind === 'audio' ? '🎵' : '📄'));
+      btn.appendChild(el('span', 'file-ic', isVoice ? '🎙️' : kind === 'image' ? '🖼️' : kind === 'video' ? '🎬' : kind === 'audio' ? '🎵' : '📄'));
       const metaEl = el('div');
-      metaEl.appendChild(el('div', '', fileMeta.name));
+      metaEl.appendChild(el('div', '', isVoice ? 'Sprachnachricht' : fileMeta.name));
       metaEl.appendChild(el('div', 'file-meta', `${fileMeta.mime} · ${fmtBytes(fileMeta.size ?? 0)} · zum Laden tippen`));
       btn.appendChild(metaEl);
       btn.addEventListener('click', () => {
@@ -1944,17 +1952,41 @@ async function main() {
     }
   }
 
+  /**
+   * Erkannte Standort-Links (parseLocationFromUrl(), s. chat-lib.mjs)
+   * bekommen einen Kartenausschnitt + "📍 Standort" + Koordinaten statt der
+   * generischen Hostname/URL-Chip-Vorschau — die Info "das ist ein Ort"
+   * muss auch OHNE das Bild ankommen (Offline/Tile-Server nicht erreichbar
+   * etc.), daher bleiben Label+Koordinaten als Text in JEDEM Fall sichtbar,
+   * das Bild ist nur eine ZUSÄTZLICHE visuelle Vorschau (entfernt sich bei
+   * einem Ladefehler einfach selbst, statt eines kaputten img-Icons).
+   */
   function buildLinkPreview(text) {
     const link = linkify(text).find((s) => s.type === 'link');
     if (!link) return null;
+    const loc = parseLocationFromUrl(link.value);
     const a = document.createElement('a');
-    a.className = 'msg-link';
+    a.className = loc ? 'msg-link msg-location' : 'msg-link';
     a.href = link.value;
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
-    const host = el('div', 'link-host', `🔗 ${link.hostname}`);
-    a.appendChild(host);
-    a.appendChild(el('div', 'link-url', link.value));
+    if (loc) {
+      const img = document.createElement('img');
+      img.className = 'msg-location-thumb';
+      img.src = staticMapTileUrl(loc.lat, loc.lng);
+      img.alt = 'Kartenausschnitt';
+      img.loading = 'lazy';
+      img.addEventListener('error', () => img.remove());
+      a.appendChild(img);
+      const info = el('div', 'msg-location-info');
+      info.appendChild(el('div', 'link-host', '📍 Standort'));
+      info.appendChild(el('div', 'msg-location-coords', `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`));
+      a.appendChild(info);
+    } else {
+      const host = el('div', 'link-host', `🔗 ${link.hostname}`);
+      a.appendChild(host);
+      a.appendChild(el('div', 'link-url', link.value));
+    }
     return a;
   }
 
@@ -1966,9 +1998,19 @@ async function main() {
     li.dataset.id = q.id;
     const bubble = el('div', 'msg-bubble');
     if (q.value?.text) {
-      const textEl = el('div', 'msg-text');
-      renderMessageText(textEl, q.value.text);
-      bubble.appendChild(textEl);
+      // Ein Text, der NUR aus einem einzelnen Link besteht (z. B. genau
+      // das, was der 📍-Standort-Button verschickt), bräuchte sonst die
+      // URL zweimal — einmal als klickbaren Rohtext hier, direkt darunter
+      // nochmal identisch in der Vorschau-Karte. Bei "Text + Link" (eine
+      // eigene Bildunterschrift o. Ä.) bleibt der Text dagegen sichtbar —
+      // nur der Sonderfall "Nachricht ist der Link" ist echte Dopplung.
+      const segs = linkify(q.value.text);
+      const isBareLink = segs.length === 1 && segs[0].type === 'link';
+      if (!isBareLink) {
+        const textEl = el('div', 'msg-text');
+        renderMessageText(textEl, q.value.text);
+        bubble.appendChild(textEl);
+      }
       const preview = buildLinkPreview(q.value.text);
       if (preview) bubble.appendChild(preview);
     }
@@ -2258,7 +2300,8 @@ async function main() {
     pendingFiles.forEach((file, i) => {
       const chip = el('div', 'pending-file');
       chip.dataset.index = i;
-      chip.appendChild(document.createTextNode(`${mediaKind(file.type) === 'image' ? '🖼️' : mediaKind(file.type) === 'video' ? '🎬' : mediaKind(file.type) === 'audio' ? '🎵' : '📎'} ${file.name}`));
+      const isVoice = mediaKind(file.type) === 'audio' && isVoiceMessageFilename(file.name);
+      chip.appendChild(document.createTextNode(`${isVoice ? '🎙️ Sprachnachricht' : `${mediaKind(file.type) === 'image' ? '🖼️' : mediaKind(file.type) === 'video' ? '🎬' : mediaKind(file.type) === 'audio' ? '🎵' : '📎'} ${file.name}`}`));
       // Leer/versteckt, solange nicht gesendet wird — setPendingFileProgress()
       // (composer-Submit-Handler unten) füllt sie WÄHREND des lokalen
       // Verschlüsselns/Zerstückelns eines großen Anhangs (z. B. Video), damit
