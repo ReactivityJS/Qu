@@ -26,9 +26,65 @@
 // client reads.
 
 import { buildPath, parsePathSegments } from './src/ui/hash-router.js';
+import { QuIdentity } from './src/index.js';
 
-const CATEGORIES = ['services', 'examples', 'documentation'];
+// 'admin' is a real, navigable category (renderRoute()/showCategory()
+// both need to know about it) even though its TAB starts `hidden` in the
+// markup — see revealAdminTabIfLocalIdentityIsAdmin() below for when it
+// gets shown. Someone who already knows `#/admin` (or `/examples/
+// relay-admin/index.html` directly) can always reach it regardless — the
+// hidden tab is a discoverability nicety, never the actual boundary (see
+// index.html's own comment on this same point).
+const CATEGORIES = ['services', 'examples', 'documentation', 'admin'];
 const DEFAULT_CATEGORY = 'services';
+
+// Every localStorage key an identity might be persisted under in this
+// repo's example apps — checked read-only (never created here) so a
+// casual portal visitor who has never opened any Qu app gets no
+// side effect and no admin tab; someone who already visited
+// examples/chat, examples/people, or examples/relay-admin at least once
+// gets checked against the relay's admin list without having to visit
+// relay-admin FIRST just to find out whether they qualify.
+const IDENTITY_STORAGE_KEYS = ['qu-identity', 'qu-relay-admin-identity'];
+
+/** Reads (never creates) a locally persisted identity's fingerprint — `null` if the key is absent or its value isn't a valid exported keypair (space-app-browser.js's loadOrCreateIdentity() is the writer; this only ever reads). */
+async function fingerprintFromStorageKey(key) {
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+  try {
+    const keys = JSON.parse(raw);
+    const identity = await QuIdentity.importKeys(keys.signPriv, keys.signPub, keys.encPriv, keys.encPub);
+    return identity.fingerprint;
+  } catch (e) {
+    console.warn(`[Portal] localStorage["${key}"] isn't a valid exported identity, ignoring for the admin-tab check:`, e.message);
+    return null;
+  }
+}
+
+/**
+ * Purely a UI convenience, NOT a security check (see index.html's/
+ * server/relay-info-routes.mjs's doc comments on this same point,
+ * repeated intentionally since it matters): reveals the Admin tab only if
+ * one of this browser's already-persisted local identities happens to be
+ * on the relay's QU_RELAY_ADMINS list (GET /relay/info). A real
+ * unauthorized write attempt still fails at the relay's ACL either way —
+ * this only saves an actual admin the trouble of remembering/bookmarking
+ * `/examples/relay-admin/index.html`.
+ */
+async function revealAdminTabIfLocalIdentityIsAdmin() {
+  let admins;
+  try {
+    admins = (await (await fetch('/relay/info')).json()).admins ?? [];
+  } catch (e) {
+    console.error('[Portal] failed to load /relay/info — admin tab stays hidden:', e);
+    return;
+  }
+  if (!admins.length) return;
+  const fingerprints = (await Promise.all(IDENTITY_STORAGE_KEYS.map(fingerprintFromStorageKey))).filter(Boolean);
+  if (!fingerprints.some((fp) => admins.includes(fp))) return;
+  const adminTab = document.querySelector('.category-tab[data-category="admin"]');
+  if (adminTab) adminTab.hidden = false;
+}
 
 const tabs = document.querySelectorAll('.category-tab');
 const sections = document.querySelectorAll('.cards-section');
@@ -98,9 +154,17 @@ async function loadCatalog() {
   serviceEntries = Object.fromEntries(
     items.filter((i) => i.category === 'service' && i.entry).map((i) => [i.id, i.entry]),
   );
-  for (const category of ['service', 'example', 'documentation']) {
-    // Registry category is singular ('service'), portal section is plural ('services') — see service-registry.mjs's `category` field.
-    renderCategory(category === 'service' ? 'services' : `${category}s`, items.filter((i) => i.category === category));
+  // Registry category ('service'/'example'/'documentation'/'admin'/'custom',
+  // server/service-registry.mjs) vs. this page's `data-category` sections
+  // ('services'/'examples'/'documentation') don't all follow the same
+  // pluralization rule — 'documentation' stays singular, unlike
+  // 'service'/'example' — so an explicit map, not a naive `${category}s`
+  // suffix (which silently produced "documentations", matching NO
+  // section on the page and leaving the entire Documentation tab empty —
+  // a real bug this exact map is here to prevent from recurring).
+  const SECTION_FOR_CATEGORY = { service: 'services', example: 'examples', documentation: 'documentation', admin: 'admin' };
+  for (const [category, section] of Object.entries(SECTION_FOR_CATEGORY)) {
+    renderCategory(section, items.filter((i) => i.category === category));
   }
 }
 
@@ -109,3 +173,4 @@ for (const tab of tabs) {
 }
 window.addEventListener('hashchange', renderRoute);
 loadCatalog().then(renderRoute); // not top-level await — no existing script in this repo relies on it, keep this one consistent
+revealAdminTabIfLocalIdentityIsAdmin();

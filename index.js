@@ -219,7 +219,7 @@ const server = startServer({
     ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null }),
     ...createWebRTCRoutes({ iceServers }),
     ...createPortalRoutes({ root, registry }),
-    ...createRelayInfoRoutes({ fingerprint: relayIdentity.fingerprint, epub: relayEpub }),
+    ...createRelayInfoRoutes({ fingerprint: relayIdentity.fingerprint, epub: relayEpub, admins: relayAdmins }),
   ],
 });
 
