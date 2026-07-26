@@ -192,6 +192,12 @@ const store = new QuStore([
   // default.js's isReplicable() check). `pushSubscriptions` below is
   // relay.mjs's OWN, separate durability for what it needs to remember.
   { prefix: 'push-subscription/', adapter: new NullAdapter(), replicate: false },
+  // `admin/<...>` (relay/relay.mjs's admin-command listener): signed+
+  // encrypted admin commands (e.g. toggling a code-defined service) —
+  // processed live, never persisted, never forwarded to another peer.
+  // Same reasoning/mechanism as push-subscription/ above, just for a
+  // different reserved prefix.
+  { prefix: 'admin/', adapter: new NullAdapter(), replicate: false },
 ]);
 const fileStorage = persistent ? new FileSystemFileStorageAdapter(path.join(dataDir, 'files')) : new MemoryFileStorageAdapter();
 

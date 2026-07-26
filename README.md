@@ -1182,8 +1182,36 @@ Arten von Einträgen:
 Die Relay-Identität selbst ist stabil über Neustarts hinweg
 (`relay/relay-identity.mjs`, `.relay-data/relay-identity.json`, dasselbe
 Muster wie die VAPID-Schlüssel oben) — Voraussetzung dafür, dass ein
-Admin künftig etwas gezielt AN diesen Relay verschlüsseln kann
-(`~<relayFp>/epub`, per `publishProfile()` beim Start veröffentlicht).
+Admin gezielt AN diesen Relay verschlüsseln kann (`~<relayFp>/epub`, per
+`publishProfile()` beim Start veröffentlicht).
+
+**Admin-Kommandos** (`admin/<...>`, `relay/relay.mjs`s `runtime.on('admin/**', ...)`-
+Listener) — für sensiblere Aktionen als die öffentlich sichtbare
+Services-Registry oben, aktuell: Ein-/Ausschalten eines CODE-definierten
+Services (`admin/service/<id>`, s.o.). Anders als `relay-services/<id>`
+ist ein Admin-Kommando sowohl **signiert als auch verschlüsselt** — nur
+eine `QU_RELAY_ADMINS`-Identität darf schreiben (dieselbe Verify+ACL-
+Pipeline wie jeder andere Write), und der Inhalt ist nur mit dem privaten
+Schlüssel DIESES Relays entschlüsselbar (`core/crypto.js`s `encryptFor`/
+`decryptWith`, adressiert an `relay.fingerprint` über dessen
+`~<relayFp>/epub`). Deliberately keine neue Wire-Form — ein Admin-Kommando
+ist ein gewöhnliches QuBit auf einem `NullAdapter`-Präfix
+(`replicate:false`, index.js), exakt derselbe Trick wie
+`push-subscription/<fp>`, nur zusätzlich verschlüsselt statt nur signiert.
+Ein `{ enabled, ttl }`-Kommando ist **temporär**: der Relay merkt sich den
+Zustand von unmittelbar davor und stellt ihn nach `ttl`ms selbst wieder
+her, außer ein neueres Kommando für dieselbe Service-Id trifft vorher ein
+(dann gewinnt das neuere, der alte geplante Revert wird verworfen). Eine
+falsch adressierte oder unverschlüsselte Nachricht auf diesem Präfix wird
+verworfen (`debug('relay', 'admin-command-*', …)`), nie als Fehler nach
+außen geworfen — ein Admin-Kanal, der durch eine fehlgeformte Nachricht
+zum Absturz gebracht werden könnte, wäre schlimmer als ein still
+ignoriertes Kommando.
+
+Die Admin-Fingerprint-Liste selbst (`QU_RELAY_ADMINS`) ist bewusst NUR per
+Neustart/Redeploy änderbar, nicht über das Wire-Protokoll — eine
+kompromittierte Admin-Identität könnte sich sonst dauerhaft selbst
+Rechte hinzufügen.
 
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,

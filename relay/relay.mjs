@@ -1,4 +1,5 @@
 import { Qu, QuStore, MemoryAdapter, NullAdapter, ReplicationHub, createSpacesPlugin, createSpaceACLResolver, DefaultFileTransfer, MemoryFileStorageAdapter } from '../src/index.js';
+import { decryptWith } from '../src/core/crypto.js';
 import { debug } from '../src/core/debug.js';
 
 /**
@@ -136,15 +137,82 @@ export async function createRelay({
   // across a restart (it's the actual runtime-maintained service catalog,
   // not ephemeral control-plane traffic) and stay ordinary, replicable
   // Space content — the same real `store` mount as everything else.
+  //
+  // `admin/<...>` — the signed+ENCRYPTED admin-command channel (see the
+  // listener below): writable and readable only by a relayAdmins
+  // fingerprint (unlike relay-services/ above, this is NOT meant to be
+  // visible to arbitrary connected clients even in encrypted-envelope
+  // form — restricting `readers` keeps it out of sync responses/pushes to
+  // anyone but another admin). Mounted on a NullAdapter with
+  // `replicate:false` by whoever builds `store` (index.js, same
+  // convention as push-subscription/signal) — a command is an ephemeral
+  // instruction, not state to persist or forward to other peers.
   const spacesACL = createSpaceACLResolver(relay.runtime);
   relay.setACLResolver(async (id) => {
     const m = /^push-subscription\/([0-9a-f]{24})$/i.exec(id);
     if (m) return { writers: [m[1]], readers: ['*'] };
     if (id.startsWith('relay-services/')) return { writers: relayAdmins, readers: ['*'] };
+    if (id.startsWith('admin/')) return { writers: relayAdmins, readers: relayAdmins };
     return spacesACL(id);
   });
 
   if (serviceRegistry) serviceRegistry.attachStore(relay.runtime);
+
+  // Admin-command dispatch. Reaching this listener at all already proves
+  // (a) a valid signature from (b) a relayAdmins fingerprint — both
+  // enforced by the ordinary verify+ACL pipeline every ingest() already
+  // runs, same as any other write, nothing bespoke here. What's left is
+  // just: decrypt (only the relay's own private key can, see `identity`
+  // above and index.js's `relay.publishProfile()`) and dispatch on the id
+  // shape. `decryptWith()` returning `undefined` (envelope not actually
+  // addressed to this identity — malformed, or encrypted for a DIFFERENT
+  // relay's key by mistake) is treated as "ignore", not an error: an
+  // admin channel that could be crashed by a malformed command would be
+  // a worse failure mode than silently dropping one.
+  //
+  // Currently the only command shape: `admin/service/<id>` -> decrypted
+  // `{ enabled, ttl? }` toggles a CODE-defined service's live `enabled`
+  // flag (server/service-registry.mjs's setEnabled() — store-defined
+  // services don't need this at all, see relay-services/ above, an
+  // ordinary signed write already suffices for those). `ttl` (ms) makes
+  // the toggle TEMPORARY: the relay schedules its own revert back to
+  // whatever the flag was immediately before this command, unless a
+  // newer command for the same id arrives first (in which case the
+  // pending revert is cancelled — the newer command wins outright).
+  const pendingReverts = new Map(); // serviceId -> { timer, revertTo }
+  relay.runtime.on('admin/**', async (q) => {
+    let decrypted;
+    try {
+      decrypted = await decryptWith(relay.identity, q.value);
+    } catch (e) {
+      debug('relay', 'admin-command-decrypt-failed', { id: q.id, writer: q.writer, error: e.message });
+      return;
+    }
+    if (decrypted === undefined) {
+      debug('relay', 'admin-command-not-for-us', { id: q.id, writer: q.writer });
+      return;
+    }
+    debug('relay', 'admin-command', { id: q.id, writer: q.writer, command: decrypted });
+
+    const m = /^admin\/service\/([^/]+)$/.exec(q.id);
+    if (!m || !serviceRegistry) return;
+    const serviceId = m[1];
+
+    const pending = pendingReverts.get(serviceId);
+    if (pending) { clearTimeout(pending.timer); pendingReverts.delete(serviceId); }
+
+    const revertTo = serviceRegistry.isEnabled(serviceId);
+    serviceRegistry.setEnabled(serviceId, !!decrypted.enabled);
+    if (decrypted.ttl > 0) {
+      const timer = setTimeout(() => {
+        pendingReverts.delete(serviceId);
+        serviceRegistry.setEnabled(serviceId, revertTo);
+        debug('relay', 'admin-command-ttl-reverted', { id: serviceId, revertedTo: revertTo });
+      }, decrypted.ttl);
+      timer.unref?.(); // Node-only; never keep the process alive just for a pending revert (same reasoning as core/heartbeat.js's own timer)
+      pendingReverts.set(serviceId, { timer, revertTo });
+    }
+  });
 
   const hub = new ReplicationHub(relay.runtime, {
     identity: relay.identity, getACL: relay.acl, pushTopics, requireDirectWriter, rateLimiter, ingestGate,
