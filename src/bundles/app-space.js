@@ -16,7 +16,10 @@ export {
   DIRECTORY_ID, ensureDirectory, setDirectoryVisible, listDirectory, onDirectoryChange, createProfilesPlugin,
 } from '../modules/profiles.js';
 export { exportIdentity, importIdentity } from '../modules/identity-transfer.js';
-export { sendMessage, listMessages, onMessage, createChatRoom, createChatPlugin } from '../modules/chat.js';
+export {
+  sendMessage, listMessages, onMessage, createChatRoom, createChatPlugin,
+  setReaction, clearReaction, getReactions, onReactionsChange,
+} from '../modules/chat.js';
 export {
   markRead, getReadReceipts, onReadReceipt,
   setPresence, getPresence, onPresenceChange, startHeartbeat,

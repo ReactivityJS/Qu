@@ -490,6 +490,50 @@ button { font-family: inherit; }
 }
 .message-action-item:hover, .message-action-item:focus-visible { background: var(--border); }
 
+/* Schnellauswahl für eine Reaktion — dasselbe position:fixed-Muster wie
+   .message-actions-menu oben, nur als Emoji-Raster statt einer Liste. */
+.reaction-picker {
+  position: fixed;
+  z-index: 60;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3rem;
+  display: flex;
+  gap: 0.15rem;
+  box-shadow: 0 4px 16px #00000050;
+}
+.reaction-picker-item {
+  all: unset;
+  cursor: pointer;
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: 0.3rem;
+  border-radius: 50%;
+}
+.reaction-picker-item:hover, .reaction-picker-item:focus-visible { background: var(--border); }
+
+/* Reaktions-Pills unter der Bubble (buildReactionsRow()) — .mine hebt
+   hervor, dass die eigene Identität mit DIESEM Emoji reagiert hat
+   (Antippen entfernt sie dann wieder statt sie erneut hinzuzufügen). */
+.msg-reactions { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+.msg.mine .msg-reactions { justify-content: flex-end; }
+.reaction-pill {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+.reaction-pill.mine { border-color: var(--accent-strong); background: color-mix(in srgb, var(--accent-strong) 15%, transparent); }
+.reaction-pill:hover { border-color: var(--accent); }
+
 .reply-preview {
   display: flex;
   align-items: center;

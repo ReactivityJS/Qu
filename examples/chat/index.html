@@ -315,12 +315,27 @@
        #emoji-picker. "Teilen" nur sichtbar, wenn navigator.share
        überhaupt existiert. -->
   <div id="message-actions-menu" class="message-actions-menu" hidden>
+    <button id="msg-action-react" class="message-action-item" type="button">😊 Reagieren</button>
     <button id="msg-action-reply" class="message-action-item" type="button">↩️ Antworten</button>
     <button id="msg-action-edit" class="message-action-item" type="button">✏️ Bearbeiten</button>
     <button id="msg-action-forward" class="message-action-item" type="button">➡️ Weiterleiten</button>
     <button id="msg-action-share" class="message-action-item" type="button">📤 Teilen</button>
     <button id="msg-action-copy" class="message-action-item" type="button">📋 Text kopieren</button>
     <button id="msg-action-copy-link" class="message-action-item" type="button">🔗 Link kopieren</button>
+  </div>
+
+  <!-- Schnellauswahl für eine Reaktion — öffnet sich anstelle des
+       Aktionsmenüs (msg-action-react-Handler in app.mjs), dasselbe
+       Positionierungs-/Öffnen-Schließen-Muster. -->
+  <div id="reaction-picker" class="reaction-picker" hidden>
+    <button type="button" class="reaction-picker-item" data-emoji="👍">👍</button>
+    <button type="button" class="reaction-picker-item" data-emoji="❤️">❤️</button>
+    <button type="button" class="reaction-picker-item" data-emoji="😂">😂</button>
+    <button type="button" class="reaction-picker-item" data-emoji="😮">😮</button>
+    <button type="button" class="reaction-picker-item" data-emoji="😢">😢</button>
+    <button type="button" class="reaction-picker-item" data-emoji="🙏">🙏</button>
+    <button type="button" class="reaction-picker-item" data-emoji="🔥">🔥</button>
+    <button type="button" class="reaction-picker-item" data-emoji="✅">✅</button>
   </div>
 
   <!-- Lightbox: Vollbild + Zoom für Bilder -->

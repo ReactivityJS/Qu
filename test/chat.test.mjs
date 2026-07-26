@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu, MemoryFileStorageAdapter, sendMessage, listMessages, createChatRoom, markRead, getReadReceipts, setPresence, getPresence, startHeartbeat, createFileHandlerPlugin, createSpacesPlugin } from '../src/index.js';
+import {
+  Qu, MemoryFileStorageAdapter, sendMessage, listMessages, createChatRoom, markRead, getReadReceipts,
+  setPresence, getPresence, startHeartbeat, createFileHandlerPlugin, createSpacesPlugin,
+  setReaction, clearReaction, getReactions,
+} from '../src/index.js';
 
 function wait(ms = 20) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -126,4 +130,55 @@ test('presence: online while heartbeating, offline after an explicit stop, stale
   await setPresence(bob.get(room.id), 'online');
   const staleView = await getPresence(room, { staleAfterMs: 0 });
   assert.equal(staleView[bob.fingerprint].online, false, 'an immediately-stale heartbeat must not read as online');
+});
+
+test('reactions: one slot per (message, person) — a second reaction from the same person replaces the first, not adds a second', async () => {
+  const alice = (await Qu.create()).use(createSpacesPlugin());
+  const bob = await Qu.create({ runtime: alice.runtime });
+  await Promise.all([alice, bob].map((qu) => qu.publishProfile()));
+  const room = createChatRoom(alice, [alice.fingerprint, bob.fingerprint]);
+  await room.ready;
+  const { qubit: m1 } = await sendMessage(room, { text: 'funny joke' });
+
+  await setReaction(bob.get(room.id), m1.id, '😂');
+  assert.deepEqual(await getReactions(room, m1.id), { '😂': [bob.fingerprint] });
+
+  // Bob reacts again with a different emoji — replaces, doesn't stack.
+  await setReaction(bob.get(room.id), m1.id, '❤️');
+  assert.deepEqual(await getReactions(room, m1.id), { '❤️': [bob.fingerprint] });
+
+  // Alice reacts with the same emoji as Bob — both listed under it.
+  await setReaction(room, m1.id, '❤️');
+  const both = await getReactions(room, m1.id);
+  assert.deepEqual(new Set(both['❤️']), new Set([alice.fingerprint, bob.fingerprint]));
+
+  await clearReaction(bob.get(room.id), m1.id);
+  assert.deepEqual(await getReactions(room, m1.id), { '❤️': [alice.fingerprint] });
+});
+
+test('reactions: two different messages in the same room never collide, even though their ids share the same room prefix', async () => {
+  const alice = (await Qu.create()).use(createSpacesPlugin());
+  await alice.publishProfile();
+  const room = createChatRoom(alice, [alice.fingerprint]);
+  await room.ready;
+  const { qubit: m1 } = await sendMessage(room, { text: 'first' });
+  const { qubit: m2 } = await sendMessage(room, { text: 'second' });
+
+  await setReaction(room, m1.id, '👍');
+  await setReaction(room, m2.id, '🔥');
+
+  assert.deepEqual(await getReactions(room, m1.id), { '👍': [alice.fingerprint] });
+  assert.deepEqual(await getReactions(room, m2.id), { '🔥': [alice.fingerprint] });
+});
+
+test('reactions: a forged reaction from a non-member is attributed to its real (unauthorized-to-write) signer, not silently trusted', async () => {
+  const alice = (await Qu.create()).use(createSpacesPlugin());
+  const mallory = await Qu.create({ runtime: alice.runtime });
+  const room = alice.createSpace({ writers: ['*'], readers: ['*'] });
+  await room.ready;
+  const { qubit: m1 } = await sendMessage(room, { text: 'hi' });
+
+  await setReaction(mallory.get(room.id), m1.id, '👍');
+  const reactions = await getReactions(room, m1.id);
+  assert.deepEqual(reactions['👍'], [mallory.fingerprint], 'the verified writer, never a forged/assumed identity');
 });
