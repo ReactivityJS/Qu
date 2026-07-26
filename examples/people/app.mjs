@@ -194,10 +194,22 @@ async function main() {
     attrsSubOff = off;
   }
   let attrsSubOff = null;
+  // Dasselbe Muster wie replaceAttrsSub() oben, nur für den eigenen
+  // Verzeichnis-Sichtbarkeits-Status — dessen Toggle wurde bisher NUR
+  // einmalig beim Öffnen des Profils gelesen (kein Live-Abo, anders als
+  // die Attribute). Ein zweites offenes Tab/Gerät derselben Identität, das
+  // die Sichtbarkeit ändert, während DIESES Profil-Fenster schon offen ist,
+  // ließ den Schalter dadurch veraltet stehen, bis man ihn erneut öffnete.
+  function replaceVisibilitySub(off) {
+    visibilitySubOff?.();
+    visibilitySubOff = off;
+  }
+  let visibilitySubOff = null;
   function hideAllScreens() {
     profileModal.hidden = true;
     viewProfileModal.hidden = true;
     replaceAttrsSub(null); // kein Screen mehr offen, der von Attribut-Änderungen live betroffen wäre
+    replaceVisibilitySub(null);
   }
 
   let lastRenderedHash = null;
@@ -228,6 +240,15 @@ async function main() {
     setAvatar(avatarPreviewBtn, myProfile.alias, myAvatarQ?.value ?? null);
     const ownEntry = await qu.get(`${DIRECTORY_ID}/entries/${qu.fingerprint}`);
     visibleToggle.checked = !!ownEntry?.value?.visible;
+    // Live nachziehen, solange dieser Screen offen ist — s. replaceVisibilitySub()s
+    // Doku oben. onDirectoryChange() liefert JEDE Identität, die ihre
+    // Sichtbarkeit ändert, daher hier explizit auf die eigene gefiltert
+    // (dieselbe "Pfad ist Adressierung, nicht Vertrauen"-Regel wie überall
+    // sonst: der verifizierte `writer`, nicht der Pfad, entscheidet).
+    replaceVisibilitySub(qu.onDirectoryChange((q) => {
+      if (q.writer !== qu.fingerprint) return;
+      visibleToggle.checked = !!q.value?.visible;
+    }));
     attrErrorEl.textContent = '';
     await renderOwnAttrs();
     // Live statt nur beim eigenen Bearbeiten: eine zweite Instanz derselben
