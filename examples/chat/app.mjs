@@ -178,6 +178,13 @@ const replyCancelBtn = $('reply-cancel-btn');
 const messageActionsMenuEl = $('message-actions-menu');
 const msgActionReactBtn = $('msg-action-react');
 const reactionPickerEl = $('reaction-picker');
+const msgActionPinBtn = $('msg-action-pin');
+const pinnedBarEl = $('pinned-bar');
+const pinnedBarJumpBtn = $('pinned-bar-jump');
+const pinnedBarTextEl = $('pinned-bar-text');
+const pinnedBarListBtn = $('pinned-bar-list-btn');
+const pinnedListPopupEl = $('pinned-list-popup');
+const pinnedListItemsEl = $('pinned-list-items');
 const msgActionReplyBtn = $('msg-action-reply');
 const msgActionEditBtn = $('msg-action-edit');
 const msgActionForwardBtn = $('msg-action-forward');
@@ -759,6 +766,7 @@ async function main() {
   // `activeRoomId` oben, nur eine Ebene tiefer.
   const messagesByRoom = new Map(); // roomId -> QuBit[]
   const reactionsByRoom = new Map(); // roomId -> Map<messageKey (letztes Pfadsegment der Nachrichten-Id), { [emoji]: fingerprint[] }>, s. handleReactionChange()
+  const pinsByRoom = new Map(); // roomId -> Map<messageKey, { messageId, pinnedBy, pinnedAt }>, s. handlePinChange()
   const seenIdsByRoom = new Map(); // roomId -> Set<id>  (Reconnect-Redelivery-sicher)
   const receiptsByRoom = new Map(); // roomId -> { [fingerprint]: upToTs }
   const stopHeartbeatByRoom = new Map(); // roomId -> stop()
@@ -1334,6 +1342,7 @@ async function main() {
     unsubsByRoom.set(roomId, unsubs);
     unsubs.push(qu.onMessage(roomId, (q) => handleIncomingMessage(roomId, q)));
     unsubs.push(qu.onReactionsChange(roomId, (q) => handleReactionChange(roomId, q)));
+    unsubs.push(qu.onPinsChange(roomId, (q) => handlePinChange(roomId, q)));
     unsubs.push(qu.onPresenceChange(roomId, async () => renderPresence(roomId)));
     unsubs.push(qu.onReadReceipt(roomId, async () => {
       receiptsByRoom.set(roomId, await qu.getReadReceipts(roomId));
@@ -1548,6 +1557,103 @@ async function main() {
     if (q.value) (byEmoji[q.value] ??= []).push(q.writer);
     if (activeRoomId === roomId) renderMessageList(roomId);
   }
+
+  /**
+   * `q` ist hier EIN einzelnes Pin-QuBit unter `pins/<msgKey>` (chat.js's
+   * onPinsChange()) — `q.id` also `<roomId>/pins/<msgKey>` (nur EINE Ebene
+   * tief, anders als bei Reaktionen, s. handleReactionChange() oben: ein
+   * Pin gehört zur NACHRICHT, nicht zu einer Person). `q.value === true`
+   * heißt angeheftet, `null`/`undefined` (Tombstone) heißt gelöst.
+   */
+  function handlePinChange(roomId, q) {
+    const msgKey = String(q.id).split('/').pop();
+    let byMsg = pinsByRoom.get(roomId);
+    if (!byMsg) { byMsg = new Map(); pinsByRoom.set(roomId, byMsg); }
+    if (q.value === true) {
+      byMsg.set(msgKey, { messageId: `${roomId}/msgs/${msgKey}`, pinnedBy: q.writer, pinnedAt: q.ts });
+    } else {
+      byMsg.delete(msgKey);
+    }
+    if (activeRoomId === roomId) {
+      renderPinnedBar(roomId);
+      renderMessageList(roomId);
+      if (!pinnedListPopupEl.hidden) renderPinnedListPopup(roomId);
+    }
+  }
+
+  /** Aktualisiert die 📌-Leiste unter dem Chat-Header — versteckt sich selbst, sobald nichts (mehr) angeheftet ist. */
+  function renderPinnedBar(roomId) {
+    const byMsg = pinsByRoom.get(roomId);
+    const pins = byMsg ? [...byMsg.values()].sort((a, b) => b.pinnedAt - a.pinnedAt) : [];
+    if (!pins.length) { pinnedBarEl.hidden = true; return; }
+    pinnedBarEl.hidden = false;
+    const top = pins[0];
+    const list = messagesByRoom.get(roomId) ?? [];
+    const topMsg = list.find((m) => m.id === top.messageId);
+    const preview = topMsg ? resolveMessageText(list, topMsg).text || '📎 Anhang' : '…';
+    pinnedBarTextEl.textContent = `${authorNameFor(top.pinnedBy)}: ${preview}`;
+    pinnedBarListBtn.hidden = pins.length < 2;
+    pinnedBarListBtn.textContent = String(pins.length);
+  }
+
+  /** Baut die Liste ALLER angehefteten Nachrichten (pinned-bar-list-btn-Popup) neu auf. */
+  function renderPinnedListPopup(roomId) {
+    pinnedListItemsEl.textContent = '';
+    const byMsg = pinsByRoom.get(roomId);
+    const pins = byMsg ? [...byMsg.values()].sort((a, b) => b.pinnedAt - a.pinnedAt) : [];
+    const list = messagesByRoom.get(roomId) ?? [];
+    for (const pin of pins) {
+      const li = el('li', 'pinned-list-item');
+      const jump = document.createElement('button');
+      jump.type = 'button';
+      jump.className = 'pinned-list-jump';
+      const msg = list.find((m) => m.id === pin.messageId);
+      const preview = msg ? resolveMessageText(list, msg).text || '📎 Anhang' : '…';
+      jump.appendChild(el('div', 'pinned-list-author', authorNameFor(pin.pinnedBy)));
+      jump.appendChild(el('div', 'pinned-list-text', preview));
+      jump.addEventListener('click', () => {
+        closePinnedListPopup();
+        navigate(roomId, 'msg', pin.messageId);
+      });
+      li.appendChild(jump);
+      const unpinBtn = document.createElement('button');
+      unpinBtn.type = 'button';
+      unpinBtn.className = 'pinned-list-unpin';
+      unpinBtn.title = 'Lösen';
+      unpinBtn.textContent = '✕';
+      unpinBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        await qu.unpinMessage(roomId, pin.messageId);
+      });
+      li.appendChild(unpinBtn);
+      pinnedListItemsEl.appendChild(li);
+    }
+  }
+
+  function openPinnedListPopup(roomId) {
+    renderPinnedListPopup(roomId);
+    pinnedListPopupEl.hidden = false;
+    positionPopup(pinnedListPopupEl, pinnedBarListBtn.getBoundingClientRect());
+  }
+  function closePinnedListPopup() {
+    pinnedListPopupEl.hidden = true;
+  }
+  document.addEventListener('click', (ev) => {
+    if (!pinnedListPopupEl.hidden && !pinnedListPopupEl.contains(ev.target) && ev.target !== pinnedBarListBtn) {
+      closePinnedListPopup();
+    }
+  });
+  pinnedBarListBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (pinnedListPopupEl.hidden) openPinnedListPopup(activeRoomId);
+    else closePinnedListPopup();
+  });
+  pinnedBarJumpBtn.addEventListener('click', () => {
+    const byMsg = pinsByRoom.get(activeRoomId);
+    if (!byMsg?.size) return;
+    const top = [...byMsg.values()].sort((a, b) => b.pinnedAt - a.pinnedAt)[0];
+    navigate(activeRoomId, 'msg', top.messageId);
+  });
 
   function handleIncomingMessage(roomId, q) {
     const seen = seenIdsByRoom.get(roomId);
@@ -2259,6 +2365,9 @@ async function main() {
     authorLink.textContent = authorNameFor(q.writer);
     authorLink.addEventListener('click', (ev) => ev.stopPropagation());
     header.appendChild(authorLink);
+    if (pinsByRoom.get(roomId)?.has(String(q.id).split('/').pop())) {
+      header.appendChild(el('span', 'msg-pinned-badge', '📌'));
+    }
     header.appendChild(buildMessageActionsBtn(q, roomId));
     return header;
   }
@@ -2439,6 +2548,7 @@ async function main() {
     if (replyTarget && replyTarget.roomId !== roomId) { replyTarget = null; renderReplyPreview(); }
     if (editTarget && editTarget.roomId !== roomId) { editTarget = null; textInput.value = ''; autoGrow(); renderReplyPreview(); }
     if (forwardTarget && forwardTarget.roomId !== roomId) { forwardTarget = null; renderReplyPreview(); }
+    closePinnedListPopup();
     activeRoomId = roomId;
     renderRoomHeader(room);
     peerStatusEl.textContent = '…';
@@ -2481,6 +2591,7 @@ async function main() {
     const list = messagesByRoom.get(roomId) ?? [];
     const firstUnreadId = unreadCount > 0 && unreadCount < list.length ? list[list.length - unreadCount].id : undefined;
     upsertRoom(roomId, { unread: 0 }); // löst renderRoomList() selbst über die zentrale rooms-Subscription aus (siehe main())
+    renderPinnedBar(roomId);
     await renderMessageList(roomId, firstUnreadId);
     await markActiveRead();
   }
@@ -2744,6 +2855,8 @@ async function main() {
     // eigenes Aktionsmenü angezeigt, da sie nie als eigene Bubble
     // gerendert wird (s. renderMessageList()'s Filter).
     msgActionEditBtn.hidden = !(q.writer === qu.fingerprint && q.value?.text && !q.value?.editOf);
+    const isPinned = pinsByRoom.get(roomId)?.has(String(q.id).split('/').pop());
+    msgActionPinBtn.textContent = isPinned ? '📌 Lösen' : '📌 Anheften';
     messageActionsMenuEl.hidden = false;
     positionPopup(messageActionsMenuEl, btn.getBoundingClientRect());
   }
@@ -2789,6 +2902,14 @@ async function main() {
     const { q, roomId, btn } = messageActionsContext;
     closeMessageActionsMenu();
     openReactionPicker(q, roomId, btn.getBoundingClientRect());
+  });
+
+  msgActionPinBtn.addEventListener('click', async () => {
+    const { q, roomId } = messageActionsContext;
+    closeMessageActionsMenu();
+    const isPinned = pinsByRoom.get(roomId)?.has(String(q.id).split('/').pop());
+    if (isPinned) await qu.unpinMessage(roomId, q.id);
+    else await qu.pinMessage(roomId, q.id);
   });
 
   msgActionReplyBtn.addEventListener('click', () => {

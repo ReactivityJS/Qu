@@ -4,6 +4,7 @@ import {
   Qu, MemoryFileStorageAdapter, sendMessage, listMessages, createChatRoom, markRead, getReadReceipts,
   setPresence, getPresence, startHeartbeat, createFileHandlerPlugin, createSpacesPlugin,
   setReaction, clearReaction, getReactions,
+  pinMessage, unpinMessage, getPinnedMessages,
 } from '../src/index.js';
 
 function wait(ms = 20) { return new Promise((r) => setTimeout(r, ms)); }
@@ -181,4 +182,44 @@ test('reactions: a forged reaction from a non-member is attributed to its real (
   await setReaction(mallory.get(room.id), m1.id, '👍');
   const reactions = await getReactions(room, m1.id);
   assert.deepEqual(reactions['👍'], [mallory.fingerprint], 'the verified writer, never a forged/assumed identity');
+});
+
+test('pins: pinning/unpinning a message, newest-pinned-first ordering, and multiple simultaneous pins', async () => {
+  const alice = (await Qu.create()).use(createSpacesPlugin());
+  const bob = await Qu.create({ runtime: alice.runtime });
+  await Promise.all([alice, bob].map((qu) => qu.publishProfile()));
+  const room = createChatRoom(alice, [alice.fingerprint, bob.fingerprint]);
+  await room.ready;
+  const { qubit: m1 } = await sendMessage(room, { text: 'first' });
+  const { qubit: m2 } = await sendMessage(room, { text: 'second' });
+  await sendMessage(room, { text: 'third — never pinned' });
+
+  await pinMessage(room, m1.id);
+  await wait();
+  await pinMessage(bob.get(room.id), m2.id);
+  await wait();
+
+  const pinned = await getPinnedMessages(room);
+  assert.deepEqual(pinned.map((p) => p.messageId), [m2.id, m1.id], 'newest pin first');
+  assert.equal(pinned[0].pinnedBy, bob.fingerprint);
+  assert.equal(pinned[1].pinnedBy, alice.fingerprint);
+
+  await unpinMessage(room, m1.id);
+  const afterUnpin = await getPinnedMessages(room);
+  assert.deepEqual(afterUnpin.map((p) => p.messageId), [m2.id]);
+});
+
+test('pins: any room member can unpin a message someone else pinned (same "every writer can write every path" rule as everywhere else)', async () => {
+  const alice = (await Qu.create()).use(createSpacesPlugin());
+  const bob = await Qu.create({ runtime: alice.runtime });
+  await Promise.all([alice, bob].map((qu) => qu.publishProfile()));
+  const room = createChatRoom(alice, [alice.fingerprint, bob.fingerprint]);
+  await room.ready;
+  const { qubit: m1 } = await sendMessage(room, { text: 'hi' });
+
+  await pinMessage(room, m1.id);
+  assert.equal((await getPinnedMessages(room)).length, 1);
+
+  await unpinMessage(bob.get(room.id), m1.id);
+  assert.equal((await getPinnedMessages(room)).length, 0);
 });

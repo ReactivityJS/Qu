@@ -19,6 +19,7 @@ export { exportIdentity, importIdentity } from '../modules/identity-transfer.js'
 export {
   sendMessage, listMessages, onMessage, createChatRoom, createChatPlugin,
   setReaction, clearReaction, getReactions, onReactionsChange,
+  pinMessage, unpinMessage, getPinnedMessages, onPinsChange,
 } from '../modules/chat.js';
 export {
   markRead, getReadReceipts, onReadReceipt,

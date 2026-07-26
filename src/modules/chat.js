@@ -121,6 +121,55 @@ function reactionKey(messageId) {
   return String(messageId).split('/').pop();
 }
 
+// --- Anheften (Pins) ---
+//
+// Genau wie eine Reaktion ist ein Pin EIN LWW-Register — hier pro NACHRICHT
+// (nicht pro Person): `pins/<msgKey>` ist entweder gesetzt (angeheftet) oder
+// per Tombstone (`put(null)`) wieder gelöst. Jedes Mitglied kann jede
+// Nachricht anheften/lösen (dieselbe "jeder Schreiber darf jeden Pfad im
+// Space schreiben"-Regel wie überall sonst, §8) — wer es zuletzt getan hat,
+// steht als verifiziertes `writer`/`ts` am QuBit selbst, nicht im Wert.
+// Mehrere gleichzeitig angeheftete Nachrichten sind dadurch von selbst
+// unterstützt (jede hat ihren eigenen Slot) — anders als bei Reaktionen gibt
+// es hier keinen Grund für ein Limit auf eine Person, da eine Nachricht
+// entweder an- oder abgeheftet ist, unabhängig davon, WER das zuletzt tat.
+
+/** Heftet eine Nachricht an (oder erneuert den Pin, falls schon angeheftet). */
+export async function pinMessage(space, messageId) {
+  return space.get('pins').get(reactionKey(messageId)).put(true);
+}
+
+/** Löst den Pin einer Nachricht wieder (Tombstone `put(null)`). */
+export async function unpinMessage(space, messageId) {
+  return space.get('pins').get(reactionKey(messageId)).put(null);
+}
+
+/**
+ * Alle aktuell angehefteten Nachrichten dieses Raums, neueste zuerst
+ * (Element-Konvention) — jeweils `{ messageId, pinnedBy, pinnedAt }`.
+ * `messageId` wird aus dem Pin-Pfad + `space.id` rekonstruiert (derselbe
+ * `<roomId>/msgs/<writerFp>-<ts>`-Aufbau, den sendMessage()/append() für
+ * JEDE Nachricht dieses Raums erzeugen — s. core/session.js's append()),
+ * eine Nachrichten-Payload liefert diese Funktion bewusst NICHT mit (dafür
+ * dient bereits listMessages()/die lokale Nachrichtenliste einer UI).
+ */
+export async function getPinnedMessages(space) {
+  const rows = await space.session.query(`${space.id}/pins/**`);
+  return rows
+    .filter((q) => q.writer && q.value === true)
+    .map((q) => ({
+      messageId: `${space.id}/msgs/${String(q.id).split('/').pop()}`,
+      pinnedBy: q.writer,
+      pinnedAt: q.ts,
+    }))
+    .sort((a, b) => b.pinnedAt - a.pinnedAt);
+}
+
+/** Live-Abo auf JEDE Pin-Änderung im Raum (an- wie abheften). */
+export function onPinsChange(space, callback, opts) {
+  return space.get('pins').map(callback, opts);
+}
+
 /** Setzt (oder ersetzt) die EIGENE Reaktion auf eine Nachricht — ein erneuter Aufruf mit einem anderen Emoji tauscht die vorherige einfach aus. */
 export async function setReaction(space, messageId, emoji) {
   return space.get('reactions').get(reactionKey(messageId)).get(space.session.fingerprint).put(emoji);
@@ -187,6 +236,10 @@ export function createChatPlugin() {
       qu.clearReaction = (spaceId, messageId) => clearReaction(qu.get(spaceId), messageId);
       qu.getReactions = (spaceId, messageId) => getReactions(qu.get(spaceId), messageId);
       qu.onReactionsChange = (spaceId, callback, opts) => onReactionsChange(qu.get(spaceId), callback, opts);
+      qu.pinMessage = (spaceId, messageId) => pinMessage(qu.get(spaceId), messageId);
+      qu.unpinMessage = (spaceId, messageId) => unpinMessage(qu.get(spaceId), messageId);
+      qu.getPinnedMessages = (spaceId) => getPinnedMessages(qu.get(spaceId));
+      qu.onPinsChange = (spaceId, callback, opts) => onPinsChange(qu.get(spaceId), callback, opts);
     },
   };
 }
