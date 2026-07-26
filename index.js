@@ -27,7 +27,7 @@ import { createFail2banService } from './relay/services/fail2ban.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
 import { sendWebPush, generateVapidKeys } from './relay/webpush.mjs';
-import { QuIdentity, QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter } from './src/index.js';
+import { QuIdentity, QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter, isValidFingerprint } from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
 
@@ -133,7 +133,34 @@ for (const id of (process.env.QU_SERVICES_DISABLED || '').split(',').map((s) => 
 // in a side-by-side comparison. Normalizing here costs nothing (a
 // fingerprint is public, not a secret whose case ever needs preserving)
 // and removes an entire class of "looks the same but isn't" bug reports.
-const relayAdmins = (process.env.QU_RELAY_ADMINS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+//
+// Stray leading/trailing `"`/`'` characters are stripped too — a real,
+// reproduced case: a docker-compose.yml / Swarm-stack `environment` entry
+// like `QU_RELAY_ADMINS="fp1, fp2"` can end up with the OUTER quote marks
+// becoming part of the actual string value (YAML/Compose/Swarm quoting
+// rules interact in a way that doesn't always strip them the way a shell
+// would) — `.trim()` alone only removes whitespace, never a quote
+// character, so the FIRST admin fingerprint silently became
+// `"cf89ef5711f6efe9ba1bd504` (25 characters, leading quote) instead of
+// the real 24-hex-character value, and every one of its writes was
+// rejected by the ACL with no visual cue in the printed value (a quote
+// character is easy to miss at the start of a long hex string,
+// especially when copy-pasted rather than typed by hand).
+const QUOTE_RE = /^['"]|['"]$/g;
+const relayAdmins = (process.env.QU_RELAY_ADMINS || '')
+  .split(',')
+  .map((s) => s.trim().replace(QUOTE_RE, '').trim().toLowerCase()) // trim again after stripping quotes — a quote can itself be adjacent to whitespace the first trim() couldn't reach (e.g. `" fp"` — the leading quote hides the space behind it from the string's actual edge)
+  .filter(Boolean);
+// Catches BOTH the quoting mistake above (if a stray quote survives
+// mid-string rather than only at an edge) and any other malformed entry
+// (wrong length, non-hex characters, a fingerprint truncated by a copy-
+// paste) — loud and at startup, not a silent ACL rejection an operator
+// has to reverse-engineer from a rejected push later.
+for (const fp of relayAdmins) {
+  if (!isValidFingerprint(fp)) {
+    console.warn(`[Relay] QU_RELAY_ADMINS entry "${fp}" doesn't look like a valid fingerprint (expected 24 hex characters) — it will never match any writer, check for stray quotes/whitespace in your environment configuration.`);
+  }
+}
 
 /** Loads an existing `{ publicKey, privateKey }` from `filePath`, or generates + saves a fresh one on first run. Used only in persistent mode — see the VAPID block below for why memory mode skips this entirely. */
 function loadOrGenerateVapidKeys(filePath) {
