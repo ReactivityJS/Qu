@@ -58,6 +58,12 @@ async function unwrapContentKey(identity, envelope) {
 }
 
 export async function encryptFor(recipients, plaintextValue) {
+  // Session (session.js:146) already guards this before calling here, but
+  // encryptFor() is also directly importable/callable on its own — an
+  // empty `recipients` would otherwise silently produce a validly-shaped
+  // envelope (`{ keys: {} }`) that encrypts real content nobody can ever
+  // decrypt again, with no error at write time to catch the mistake.
+  if (!recipients || !recipients.length) throw new Error('[Crypto] encryptFor() requires at least one recipient');
   const contentKey = await crypto.subtle.generateKey(AESGCM, true, ['encrypt', 'decrypt']);
   const contentIv = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(plaintextValue));
@@ -96,6 +102,7 @@ export async function decryptWith(identity, envelope) {
  * the file manifest as `contentEncryption`).
  */
 export async function encryptBytesFor(recipients, plaintextBytes) {
+  if (!recipients || !recipients.length) throw new Error('[Crypto] encryptBytesFor() requires at least one recipient');
   const contentKey = await crypto.subtle.generateKey(AESGCM, true, ['encrypt', 'decrypt']);
   const contentIv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: contentIv }, contentKey, plaintextBytes));

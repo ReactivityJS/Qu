@@ -43,6 +43,15 @@ export class QuRuntime {
 
   /** The one write path. `qubit` may or may not already carry sig/writer/pubKey — verify middleware decides whether that's required. */
   async ingest(qubit) {
+    // A non-finite `ts` (NaN, +/-Infinity — reachable from any writer,
+    // local or remote) breaks compareQubits()'s total order: both
+    // `x < NaN` and `NaN < x` are false, so a NaN-ts qubit, once accepted
+    // for an id, would unconditionally "win" against every future write to
+    // that id, INCLUDING a stale replay with an old but valid ts — a
+    // permanent LWW break for that id, not just a rejected one bad write.
+    if (!Number.isFinite(qubit.ts)) {
+      throw new Error(`[Runtime] ingest() rejected: non-finite ts (${qubit.ts}) for ${qubit.id}`);
+    }
     const ctx = { qubit: { ...qubit }, requireSignature: false };
     try {
       await this.#pipeline.run(ctx, async () => {});

@@ -45,9 +45,17 @@ export const HEARTBEAT_PONG = 'qu.heartbeat.pong';
 export function createHeartbeat({ send, onTimeout, intervalMs = 15000 }) {
   let awaitingPong = false;
   let timer = null;
+  // Guards against onTimeout() firing repeatedly, once per intervalMs
+  // forever, if the caller's onTimeout doesn't reliably lead to stop()
+  // being called (e.g. ws.close() never actually fires `close`, a socket
+  // stuck in CLOSING) — the class comment above documents "fires once";
+  // without this flag that was only true as long as the caller behaved,
+  // not guaranteed by this state machine itself.
+  let timedOut = false;
 
   function tick() {
-    if (awaitingPong) { onTimeout(); return; } // no pong since the LAST ping — the connection is presumed dead
+    if (timedOut) return;
+    if (awaitingPong) { timedOut = true; onTimeout(); return; } // no pong since the LAST ping — the connection is presumed dead
     awaitingPong = true;
     send({ type: HEARTBEAT_PING });
   }
@@ -62,6 +70,7 @@ export function createHeartbeat({ send, onTimeout, intervalMs = 15000 }) {
     start() {
       if (timer) return; // idempotent — a caller re-invoking start() (e.g. after a reconnect that reuses the same heartbeat instance) must not stack a second interval
       awaitingPong = false;
+      timedOut = false;
       timer = setInterval(tick, intervalMs);
       // Node-only; a browser timer id (a number) has no .unref(). Never
       // let a keepalive timer be the reason a process/test run can't

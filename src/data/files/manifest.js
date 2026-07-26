@@ -201,6 +201,7 @@ export async function readFileMeta(manifest, identity = null) {
  * core/crypto.js's decryptWith()/decryptBytesWith().
  */
 export async function reassembleFile(fileStorage, manifest, identity = null) {
+  assertValidManifest(manifest);
   const parts = [];
   let total = 0;
   for (const hash of manifest.chunks) {
@@ -218,8 +219,21 @@ export async function reassembleFile(fileStorage, manifest, identity = null) {
   return decryptBytesWith(identity, manifest.contentEncryption, out);
 }
 
+/**
+ * A qubit at a file's manifest id whose value isn't actually a file
+ * manifest (a malformed write, or a plain non-file qubit that happens to
+ * sit at a guessed/reused id) must fail with a clear message here, not a
+ * raw TypeError three lines into a `for...of` over `undefined`.
+ */
+function assertValidManifest(manifest) {
+  if (!manifest || !Array.isArray(manifest.chunks)) {
+    throw new Error('[Files] not a valid file manifest (missing/invalid "chunks" array)');
+  }
+}
+
 /** Which of a manifest's chunk hashes are NOT yet present in `fileStorage`. */
 export async function missingChunks(fileStorage, manifest) {
+  assertValidManifest(manifest);
   const missing = [];
   for (const hash of manifest.chunks) {
     if (!(await fileStorage.hasChunk(hash))) missing.push(hash);
