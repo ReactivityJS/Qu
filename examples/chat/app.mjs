@@ -178,6 +178,8 @@ const replyCancelBtn = $('reply-cancel-btn');
 const messageActionsMenuEl = $('message-actions-menu');
 const msgActionReactBtn = $('msg-action-react');
 const reactionPickerEl = $('reaction-picker');
+const reactionPickerExtendedEl = $('reaction-picker-extended');
+const reactionPickerMoreBtn = $('reaction-picker-more-btn');
 const msgActionPinBtn = $('msg-action-pin');
 const pinnedBarEl = $('pinned-bar');
 const pinnedBarJumpBtn = $('pinned-bar-jump');
@@ -195,6 +197,7 @@ const pendingFilesEl = $('pending-files');
 const extrasToggleBtn = $('extras-toggle-btn');
 const composerExtras = $('composer-extras');
 const locationBtn = $('location-btn');
+const huntBtn = $('hunt-btn');
 const voiceBtn = $('voice-btn');
 const voiceRecorderEl = $('voice-recorder');
 const voiceDiscardBtn = $('voice-discard-btn');
@@ -260,6 +263,13 @@ const shareTargetToggle = $('share-target-toggle');
 const profileModal = $('profile-modal');
 const avatarPreviewBtn = $('avatar-preview-btn');
 const avatarInput = $('avatar-input');
+const profileViewModal = $('profile-view-modal');
+const profileViewAvatarEl = $('profile-view-avatar');
+const profileViewAliasEl = $('profile-view-alias');
+const profileViewFpEl = $('profile-view-fp');
+const profileViewAttrListEl = $('profile-view-attr-list');
+const profileViewAttrEmptyEl = $('profile-view-attr-empty');
+const profileViewExternalLink = $('profile-view-external-link');
 const appSettingsModal = $('app-settings-modal');
 const pushToggleBtn = $('push-toggle-btn');
 const pushStatusEl = $('push-status');
@@ -1206,6 +1216,8 @@ async function main() {
     emptyStateEl.classList.remove('show');
     chatPanelEl.classList.add('hidden-empty');
     profileModal.hidden = true;
+    profileViewModal.hidden = true;
+    replaceProfileViewAttrsSub(null); // kein Profil-View-Screen mehr offen, der von Attribut-Änderungen live betroffen wäre
     appSettingsModal.hidden = true;
     searchOverlay.hidden = true;
     addContactModal.hidden = true;
@@ -1256,6 +1268,13 @@ async function main() {
     // Klick auf ein Suchergebnis, nur jetzt auch direkt über die URL
     // erreichbar/teilbar.
     if (second === 'msg' && third) { await showChatScreen(room); scrollToMessage(third); return; }
+    // `/<roomId>/profile/<fp>` — fremdes Profil INLINE als Unterseite
+    // dieses Chats (s. #profile-view-modal in index.html) statt wie bisher
+    // ein externer Link/neuer Tab zu examples/people. Die eigene
+    // Fingerprint-Route leitet auf die editierbare `/profile` (ROOT_ROUTES)
+    // um — dieselbe Kanonisierung wie examples/people/app.mjs's Router.
+    if (second === 'profile' && third === qu.fingerprint) { await redirectTo('profile'); return; }
+    if (second === 'profile' && third) { await showProfileViewScreen(room, third); return; }
     await showChatScreen(room);
   }
   window.addEventListener('hashchange', renderRoute);
@@ -1798,7 +1817,7 @@ async function main() {
   }
 
   /**
-   * Kleines ✓/✓✓/🕐-Symbol NEBEN der eigenen Nachricht (buildMessageMetaInline()) —
+   * Kleines ✓/✓✓/🕐-Symbol NEBEN der eigenen Nachricht (buildMessageHeader()) —
    * abonniert sich beim Einhängen auf `tickBus` (siehe dessen Doku oben)
    * und meldet sich beim Aushängen wieder ab, statt von außen über
    * renderTicks() angestoßen zu werden.
@@ -2355,23 +2374,6 @@ async function main() {
   }
 
   /** Kopfzeile über der Bubble: Absender (Link ins volle Profil in examples/people) links, ⋮-Aktionsmenü rechts — für JEDE Nachricht, nicht nur in Gruppen (konsistente Optik, "Du" bei eigenen Nachrichten). */
-  function buildMessageHeader(q, roomId) {
-    const header = el('div', 'msg-header');
-    const authorLink = document.createElement('a');
-    authorLink.className = 'msg-author';
-    authorLink.href = `../people/index.html#/${encodeURIComponent(q.writer)}`;
-    authorLink.target = '_blank';
-    authorLink.rel = 'noopener';
-    authorLink.textContent = authorNameFor(q.writer);
-    authorLink.addEventListener('click', (ev) => ev.stopPropagation());
-    header.appendChild(authorLink);
-    if (pinsByRoom.get(roomId)?.has(String(q.id).split('/').pop())) {
-      header.appendChild(el('span', 'msg-pinned-badge', '📌'));
-    }
-    header.appendChild(buildMessageActionsBtn(q, roomId));
-    return header;
-  }
-
   /**
    * Uhrzeit (optional + Datum, s. showDateInMessages()-Einstellung) als
    * klickbarer Anker-Link auf GENAU diese Nachricht (`/<roomId>/msg/<id>`,
@@ -2395,27 +2397,50 @@ async function main() {
   }
 
   /**
-   * Uhrzeit/Datum-Link + "bearbeitet"-Marker + Häkchen, als EIN Bündel —
-   * wird entweder als letztes Kind DIREKT in den Textfluss von .msg-text
-   * eingehängt (float: right, klassischer Messenger-Trick: der Text davor
-   * bricht um dieses Element herum, landet unten rechts INNERHALB der
-   * Bubble statt in einer eigenen Zeile außerhalb) oder — wenn es keinen
-   * Text gibt, dem Text also nichts zum Umbrechen bliebe (reiner Anhang,
-   * reiner Standort-Link) — als eigene rechtsbündige Zeile am Ende der
-   * Bubble (buildMessageItem() unten entscheidet das).
+   * EINE Kopfzeile pro Nachricht mit ALLEM Metadaten drin: Autor (links,
+   * Link ins volle Profil), optionales 📌-Abzeichen, optionaler
+   * "bearbeitet"-Marker, Uhrzeit/Datum-Anker-Link, bei eigenen Nachrichten
+   * das Lese-Häkchen, ganz rechts (margin-left: auto) das ⋮-Aktionsmenü.
+   * Bewusst NICHT mehr die Uhrzeit zusätzlich unten rechts IN der Bubble
+   * (früherer float-in-Text-Trick) — bei ohnehin JEDER Nachricht einer
+   * eigenen Kopfzeile (kein WhatsApp-Style-Gruppieren aufeinanderfolgender
+   * Nachrichten) wäre eine zweite Stelle für dieselbe Information nur
+   * Redundanz gewesen; eine einzige, an fester Position stehende Kopfzeile
+   * ist leichter zu scannen (Slack/Discord-Konvention) UND hält .msg-text/
+   * Anhänge frei von eingestreutem Meta-Markup.
    */
-  function buildMessageMetaInline(q, roomId, showDate, edited, mine) {
-    const span = el('span', 'msg-time-row');
-    if (edited) span.appendChild(el('span', 'msg-edited', '✏️ bearbeitet '));
-    span.appendChild(buildMessageTimeLink(q, roomId, showDate));
+  function buildMessageHeader(q, roomId, showDate, edited, mine) {
+    const header = el('div', 'msg-header');
+    // href bleibt ein echter externer Link (Rechtsklick "in neuem Tab
+    // öffnen" funktioniert dadurch weiterhin) — ein normaler Klick
+    // navigiert stattdessen INNERHALB des Chats zum Profil-View-Screen
+    // (/<roomId>/profile/<fp>, s. showProfileViewScreen() unten), statt
+    // die App komplett zu verlassen.
+    const authorLink = document.createElement('a');
+    authorLink.className = 'msg-author';
+    authorLink.href = `../people/index.html#/${encodeURIComponent(q.writer)}`;
+    authorLink.rel = 'noopener';
+    authorLink.textContent = authorNameFor(q.writer);
+    authorLink.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      navigate(roomId, 'profile', q.writer);
+    });
+    header.appendChild(authorLink);
+    if (pinsByRoom.get(roomId)?.has(String(q.id).split('/').pop())) {
+      header.appendChild(el('span', 'msg-pinned-badge', '📌'));
+    }
+    if (edited) header.appendChild(el('span', 'msg-edited', '✏️'));
+    header.appendChild(buildMessageTimeLink(q, roomId, showDate));
     if (mine) {
       const tick = document.createElement('qu-msg-tick');
       tick.dataset.id = q.id;
       tick.dataset.ts = q.ts;
       tick.dataset.roomId = roomId;
-      span.appendChild(tick);
+      header.appendChild(tick);
     }
-    return span;
+    header.appendChild(buildMessageActionsBtn(q, roomId));
+    return header;
   }
 
   /**
@@ -2433,12 +2458,11 @@ async function main() {
     const li = el('li', `msg${mine ? ' mine' : ''}`);
     li.dataset.ts = q.ts;
     li.dataset.id = q.id;
-    li.appendChild(buildMessageHeader(q, roomId));
+    const { text: displayText, edited } = resolveMessageText(list, q);
+    li.appendChild(buildMessageHeader(q, roomId, showDate, edited, mine));
     const bubble = el('div', 'msg-bubble');
     if (q.value?.forwardedFrom) bubble.appendChild(buildForwardedQuote(q.value.forwardedFrom));
     if (q.value?.replyTo) bubble.appendChild(buildReplyQuote(q.value.replyTo));
-    const { text: displayText, edited } = resolveMessageText(list, q);
-    let metaInsertedInline = false;
     if (displayText) {
       // Ein Text, der NUR aus einem einzelnen Link besteht (z. B. genau
       // das, was der 📍-Standort-Button verschickt), bräuchte sonst die
@@ -2451,9 +2475,7 @@ async function main() {
       if (!isBareLink) {
         const textEl = el('div', 'msg-text');
         renderMessageText(textEl, displayText);
-        textEl.appendChild(buildMessageMetaInline(q, roomId, showDate, edited, mine));
         bubble.appendChild(textEl);
-        metaInsertedInline = true;
       }
       const preview = buildLinkPreview(displayText);
       if (preview) bubble.appendChild(preview);
@@ -2469,11 +2491,6 @@ async function main() {
       badge.dataset.id = q.id;
       badge.dataset.roomId = roomId;
       bubble.appendChild(badge);
-    }
-    if (!metaInsertedInline) {
-      const metaRow = el('div', 'msg-meta-row');
-      metaRow.appendChild(buildMessageMetaInline(q, roomId, showDate, edited, mine));
-      bubble.appendChild(metaRow);
     }
     li.appendChild(bubble);
     const reactionsRow = buildReactionsRow(roomId, q.id);
@@ -2886,13 +2903,56 @@ async function main() {
       closeReactionPicker();
     }
   });
-  for (const btn of reactionPickerEl.querySelectorAll('.reaction-picker-item')) {
+  for (const btn of reactionPickerEl.querySelectorAll('.reaction-picker-item[data-emoji]')) {
     btn.addEventListener('click', () => {
       const { q, roomId } = reactionPickerContext;
       closeReactionPicker();
       toggleReaction(roomId, q.id, btn.dataset.emoji);
     });
   }
+
+  // --- Erweiterte Emoji-Auswahl (das "+" in der Schnellauswahl) —
+  // dieselben EMOJIS wie der Composer-Emoji-Picker (s. dessen Doku oben),
+  // hier statt insertAtCursor() aber als Reaktion gesetzt.
+  let reactionPickerExtendedContext = null; // { q, roomId } — separat von reactionPickerContext, da die Schnellauswahl beim Öffnen bereits geschlossen wird
+  function openReactionPickerExtended(q, roomId, anchorRect) {
+    reactionPickerExtendedContext = { q, roomId };
+    reactionPickerExtendedEl.hidden = false;
+    positionPopup(reactionPickerExtendedEl, anchorRect);
+  }
+  function closeReactionPickerExtended() {
+    reactionPickerExtendedEl.hidden = true;
+    reactionPickerExtendedContext = null;
+  }
+  document.addEventListener('click', (ev) => {
+    if (!reactionPickerExtendedEl.hidden && !reactionPickerExtendedEl.contains(ev.target) && !ev.target.closest('.msg-actions-btn')) {
+      closeReactionPickerExtended();
+    }
+  });
+  reactionPickerMoreBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation(); // dasselbe Bubbling-Problem wie bei msgActionReactBtn unten — sonst schließt der document-Listener direkt darüber die gerade erst geöffnete erweiterte Auswahl wieder
+    const { q, roomId } = reactionPickerContext;
+    const anchorRect = reactionPickerEl.getBoundingClientRect();
+    closeReactionPicker();
+    openReactionPickerExtended(q, roomId, anchorRect);
+  });
+  // Buttons erst NACH den obigen Funktionsdefinitionen gebaut (nicht davor)
+  // — nur Lesbarkeitsreihenfolge, technisch wegen Funktions-Hoisting/dem
+  // erst bei einem echten Klick ausgewerteten Closure-Zugriff auf
+  // reactionPickerExtendedContext ohnehin unkritisch. Einmalig gebaut (nicht
+  // bei jedem Öffnen neu) — die Liste ist statisch.
+  for (const emoji of EMOJIS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = emoji;
+    btn.addEventListener('click', () => {
+      const { q, roomId } = reactionPickerExtendedContext;
+      closeReactionPickerExtended();
+      toggleReaction(roomId, q.id, emoji);
+    });
+    reactionPickerExtendedEl.appendChild(btn);
+  }
+
   msgActionReactBtn.addEventListener('click', (ev) => {
     // stopPropagation: sonst sieht der document-Klick-Listener oben, der den
     // Reaction-Picker bei einem Klick AUSSERHALB schließt, genau dieses
@@ -3102,6 +3162,29 @@ async function main() {
       },
       { enableHighAccuracy: true, timeout: 10_000 },
     );
+  });
+
+  // --- Hunter-Spiel einladen — genau wie "Standort teilen" oben KEIN
+  // eigener Nachrichtentyp, KEINE inline eingebettete Qu-Komponente: ein
+  // Link zu examples/hunt geht als normaler Text raus, die bereits
+  // vorhandene Link-Vorschau übernimmt die Darstellung. examples/hunt legt
+  // ein neues Spiel absichtlich über sein EIGENES Formular an (Jäger-/
+  // Verfolgte-Fingerprints, Ping-Intervall, angenommene Geschwindigkeit —
+  // echte Spielparameter, die eine Chat-Nachricht nicht sinnvoll für die
+  // Empfängerin vorwegnehmen kann); dieser Button öffnet also bewusst nur
+  // die Einstiegsseite (kein `gameId` im Link), das eigentliche Erstellen
+  // bleibt dort. Ein voll eingebettetes, interaktives Hunter-Widget INNERHALB
+  // einer Chat-Nachricht (eigener Sandbox-/Embedding-Mechanismus, Wechsel
+  // zwischen Chat und Spiel ohne Tab-Wechsel) wäre ein eigenständiges,
+  // mehrwöchiges Architekturstück (Sandbox-Strategie, Space-Verschachtelung,
+  // Layout-Management) — hier bewusst NICHT gebaut, um keine verfrühte,
+  // schwer wieder rückgängig zu machende Embedding-Entscheidung zu treffen.
+  huntBtn.addEventListener('click', () => {
+    if (!activeRoomId) return;
+    const url = new URL('../hunt/index.html', location.href).href;
+    textInput.value = textInput.value ? `${textInput.value} ${url}` : `Lust auf eine Verfolgungsjagd? ${url}`;
+    autoGrow();
+    composer.requestSubmit();
   });
 
   // --- Sprachnachricht — Aufnehmen -> Abhören -> Verwerfen ODER Senden.
@@ -3440,6 +3523,89 @@ async function main() {
     const link = location.origin + location.pathname + buildPath('add-contact', qu.fingerprint);
     if (navigator.share) { await navigator.share({ title: 'QU Chat', text: `Schreib mir im Chat: ${link}` }).catch(() => {}); }
     else { await navigator.clipboard.writeText(link).catch(() => {}); }
+  });
+
+  // --- Fremdes Profil — `/<roomId>/profile/<fp>` (Router) ---
+  // Nur-Lese-Ansicht (öffentliche Attribute), dasselbe Datenmodell wie
+  // examples/people/app.mjs's showViewProfileScreen() (qu.readProfile()/
+  // qu.listProfileAttrs()/der Avatar-QuBit sind app-übergreifend dieselben
+  // Core-Primitiven) — hier bewusst NICHT importiert, sondern parallel neu
+  // geschrieben: zwei kleine, unabhängige App-Screens statt einer
+  // gemeinsamen Abstraktion für eine Handvoll Zeilen Rendering (dieselbe
+  // Haltung wie resizeAvatar()s Duplikation, s. dessen Kommentar in
+  // examples/people/app.mjs).
+  function replaceProfileViewAttrsSub(off) {
+    profileViewAttrsSubOff?.();
+    profileViewAttrsSubOff = off;
+  }
+  let profileViewAttrsSubOff = null;
+  async function showProfileViewScreen(room, fp) {
+    activeRoomId = room.id; // dieselbe Begründung wie showChatSettingsScreen() oben — harmlos, falls Live-Events währenddessen auf jetzt verstecktes Chat-Markup zielen
+    profileViewAliasEl.textContent = fp;
+    profileViewFpEl.textContent = fp;
+    profileViewAvatarEl.textContent = '';
+    profileViewExternalLink.href = `../people/index.html#/${encodeURIComponent(fp)}`;
+    await repl.sync({ topic: `~${fp}` }).catch((e) => console.error('[chat] profile sync failed:', fp, e));
+    const profile = await qu.readProfile(fp).catch(() => ({ alias: fp }));
+    profileViewAliasEl.textContent = profile.alias;
+    let avatarQ = null;
+    try { avatarQ = await qu.get(`~${fp}/avatar`); } catch { /* kein Avatar */ }
+    setAvatar(profileViewAvatarEl, profile.alias, avatarQ?.value ?? null);
+    async function renderViewAttrs() {
+      const attrs = await qu.listProfileAttrs(fp);
+      const keys = Object.keys(attrs);
+      profileViewAttrListEl.textContent = '';
+      profileViewAttrEmptyEl.hidden = keys.length > 0;
+      for (const key of keys) {
+        const li = document.createElement('li');
+        li.className = 'attr-row';
+        li.appendChild(el('span', 'attr-key', key));
+        li.appendChild(el('span', 'attr-value', attrs[key].value));
+        profileViewAttrListEl.appendChild(li);
+      }
+    }
+    await renderViewAttrs();
+    profileViewModal.hidden = false;
+    // Live nachziehen, solange dieser Screen offen ist — ändert die
+    // betrachtete Identität eines ihrer öffentlichen Attribute (auf ihrem
+    // eigenen Gerät), während man hier zusieht, taucht das ohne erneutes
+    // Öffnen auf (dasselbe Muster wie examples/people/app.mjs's
+    // showViewProfileScreen()).
+    replaceProfileViewAttrsSub(qu.onProfileAttrsChange(fp, () => renderViewAttrs()));
+  }
+  $('profile-view-back-btn').addEventListener('click', closeScreen);
+  $('profile-view-close-btn').addEventListener('click', closeScreen);
+  profileViewModal.addEventListener('click', (ev) => { if (ev.target === profileViewModal) closeScreen(); });
+
+  // Klicks auf jede <qu-profile-card> mit einer `href` aufs externe
+  // People-Profil (Raum-Kopfzeile/Gruppenmitgliederliste, s.
+  // renderRoomHeader()/renderGroupMemberList()) navigieren stattdessen
+  // INNERHALB des Chats zu /<roomId>/profile/<fp> (derselbe Screen wie
+  // oben) statt die App über einen externen Link zu verlassen. Ein
+  // Rechtsklick "in neuem Tab öffnen" bleibt trotzdem möglich — es bleibt
+  // ein echtes `<a href>`, nur der NORMALE Klick wird abgefangen (capture-
+  // Phase, VOR der nativen Navigation). Die Navigation selbst läuft über
+  // das von <qu-profile-card> ohnehin schon dispatchte `qu-profile-open`
+  // (src/ui/profile-components.js) statt den Fingerprint hier erneut aus
+  // dem href zu parsen.
+  document.addEventListener('click', (ev) => {
+    const card = ev.target.closest('.qu-profile-card');
+    if (card && card.tagName === 'A') ev.preventDefault();
+  }, true);
+  // `ev.target` eines `qu-profile-open`-Events ist immer das `<qu-profile-card>`-
+  // Custom-Element SELBST (dispatcht via `this.dispatchEvent(...)` in
+  // profile-components.js), NIE der innere `<a>`/`<span>` — dessen
+  // `href`-ATTRIBUT (nicht die `.href`-Property des inneren Elements)
+  // unterscheidet zuverlässig "Profil ansehen"-Kontexte (Raum-Kopfzeile/
+  // Gruppenmitglieder, href gesetzt) von einem GANZ ANDEREN Einsatzzweck
+  // derselben Komponente: der `<qu-people-search>`-Ergebnisliste im
+  // "Neuer Kontakt"-Formular (kein href, deren EIGENER qu-profile-open-
+  // Handler befüllt stattdessen #contact-fp-input) — ohne diese Prüfung
+  // würde ein Klick auf ein Suchergebnis dort dieses Profil-View-Popup
+  // zusätzlich mit-öffnen, obwohl das Formular gerade etwas anderes tut.
+  document.addEventListener('qu-profile-open', (ev) => {
+    if (!activeRoomId || !ev.target.hasAttribute('href')) return;
+    navigate(activeRoomId, 'profile', ev.detail.fingerprint);
   });
 
   // --- App-Einstellungen — `/settings` (Router) ---
