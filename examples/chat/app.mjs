@@ -541,7 +541,7 @@ async function setSoundEnabled(key, enabled) { await storage.put(key, enabled ? 
 // tatsächliches Datenvolumen, nicht nur Bild-/Videowiedergabe.
 async function autoLoadMedia() { return (await storage.get(AUTO_LOAD_MEDIA_KEY)) !== '0'; }
 async function setAutoLoadMedia(enabled) { await storage.put(AUTO_LOAD_MEDIA_KEY, enabled ? '1' : '0'); }
-async function showDateInMessages() { return (await storage.get(SHOW_DATE_KEY)) === '1'; }
+async function showDateInMessages() { return (await storage.get(SHOW_DATE_KEY)) !== '0'; }
 async function setShowDateInMessages(enabled) { await storage.put(SHOW_DATE_KEY, enabled ? '1' : '0'); }
 async function sendOnEnter() { return (await storage.get(ENTER_TO_SEND_KEY)) === '1'; }
 async function setSendOnEnter(enabled) { await storage.put(ENTER_TO_SEND_KEY, enabled ? '1' : '0'); }
@@ -2363,25 +2363,13 @@ async function main() {
    * pre-wrap` — die Blockzerlegung hat die Zeilenumbrüche bereits selbst
    * konsumiert, ein zusätzliches CSS-`pre-wrap` würde sie sonst doppelt
    * darstellen) oder eine Liste (`- `/`* `/`1. ` am Zeilenanfang, als
-   * echtes `<ul>`/`<ol>`).
-   *
-   * `trailingInline` (optional, buildMessageItem()s Uhrzeit+Häkchen-Bündel):
-   * WhatsApp-Trick — als LETZTES Kind des LETZTEN Absatzes eingehängt
-   * (nicht als eigene Zeile danach!), damit `float: right` (style.css) den
-   * davorstehenden Text darum herumbrechen lässt, sichtbar unten rechts IM
-   * Textfluss statt in einer eigenen Zeile. Nur möglich, wenn der letzte
-   * Block wirklich ein Absatz ist (Text zum Umfließen vorhanden) — endet
-   * die Nachricht auf einer LISTE, gibt es keinen Fließtext, in den sich
-   * das Element einfügen ließe; die Funktion hängt es dann stattdessen als
-   * eigene, rechtsbündige Zeile ganz ans Ende an. Rückgabe: `true`, wenn
-   * `trailingInline` tatsächlich in einen Absatz eingehängt wurde (float-
-   * Variante) — `buildMessageItem()` braucht das NICHT auszuwerten, beide
-   * Fälle sind hier schon vollständig erledigt.
+   * echtes `<ul>`/`<ol>`). Uhrzeit/Häkchen stehen NICHT mehr hier drin
+   * (früherer float-in-Text-Trick) — buildMessageItem() unten hängt sie
+   * als eigene Zeile UNTER die gesamte innere Text-Bubble, unabhängig vom
+   * Inhalt (Absatz, Liste, reiner Anhang) immer an derselben Stelle.
    */
-  function renderMessageText(container, text, trailingInline) {
-    const blocks = parseMessageBlocks(text);
-    blocks.forEach((block, i) => {
-      const isLastBlock = i === blocks.length - 1;
+  function renderMessageText(container, text) {
+    for (const block of parseMessageBlocks(text)) {
       if (block.type === 'list') {
         const listEl = document.createElement(block.ordered ? 'ol' : 'ul');
         listEl.className = 'msg-list';
@@ -2391,21 +2379,15 @@ async function main() {
           listEl.appendChild(li);
         }
         container.appendChild(listEl);
-        if (isLastBlock && trailingInline) {
-          const metaRow = el('div', 'msg-meta-row');
-          metaRow.appendChild(trailingInline);
-          container.appendChild(metaRow);
-        }
       } else {
         const p = el('div', 'msg-paragraph');
-        block.lines.forEach((line, i2) => {
-          if (i2 > 0) p.appendChild(document.createElement('br'));
+        block.lines.forEach((line, i) => {
+          if (i > 0) p.appendChild(document.createElement('br'));
           renderInlineText(p, line);
         });
-        if (isLastBlock && trailingInline) p.appendChild(trailingInline);
         container.appendChild(p);
       }
-    });
+    }
   }
 
   /**
@@ -2597,16 +2579,12 @@ async function main() {
   }
 
   /**
-   * Uhrzeit/Datum-Link + "bearbeitet"-Marker + Häkchen, als EIN Bündel,
-   * INNERHALB der Bubble (WhatsApp/Telegram-Konvention: die Zeit gehört
-   * zum Inhalt, den sie datiert, nicht zu einer separaten Kopfzeile).
-   * Wird entweder als letztes Kind DIREKT in den Textfluss von .msg-text
-   * eingehängt (float: right, klassischer Messenger-Trick: der Text davor
-   * bricht um dieses Element herum, landet unten rechts INNERHALB der
-   * Bubble statt in einer eigenen Zeile außerhalb) oder — wenn es keinen
-   * Text gibt, dem Text also nichts zum Umbrechen bliebe (reiner Anhang,
-   * reiner Standort-Link) — als eigene rechtsbündige Zeile am Ende der
-   * Bubble (buildMessageItem() unten entscheidet das).
+   * Uhrzeit/Datum-Link + "bearbeitet"-Marker + Häkchen, als EIN Bündel —
+   * buildMessageItem() hängt es IMMER als eigene, rechtsbündige Zeile
+   * UNTER die innere Text-Bubble (.msg-meta-row), unabhängig vom Inhalt
+   * (Text, Liste, reiner Anhang), damit die Zeit bei jeder Nachricht an
+   * derselben, vorhersehbaren Stelle steht statt mal im Textfluss, mal
+   * separat.
    */
   function buildMessageMetaInline(q, roomId, showDate, edited, mine) {
     const span = el('span', 'msg-time-row');
@@ -2638,15 +2616,16 @@ async function main() {
     li.dataset.ts = q.ts;
     li.dataset.id = q.id;
     const { text: displayText, edited } = resolveMessageText(list, q);
-    // Schmale Kopfzeile (nur Autor/📌/⋮) AUSSERHALB der Bubble — ALLES
-    // andere (Zitat, Text, Anhänge, Zeit/Häkchen, Reaktionen) gehört zum
-    // Inhalt der Nachricht und lebt deshalb GEMEINSAM in derselben Bubble,
-    // klar optisch abgehoben (eigener Hintergrund) vom Rest der Liste.
-    li.appendChild(buildMessageHeader(q, roomId, mine));
+    // ÄUSSERE Bubble (.msg-bubble) umschließt ALLES: oben (außerhalb der
+    // INNEREN Bubble) die Kopfzeile mit Autor/📌/⋮, darunter die innere
+    // Text-Bubble (.msg-bubble-inner: Zitat, Text/Liste, Anhänge), darunter
+    // (wieder außerhalb der inneren Bubble) Uhrzeit+Datum+Häkchen, ganz
+    // unten die Reaktions-Pills.
     const bubble = el('div', 'msg-bubble');
-    if (q.value?.forwardedFrom) bubble.appendChild(buildForwardedQuote(q.value.forwardedFrom));
-    if (q.value?.replyTo) bubble.appendChild(buildReplyQuote(q.value.replyTo));
-    let metaInsertedInline = false;
+    bubble.appendChild(buildMessageHeader(q, roomId, mine));
+    const inner = el('div', 'msg-bubble-inner');
+    if (q.value?.forwardedFrom) inner.appendChild(buildForwardedQuote(q.value.forwardedFrom));
+    if (q.value?.replyTo) inner.appendChild(buildReplyQuote(q.value.replyTo));
     if (displayText) {
       // Ein Text, der NUR aus einem einzelnen Link besteht (z. B. genau
       // das, was der 📍-Standort-Button verschickt), bräuchte sonst die
@@ -2658,15 +2637,14 @@ async function main() {
       const isBareLink = segs.length === 1 && segs[0].type === 'link';
       if (!isBareLink) {
         const textEl = el('div', 'msg-text');
-        renderMessageText(textEl, displayText, buildMessageMetaInline(q, roomId, showDate, edited, mine));
-        bubble.appendChild(textEl);
-        metaInsertedInline = true;
+        renderMessageText(textEl, displayText);
+        inner.appendChild(textEl);
       }
       const preview = buildLinkPreview(displayText);
-      if (preview) bubble.appendChild(preview);
+      if (preview) inner.appendChild(preview);
     }
     for (const refId of q.refs ?? []) {
-      bubble.appendChild(await renderAttachment(refId));
+      inner.appendChild(await renderAttachment(refId));
     }
     if (mine && q.refs?.length) {
       // <qu-sync-badge> zieht sich seinen Anfangs- UND jeden Folgezustand
@@ -2675,17 +2653,12 @@ async function main() {
       const badge = document.createElement('qu-sync-badge');
       badge.dataset.id = q.id;
       badge.dataset.roomId = roomId;
-      bubble.appendChild(badge);
+      inner.appendChild(badge);
     }
-    // Fallback OHNE Text zum Umbrechen (reiner Anhang/Standort-Link) —
-    // renderMessageText() selbst übernimmt den Fall "Text vorhanden, aber
-    // endet auf einer Liste" bereits (s. dessen Doku); hier bleibt nur
-    // "gar kein Text" übrig.
-    if (!metaInsertedInline) {
-      const metaRow = el('div', 'msg-meta-row');
-      metaRow.appendChild(buildMessageMetaInline(q, roomId, showDate, edited, mine));
-      bubble.appendChild(metaRow);
-    }
+    bubble.appendChild(inner);
+    const metaRow = el('div', 'msg-meta-row');
+    metaRow.appendChild(buildMessageMetaInline(q, roomId, showDate, edited, mine));
+    bubble.appendChild(metaRow);
     const reactionsRow = buildReactionsRow(roomId, q.id);
     if (reactionsRow) bubble.appendChild(reactionsRow);
     li.appendChild(bubble);
