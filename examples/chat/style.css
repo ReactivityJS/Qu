@@ -24,7 +24,7 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { height: 100%; }
+html, body { height: 100%; overflow: hidden; }
 body {
   margin: 0;
   background: var(--bg);
@@ -38,7 +38,13 @@ body {
      Browser beim Fokussieren eines Eingabefelds die ganze Seite ein Stück
      hochscrollen (natives "scroll focused element into view"), wodurch
      Header/Eingabeleiste sichtbar "mit rausscrollen" — genau das
-     gemeldete Symptom. */
+     gemeldete Symptom. `overflow: hidden` auf html/body oben zusätzlich
+     als zweite, unabhängige Sperre (manche mobilen Browser respektieren
+     `position: fixed` bei aufgeklappter Tastatur nicht immer zuverlässig,
+     s. index.html's `interactive-widget=resizes-content`-Doku) — beide
+     zusammen garantieren, dass NIE unterhalb von .app sichtbarer Leerraum
+     erscheint, egal welcher der beiden Mechanismen im jeweiligen Browser
+     tatsächlich greift. */
   position: fixed;
   inset: 0;
   width: 100%;
@@ -813,6 +819,39 @@ button { font-family: inherit; }
   overflow-y: auto;
 }
 .modal h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
+/* Kopf (Titel bzw. Zurück-Pfeil) und Fuß (Schließen/Abbrechen/Speichern)
+   jedes Modals bleiben beim Scrollen sichtbar — unabhängig davon, wie lang
+   der Inhalt dazwischen ist, muss man nie erst scrollen, um schließen/
+   zurückgehen/speichern zu können. `.modal > h2:first-child` deckt jedes
+   Modal ab, das mit einer Überschrift beginnt (die Mehrheit), `.modal >
+   .back-btn:first-child` das eine, das stattdessen mit dem Zurück-Pfeil
+   beginnt (#profile-view-modal) — `.modal > .modal-actions:last-child`
+   trifft in JEDEM Modal genau die abschließende Aktionsleiste, nie eine
+   der ggf. weiter oben liegenden Formular-internen (z. B. Gruppenname
+   umbenennen in #chat-settings-modal), weil die nie das LETZTE Kind sind.
+   Die negativen Ränder brechen bewusst aus dem eigenen padding von .modal
+   aus (volle Breite bis zum Rand), padding+Hintergrund am selben Element
+   machen daraus wieder eine blickdichte Leiste über dem darunter
+   wegscrollenden Inhalt. */
+.modal > h2:first-child,
+.modal > .back-btn:first-child {
+  position: sticky;
+  top: -1.25rem;
+  z-index: 2;
+  background: var(--panel);
+  margin: -1.25rem -1.25rem 0.75rem;
+  padding: 1.25rem 1.25rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.modal > .modal-actions:last-child {
+  position: sticky;
+  bottom: -1.25rem;
+  z-index: 2;
+  background: var(--panel);
+  margin: 0.75rem -1.25rem -1.25rem;
+  padding: 0.75rem 1.25rem 1.25rem;
+  border-top: 1px solid var(--border);
+}
 .modal label { display: block; font-size: 0.78rem; color: var(--muted); margin: 0.7rem 0 0.3rem; }
 .modal input[type="text"], .modal select {
   width: 100%;
@@ -867,6 +906,8 @@ button { font-family: inherit; }
 .modal-hint { color: var(--muted); font-size: 0.78rem; margin: 0.4rem 0 0; }
 .modal-hint a { color: var(--accent-strong); }
 .modal-hint code { background: var(--panel-2); border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.9em; }
+.format-legend { list-style: none; margin: 0.3rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.82rem; color: var(--muted); }
+.format-legend code { background: var(--panel-2); border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.95em; color: var(--text); }
 .toggle-row { display: flex !important; align-items: center; gap: 0.5rem; color: var(--text) !important; font-size: 0.88rem !important; margin: 0.5rem 0 !important; cursor: pointer; }
 .toggle-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent-strong); cursor: pointer; }
 
