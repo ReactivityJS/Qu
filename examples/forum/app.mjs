@@ -4,10 +4,17 @@
 
 import { createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../../src/index.js';
 import { createBoard, createTopic, listPosts, onPosts, olderBucket, currentBucket, addReply, listReplies, onReplies } from '../forum-lib.mjs';
-import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
+import { loadOrCreateIdentity, relayUrl, ECOSYSTEM_IDENTITY_KEY } from '../space-app-browser.js';
 import { parseHashRoute, buildHashRoute } from '../space-app-lib.mjs';
 
-const IDENTITY_KEY = 'qu-forum-identity-keys'; // eigener Key, unabhängig von anderen Beispielen
+// Bis hierhin ein eigener, von anderen Beispielen unabhängiger Key
+// ('qu-forum-identity-keys') — inzwischen überholt: EIN Fingerprint fürs
+// gesamte Ökosystem (siehe src/ui/session-bootstrap.js's Doku zu
+// ECOSYSTEM_IDENTITY_KEY), nicht ein Konto pro App. `migrateFrom` unten
+// kopiert eine bereits bestehende Forum-Identität einmalig auf den neuen,
+// gemeinsamen Key, statt Bestandsnutzer:innen ihre bisherige Identität
+// (und damit ihre bekannten Kontakte) verlieren zu lassen.
+const LEGACY_IDENTITY_KEY = 'qu-forum-identity-keys';
 
 const el = (id) => document.getElementById(id);
 const statusEl = el('status');
@@ -38,7 +45,7 @@ function fmtMeta(q) {
 }
 
 async function main() {
-  const qu = (await loadOrCreateIdentity(IDENTITY_KEY)).use(createNetworkPlugin()).use(createSpacesPlugin());
+  const qu = (await loadOrCreateIdentity(ECOSYSTEM_IDENTITY_KEY, { migrateFrom: LEGACY_IDENTITY_KEY })).use(createNetworkPlugin()).use(createSpacesPlugin());
   myFpEl.textContent = qu.fingerprint;
 
   const channel = createWebSocketChannel(relayUrl());

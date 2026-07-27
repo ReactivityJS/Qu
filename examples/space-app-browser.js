@@ -3,69 +3,17 @@
 // cms-lib.mjs vs. cms-router.js: space-app-lib.mjs kennt kein `window`,
 // dieses Modul schon (Identity-Persistenz, Relay-URL, Hash-Navigation).
 //
-// Deckt genau den Boilerplate ab, der sich vor dieser Datei in JEDEM
-// Demo-`app.mjs` (cms, forum, ein zukünftiges todo) identisch wiederholt
-// hätte: Identität laden/anlegen, Relay-URL fürs aktuelle Deployment
-// bestimmen, den Hash live in `{ spaceId, path }` übersetzen.
-
-import { Qu, LocalStorageAdapter } from '../src/index.js';
+// `loadOrCreateIdentity`/`relayUrl` selbst leben inzwischen in
+// `src/ui/session-bootstrap.js` (siehe dort) — generisch genug, um zum
+// Framework zu gehören statt zu den Beispielen, und der Ort, den eine NEUE
+// App gegen dieses Repo importieren sollte. Hier nur re-exportiert, damit
+// jedes bestehende `examples/<app>/app.mjs`, das weiterhin `from
+// '../space-app-browser.js'` importiert, unverändert weiterläuft.
+// `watchRoute`/`navigate` bleiben HIER (nicht in src/ui/): sie hängen an
+// space-app-lib.mjs's `parseHashRoute`/`buildHashRoute`, die (noch) reines
+// Beispiel-Code sind, kein Teil des Frameworks.
+export { loadOrCreateIdentity, relayUrl, ECOSYSTEM_IDENTITY_KEY } from '../src/ui/session-bootstrap.js';
 import { parseHashRoute, buildHashRoute } from './space-app-lib.mjs';
-
-// Empty namespace: LocalStorageAdapter would otherwise prefix every key
-// with `qu:` (its own default) — this app-space layer predates the
-// adapter and its callers already choose full, self-contained key names
-// (`storageKey` below, examples/chat's various *_KEY constants, …), so an
-// empty namespace here keeps every existing localStorage key exactly as
-// it already is instead of silently orphaning already-stored data (a
-// user's saved identity/rooms/contacts) under a renamed key the first
-// time this runs.
-const storage = new LocalStorageAdapter({ namespace: '' });
-
-/**
- * Identität aus `localStorage` laden, oder beim allerersten Aufruf neu
- * erzeugen und dort ablegen — `storageKey` ist bewusst ein Pflicht-
- * parameter (kein globaler Default), damit zwei Demos auf derselben
- * Origin (z. B. `/examples/cms/` und `/examples/forum/`) nicht versehentlich
- * dieselbe Identität teilen, nur weil beide vergessen haben, einen
- * eigenen Key zu wählen.
- *
- * Goes through Qu's own StorageAdapter (LocalStorageAdapter) instead of
- * calling `localStorage` directly — this is the one place identity has to
- * exist BEFORE any Qu instance does (you need it to create the instance
- * in the first place), which is exactly why LocalStorageAdapter is built
- * to work standalone: it has no dependency on a Runtime/QuStore, just a
- * plain namespaced get/put over Web Storage, usable at any point —
- * including this one, the earliest possible.
- */
-export async function loadOrCreateIdentity(storageKey) {
-  // Ein beschädigter Wert (nicht valides JSON — z. B. ein Rest aus der Zeit
-  // vor diesem Adapter, oder ein fremder Key-Kollisionsfall auf demselben,
-  // absichtlich leeren Namespace, siehe oben) behandelt storage.get() wie
-  // "nicht vorhanden" (WebStorageAdapter.js's eigene Doku) — für JEDEN
-  // anderen Key genau richtig, aber hier die eine Stelle, an der das
-  // katastrophal wäre: ein `saved == null` würde sonst kommentarlos eine
-  // KOMPLETT NEUE Identität erzeugen und die alte (samt Fingerprint, damit
-  // samt Kontakten/Räumen anderer Nutzer) für immer unauffindbar machen.
-  // Deshalb hier die einzige bewusste Ausnahme von "immer über den Adapter,
-  // nie direkt localStorage" (siehe Phase-1.5-Nachtrag): ein roher
-  // Vorab-Check, der "wirklich leer" von "vorhanden, aber kaputt"
-  // unterscheidet, bevor überhaupt erwogen wird, eine neue Identität
-  // anzulegen.
-  if (localStorage.getItem(storageKey) !== null) {
-    const saved = await storage.get(storageKey);
-    if (saved) return Qu.create({ identity: saved });
-    throw new Error(`Deine gespeicherte Identität unter "${storageKey}" ist beschädigt (kein gültiges JSON) — um Datenverlust zu vermeiden, wird KEINE neue Identität angelegt. Bitte Browser-Konsole/localStorage prüfen, bevor dieser Eintrag gelöscht wird.`);
-  }
-  const qu = await Qu.create();
-  await storage.put(storageKey, await qu.exportKeys());
-  return qu;
-}
-
-/** Der Relay dieses Deployments — `ws(s)://<host>/relay`, passend zu index.js' `bridgeWebSocketServer(server, relayApi, { path: '/relay' })`. */
-export function relayUrl() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/relay`;
-}
 
 /**
  * Live-Abonnement auf `window.location.hash`, bereits in `{ spaceId, path }`

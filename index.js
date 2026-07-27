@@ -28,7 +28,7 @@ import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
 import { sendWebPush, generateVapidKeys } from './relay/webpush.mjs';
 import {
-  QuIdentity, QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter, isValidFingerprint,
+  QuIdentity, QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter, createConnectionGate, isValidFingerprint,
   createChatPushRule, createCalendarPushRule, createItemInvitePushRule,
 } from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
@@ -252,6 +252,14 @@ const relayIdentity = persistent
   : await QuIdentity.generate();
 const relayEpub = await crypto.subtle.exportKey('jwk', relayIdentity.encryptionKey);
 
+// Declared here (assigned after createRelay() below, once its return value
+// exists) so createRelayInfoRoutes()'s `getAdminConfig` closure can read
+// the CURRENT relayApi at request time — routes are built once, at server
+// startup, before createRelay() runs (it needs `store`, built further
+// below), but a route handler only ever runs later, once a request
+// actually arrives, well after this variable is assigned.
+let relayApi;
+
 // /test/manifest.json is always on (read-only, no code runs); the
 // server-side test-EXECUTION endpoint (/test/run-node-tests) is opt-in via
 // QU_ENABLE_TEST_ENDPOINT=1 — see server/test-runner.mjs for why.
@@ -262,7 +270,7 @@ const server = startServer({
     ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null }),
     ...createWebRTCRoutes({ iceServers }),
     ...createPortalRoutes({ root, registry }),
-    ...createRelayInfoRoutes({ fingerprint: relayIdentity.fingerprint, epub: relayEpub, admins: relayAdmins }),
+    ...createRelayInfoRoutes({ fingerprint: relayIdentity.fingerprint, epub: relayEpub, admins: relayAdmins, getAdminConfig: () => relayApi?.getAdminConfig?.() ?? null }),
   ],
 });
 
@@ -312,6 +320,34 @@ const rateLimiter = process.env.QU_RATE_LIMIT === '0' ? null : createRateLimiter
 });
 const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 
+// Connection-limit (network/connection-gate.js) — off by default (`null`
+// gate = unlimited), same "explicit opt-in for a deployment decision"
+// reasoning as requireDirectWriter above rather than a default-on
+// protection like rateLimiter: capping WHO/HOW MANY may even hold an open
+// connection is a much coarser, more consequential choice (a misconfigured
+// allowlist locks out every real user, not just a flooding one) than a
+// generous default rate-limit window. `QU_MAX_CONNECTIONS` — a ceiling on
+// simultaneously connected fingerprints; `QU_ALLOWED_FINGERPRINTS` — same
+// comma-list-with-quote-stripping convention as QU_RELAY_ADMINS above, an
+// allowlist of the only fingerprints permitted to connect at all. Either
+// (or both) present is enough to install the gate; both absent leaves
+// connections exactly as unlimited as before this option existed. Both are
+// also live-reconfigurable afterward via a signed admin/config/connection-limit
+// command (relay/relay.mjs), without a restart.
+const maxConnectionsEnv = process.env.QU_MAX_CONNECTIONS ? Number(process.env.QU_MAX_CONNECTIONS) : null;
+const allowedFingerprintsEnv = (process.env.QU_ALLOWED_FINGERPRINTS || '')
+  .split(',')
+  .map((s) => s.trim().replace(QUOTE_RE, '').trim().toLowerCase())
+  .filter(Boolean);
+for (const fp of allowedFingerprintsEnv) {
+  if (!isValidFingerprint(fp)) {
+    console.warn(`[Relay] QU_ALLOWED_FINGERPRINTS entry "${fp}" doesn't look like a valid fingerprint (expected 24 hex characters) — it will never match any connecting peer, check for stray quotes/whitespace in your environment configuration.`);
+  }
+}
+const connectionGate = (maxConnectionsEnv != null || allowedFingerprintsEnv.length)
+  ? createConnectionGate({ maxConnections: maxConnectionsEnv, allowedFingerprints: allowedFingerprintsEnv.length ? allowedFingerprintsEnv : null })
+  : null;
+
 // allowDynamicSubscribe: true — on top of the static 'qu-demo-room/' below
 // (kept for docs/lab/'s Network section, which relies on a fixed room), any
 // connected client may additionally register its own topic at runtime via
@@ -326,7 +362,7 @@ const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 // serve all three example apps, so it opts all three in; a deployment
 // serving only one of them would list only that one's rule.
 const pushRules = [createChatPushRule(), createCalendarPushRule(), createItemInvitePushRule()];
-const relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions, pushRules, relayAdmins, serviceRegistry: registry });
+relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, connectionGate, sendPush, pushSubscriptions, pushRules, relayAdmins, serviceRegistry: registry });
 await relayApi.relay.publishProfile(); // makes ~<fingerprint>/epub discoverable — the one thing anything encrypting TO this relay needs to look up (also directly served at /relay/info above, no sync required)
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
 console.log(`[Relay] Identity: ${relayIdentity.fingerprint}${persistent ? ' (stable across restarts)' : ' (ephemeral — QU_STORE=memory, a fresh fingerprint every restart)'}`);
@@ -343,3 +379,6 @@ console.log(relayAdmins.length
 console.log(pushEnabled
   ? `[Relay] Web Push enabled (${pushSubscriptions.size} stored subscription(s))`
   : '[Relay] Web Push disabled (QU_PUSH=0)');
+console.log(connectionGate
+  ? `[Relay] Connection limit active: ${JSON.stringify(connectionGate.getConfig())}`
+  : '[Relay] No connection limit configured (QU_MAX_CONNECTIONS/QU_ALLOWED_FINGERPRINTS unset) — connections are unbounded');

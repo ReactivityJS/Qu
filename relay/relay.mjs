@@ -55,6 +55,15 @@ export async function createRelay({
   //     function passed in here, not a new parameter on this signature.
   requireDirectWriter = false,
   rateLimiter = null,
+  // Optional network/connection-gate.js instance (or compatible
+  // `{ check({fingerprint, connectedCount}) }`) — caps simultaneously
+  // connected fingerprints and/or restricts which fingerprints may connect
+  // at all. `null` (default) leaves connections unlimited, exactly as
+  // before this option existed. Checked once per Channel, right after
+  // authentication (attachChannel() below) — NOT per push, unlike
+  // rateLimiter/ingestGate above, which is why it's a separate option
+  // rather than another ingestGate entry.
+  connectionGate = null,
   ingestGate = [],
   // Runtime topic registration — see network/replication/default.js's
   // constructor doc and README's "Relay App-unabhängig betreiben" section.
@@ -221,6 +230,32 @@ export async function createRelay({
       return;
     }
     debug('relay', 'admin-command', { id: q.id, writer: q.writer, command: decrypted });
+
+    // `admin/config/rate-limit` -> `{ maxPerWindow?, windowMs? }`, live on
+    // the `rateLimiter` instance passed in above (network/rate-limiter.js's
+    // configure()). A no-op (not an error) if this relay wasn't given a
+    // rateLimiter at all — same "configuration of something already
+    // installed, never new logic" boundary as admin/service/<id>/<action>.
+    if (q.id === 'admin/config/rate-limit') {
+      if (typeof rateLimiter?.configure === 'function') {
+        rateLimiter.configure(decrypted);
+        debug('relay', 'admin-config-rate-limit', { config: rateLimiter.getConfig?.() });
+      }
+      return;
+    }
+
+    // `admin/config/connection-limit` -> `{ maxConnections?, allowedFingerprints? }`,
+    // live on the `connectionGate` instance passed in above
+    // (network/connection-gate.js's configure()). Same no-op-if-absent
+    // reasoning as rate-limit above.
+    if (q.id === 'admin/config/connection-limit') {
+      if (typeof connectionGate?.configure === 'function') {
+        connectionGate.configure(decrypted);
+        debug('relay', 'admin-config-connection-limit', { config: connectionGate.getConfig?.() });
+      }
+      return;
+    }
+
     if (!serviceRegistry) return;
 
     // `admin/service/<id>` (no further segment) -> the built-in enable/
@@ -476,6 +511,24 @@ export async function createRelay({
   /** Authenticates and attaches one Channel. Returns its proven peerFingerprint (or null if anonymous) and its per-connection DefaultFileTransfer. */
   async function attachChannel(channel) {
     const { peerFingerprint } = await hub.attach(channel);
+
+    // Connection-limit check happens AFTER handshake (only then do we know
+    // peerFingerprint) but BEFORE this connection is treated as live in any
+    // other way — reject it here means it never enters `connected`, never
+    // gets a DefaultFileTransfer, never wires the routed-signaling listener
+    // below. hub.attach() has already run by this point (the handshake
+    // itself always succeeds/fails on its own terms, independent of this
+    // gate), so a rejected connection is closed right back down rather than
+    // left half-wired.
+    if (connectionGate) {
+      const { allowed, reason } = connectionGate.check({ fingerprint: peerFingerprint, connectedCount: connected.size });
+      if (!allowed) {
+        debug('relay', 'connection-rejected', { channelId: channel.id, peerFingerprint, reason });
+        await channel.close();
+        return { peerFingerprint: null, fileTransfer: null };
+      }
+    }
+
     debug('relay', 'channel-attached', { channelId: channel.id, peerFingerprint });
     const fileTransfer = new DefaultFileTransfer(relay.runtime, channel, fileStorage);
     if (peerFingerprint) connected.set(peerFingerprint, { channel, fileTransfer });
@@ -595,5 +648,12 @@ export async function createRelay({
     pushSubscriptions,
     attachChannel,
     get connectedCount() { return connected.size; },
+    /** Current effective rate-limit/connection-limit config — `null` for a limit not installed at all (see `rateLimiter`/`connectionGate` options above). Read by e.g. server/relay-info-routes.mjs for the admin dashboard. */
+    getAdminConfig() {
+      return {
+        rateLimit: rateLimiter?.getConfig?.() ?? null,
+        connectionLimit: connectionGate?.getConfig?.() ?? null,
+      };
+    },
   };
 }

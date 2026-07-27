@@ -21,12 +21,23 @@
 // operators who consider that too much operational detail to expose can
 // simply not rely on the portal's convenience card and link directly to
 // `/examples/relay-admin/index.html` instead.
-export function createRelayInfoRoutes({ fingerprint, epub, admins = [] }) {
+// `getAdminConfig` (optional): relay/relay.mjs's own `getAdminConfig()` —
+// the CURRENT effective rate-limit/connection-limit thresholds. Injected
+// as a function (not a plain value) so this route always reads the LIVE
+// config, including after an `admin/config/*` command has changed it —
+// same "not actually a secret" reasoning as `admins` above: a numeric
+// threshold or an allow-listed fingerprint reveals no more than the
+// already-public admins list does (knowing a fingerprint never lets
+// anyone impersonate it — that still requires the matching private key),
+// so this stays a plain, unauthenticated GET, exactly like the rest of
+// this file. The actual write path (changing these values) remains the
+// signed+encrypted `admin/config/*` channel — this route is read-only.
+export function createRelayInfoRoutes({ fingerprint, epub, admins = [], getAdminConfig = null }) {
   return [{
     match: (p) => p === '/relay/info',
     handle: (_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ fingerprint, epub, admins }));
+      res.end(JSON.stringify({ fingerprint, epub, admins, adminConfig: getAdminConfig?.() ?? null }));
     },
   }];
 }

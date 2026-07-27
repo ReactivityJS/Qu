@@ -20,5 +20,18 @@ export function createRateLimiter({ maxPerWindow = 100, windowMs = 1000, maxTrac
       if (hits.size > maxTrackedKeys) hits.delete(hits.keys().next().value);
       return allowed;
     },
+    /**
+     * Live-reconfigure the window/threshold (e.g. from an admin command,
+     * see relay/relay.mjs's `admin/config/rate-limit`) — existing tracked
+     * hits are left as-is (they age out of the window normally under the
+     * new `windowMs`), only the two thresholds change, no reset/flush.
+     */
+    configure({ maxPerWindow: newMax, windowMs: newWindowMs } = {}) {
+      if (newMax !== undefined) maxPerWindow = newMax;
+      if (newWindowMs !== undefined) windowMs = newWindowMs;
+    },
+    getConfig() {
+      return { maxPerWindow, windowMs };
+    },
   };
 }
