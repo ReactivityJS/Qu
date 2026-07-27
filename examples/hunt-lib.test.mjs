@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Qu, createSpacesPlugin } from '../src/index.js';
 import {
-  haversineMeters, createGame, getConfig, getStatus, isHunted, isHunter,
-  pingLocation, listPings, onPing, lastPing, declareCaught, endGame, predictNextRadius,
+  haversineMeters, createGame, getConfig, getStatus, watchStatus, isHunted, isHunter,
+  pingLocation, listPings, watchPings, lastPing, declareCaught, endGame, predictNextRadius,
 } from './hunt-lib.mjs';
 
 test('haversineMeters: known distance between two coordinates (~1km, within 1%)', () => {
@@ -30,17 +30,21 @@ test('createGame: both teams become writers, only the hunted team may ping', asy
 
   const config = await getConfig(hunter, gameId);
   assert.deepEqual(config.huntedTeam, [hunted.fingerprint]);
-  assert.equal((await getStatus(hunter, gameId)).state, 'active');
+  assert.equal(await getStatus(hunter, gameId), 'active');
 });
 
-test('pings: ordered oldest-first, foreign writers filtered out, live updates via onPing', async () => {
+test('pings: ordered oldest-first, foreign writers filtered out, live updates via watchPings (viewObject)', async () => {
   const runner = (await Qu.create()).use(createSpacesPlugin());
   const hunted = await Qu.create({ runtime: runner.runtime });
   const hunter = await Qu.create({ runtime: runner.runtime });
   const gameId = await createGame(runner, { huntedTeam: [hunted.fingerprint], hunterTeam: [hunter.fingerprint] });
+  const config = await getConfig(hunter, gameId);
 
   const seen = [];
-  onPing(hunter, gameId, (q) => seen.push(q.value));
+  watchPings(hunter, gameId, config, {
+    createItem: (q) => q,
+    render: (item, value) => seen.push(value),
+  });
 
   await pingLocation(hunted, gameId, { lat: 1, lon: 1 });
   await pingLocation(hunted, gameId, { lat: 2, lon: 2 });
@@ -53,19 +57,42 @@ test('pings: ordered oldest-first, foreign writers filtered out, live updates vi
   assert.equal(pings.length, 2);
   assert.equal(pings[0].value.lat, 1);
   assert.equal(pings[1].value.lat, 2);
-  assert.equal(seen.length, 2, 'the foreign write must not reach onPing callbacks either');
+  assert.equal(seen.length, 2, 'the foreign write must not reach watchPings callbacks either');
 
   const last = await lastPing(hunter, gameId);
   assert.equal(last.value.lat, 2);
 });
 
-test('declareCaught/endGame update status', async () => {
+test('watchPings: an already-existing ping is delivered immediately, without a separate initial load (viewObject\'s initial:true)', async () => {
   const runner = (await Qu.create()).use(createSpacesPlugin());
   const gameId = await createGame(runner);
+  await pingLocation(runner, gameId, { lat: 5, lon: 5 });
+
+  const config = await getConfig(runner, gameId);
+  const seen = [];
+  watchPings(runner, gameId, config, { createItem: (q) => q, render: (item, value) => seen.push(value) });
+  await new Promise((r) => setTimeout(r, 10)); // viewObject()'s initial catch-up runs asynchronously, not synchronously on the call
+
+  assert.equal(seen.length, 1, 'the ping written before watchPings() was called must still be delivered');
+  assert.equal(seen[0].lat, 5);
+});
+
+test('declareCaught/endGame update status; watchStatus delivers the current state immediately, then live changes', async () => {
+  const runner = (await Qu.create()).use(createSpacesPlugin());
+  const gameId = await createGame(runner);
+
+  const seen = [];
+  watchStatus(runner, gameId, (state) => seen.push(state));
+  await new Promise((r) => setTimeout(r, 10)); // viewKey()'s initial catch-up runs asynchronously, not synchronously on the call
+  assert.deepEqual(seen, ['active'], 'watchStatus must deliver the already-existing state without a separate initial read');
+
   await declareCaught(runner, gameId);
-  assert.equal((await getStatus(runner, gameId)).state, 'caught');
+  assert.equal(await getStatus(runner, gameId), 'caught');
+
   await endGame(runner, gameId);
-  assert.equal((await getStatus(runner, gameId)).state, 'ended');
+  assert.equal(await getStatus(runner, gameId), 'ended');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(seen, ['active', 'caught', 'ended']);
 });
 
 test('predictNextRadius: no pings yet -> null', () => {

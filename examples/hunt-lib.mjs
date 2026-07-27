@@ -13,13 +13,23 @@
 // (bzw. beide unter `status`, um das Spiel zu beenden). Genau das Muster,
 // das presence.js's Moduldoku für `reads/${fp}` beschreibt — der Pfad ist
 // Adressierung, das verifizierte `writer`-Feld ist die Wahrheit, und jede
-// Leseseite hier filtert danach (siehe listPings()/onPing()), nicht nach
-// dem Pfad allein.
+// Leseseite hier filtert danach (siehe listPings()/watchPings()), nicht
+// nach dem Pfad allein.
 //
 // Zeit-Sharding (README §7) ist hier bewusst NICHT nötig: ein Ping-Intervall
 // von Minuten statt Millisekunden hält `pings/` strukturell klein (ein
 // mehrstündiges Spiel mit 5-Minuten-Takt sind < 100 Einträge), anders als
 // eine für immer wachsende Forum-Collection.
+//
+// Live-Ansichten (watchStatus()/watchPings() unten) bauen bewusst auf
+// `viewKey()`/`viewObject()` (src/ui/bindings.js, hier über den Barrel
+// `src/index.js` importiert, DOM-frei und genauso in Node testbar wie der
+// Rest dieser Datei) statt auf einem handgestrickten `.on()`/`.map()` samt
+// eigenem "einmal lesen, dann separat abonnieren"-Vorlauf — exakt das
+// Muster, das docs/lab/labs/05-references-practice.mjs für seine
+// Live-Bibliothek zeigt: KEIN "Neu laden"-Aufruf irgendwo, eine einzige
+// Subscription liefert bereits Vorhandenes UND künftige Änderungen.
+import { viewKey, viewObject } from '../src/index.js';
 
 const DEFAULT_PING_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_ASSUMED_SPEED_MPS = 1.4; // ruhiges Gehtempo, als Fallback ohne Bewegungshistorie
@@ -61,7 +71,12 @@ export async function createGame(qu, {
   const space = qu.createSpace({ writers, readers });
   await space.ready;
   await space.get('config').put({ huntedTeam, hunterTeam, pingIntervalMs, assumedSpeedMps, label });
-  await space.get('status').put({ state: 'active' });
+  // Ein einzelner String, kein `{ state, by }`-Objekt: WER den Status
+  // gesetzt hat, steht bereits verifiziert im Qubit selbst (`.writer`,
+  // siehe Session/Verify) — ein zusätzliches `by`-Feld wäre nur eine
+  // redundante, ungeprüfte Kopie derselben Information (dasselbe Prinzip,
+  // das presence.js's Moduldoku für `q.writer` statt Pfad-Vertrauen nennt).
+  await space.get('status').put('active');
   return space.id;
 }
 
@@ -71,14 +86,22 @@ export async function getConfig(qu, gameId) {
   return q?.value ?? null;
 }
 
-/** `{ state: 'active'|'caught'|'ended', ... }` — `null`, falls (noch) nicht sichtbar. */
+/** `'active'|'caught'|'ended'` — `null`, falls (noch) nicht sichtbar. */
 export async function getStatus(qu, gameId) {
   const q = await qu.get(`${gameId}/status`);
   return q?.value ?? null;
 }
 
-export function onStatusChange(qu, gameId, callback, opts) {
-  return qu.get(`${gameId}/status`).on(callback, opts);
+/**
+ * Live-Ansicht auf den Spielstatus: `render(state, qubit)` läuft einmal
+ * sofort mit dem aktuellen Stand (falls schon vorhanden) und danach bei
+ * jeder Änderung erneut — `viewKey()` selbst übernimmt sowohl das
+ * "erst lesen, dann abonnieren" als auch das Verwerfen doppelt
+ * zugestellter Qubits (gleicher `ts`, z. B. eigenes Echo). Rückgabe: eine
+ * Unsubscribe-Funktion.
+ */
+export function watchStatus(qu, gameId, render) {
+  return viewKey(qu.get(`${gameId}/status`), render);
 }
 
 /** Ist `qu` Mitglied des gejagten Teams in diesem Spiel? */
@@ -114,13 +137,34 @@ export async function listPings(qu, gameId) {
   return rows.filter((q) => hunted.has(q.writer)).sort((a, b) => a.ts - b.ts);
 }
 
-/** Live-Abonnement auf neue Pings — derselbe Fremdschreiber-Filter wie listPings(). */
-export function onPing(qu, gameId, callback, opts) {
-  let hunted = null;
-  return qu.get(`${gameId}/pings`).map(async (q) => {
-    if (!hunted) hunted = new Set((await getConfig(qu, gameId))?.huntedTeam ?? []);
-    if (hunted.has(q.writer)) callback(q);
-  }, opts);
+/**
+ * Live-Ansicht auf die Pings des gejagten Teams, gebaut auf `viewObject()`
+ * (siehe Moduldoku oben) statt auf einem rohen `.map()`: liefert jeden schon
+ * bekannten Ping sofort (`createItem`+`render` laufen dafür einmal) und
+ * jeden künftigen genauso über dieselbe eine Subscription — kein separater
+ * "einmal laden"-Aufruf nötig, bevor dieser hier läuft. `config` wird
+ * bewusst als Parameter erwartet (statt selbst nachgeladen): der
+ * Fremdschreiber-Filter (Moduldoku oben) braucht `config.huntedTeam` schon
+ * beim allerersten, synchron zugestellten Ping, und jeder Aufrufer hat
+ * `config` an dieser Stelle ohnehin schon (z. B. für predictNextRadius())
+ * — ein interner Nachlade-Cache hier wäre nur eine zweite Quelle für
+ * genau dieselbe, bereits vorhandene Information.
+ *
+ * `createItem(q)`/`render(item, value, q)` haben dieselbe Bedeutung wie bei
+ * `viewObject()` selbst — diese Funktion fügt nur den Fremdschreiber-Filter
+ * hinzu, sonst nichts. Rückgabe: eine Unsubscribe-Funktion.
+ */
+export function watchPings(qu, gameId, config, { createItem, render }) {
+  const hunted = new Set(config?.huntedTeam ?? []);
+  return viewObject(qu.get(`${gameId}/pings`), {
+    // Ein Fremdschreiber bekommt gar kein Item (nicht nur ein ungerendertes)
+    // — `null` markiert das für render() unten, ohne dass der Aufrufer
+    // seinerseits auf `null` prüfen müsste.
+    createItem: (q) => (hunted.has(q.writer) ? createItem(q) : null),
+    render(item, value, q) {
+      if (item !== null) render(item, value, q);
+    },
+  });
 }
 
 /** Der letzte bekannte Ping, oder `null`, falls noch keiner vorliegt. */
@@ -131,12 +175,12 @@ export async function lastPing(qu, gameId) {
 
 /** Das Fänger-Team hat das gejagte Team gefunden — beendet das Spiel. */
 export async function declareCaught(qu, gameId) {
-  return qu.get(`${gameId}/status`).put({ state: 'caught', by: qu.fingerprint });
+  return qu.get(`${gameId}/status`).put('caught');
 }
 
 /** Spiel regulär beenden (z. B. Zeitlimit erreicht), ohne dass jemand gefangen wurde. */
 export async function endGame(qu, gameId) {
-  return qu.get(`${gameId}/status`).put({ state: 'ended', by: qu.fingerprint });
+  return qu.get(`${gameId}/status`).put('ended');
 }
 
 /**
