@@ -37,7 +37,20 @@ import {
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import { parseHashRoute, buildHashRoute } from '../space-app-lib.mjs';
 
-const IDENTITY_KEY = 'qu-hunt-identity-keys'; // eigener Key, unabhängig von anderen Beispielen
+// Dieselbe Identität wie examples/chat/examples/people (siehe deren
+// IDENTITY_KEY-Doku: bewusst EIN Fingerprint fürs gesamte Ökosystem, kein
+// pro-App-Konto) — bis auf diesen einen String war das schon immer die
+// gemeinsame Speicherstelle (loadOrCreateIdentity() -> space-app-browser.js's
+// LocalStorageAdapter mit leerem Namespace), nur der eigene, abweichende
+// Key hier hielt Hunt fälschlich isoliert. Sichtbar wurde das über
+// examples/chat: ein dort per createGame() mit dem CHAT-Fingerprint als
+// huntedTeam angelegtes Spiel zeigte JEDER öffnenden Person (auch der
+// gejagten selbst) die Jäger-/Beobachter-Ansicht, weil Hunt beim Öffnen des
+// Links eine ANDERE, hier isolierte Identität geladen hätte, deren
+// Fingerprint nie in huntedTeam/hunterTeam vorkommen konnte (s.
+// isHunted()/isHunter() in hunt-lib.mjs) — kein Konfigurations-/
+// Zeitproblem, sondern zwei verschiedene Identitäten für dieselbe Person.
+const IDENTITY_KEY = 'qu-identity';
 
 const el = (id) => document.getElementById(id);
 const statusEl = el('status');
