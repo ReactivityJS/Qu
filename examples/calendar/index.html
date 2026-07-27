@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QU — Beispiel: verschlüsselter, geteilter Kalender</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="/assets/style.css" />
+  <style>
+    .calendar-shell { max-width: 760px; }
+    .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+    .box h3 { margin: 0 0 0.6rem; font-size: 0.95rem; color: var(--accent); }
+    code.fp { display: block; background: #00000066; padding: 0.5rem 0.7rem; border-radius: 6px; font-size: 0.8rem; word-break: break-all; margin: 0.4rem 0; }
+    .top-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 1rem; }
+    .top-bar .push { font-size: 0.75rem; color: var(--muted); display: flex; align-items: center; gap: 0.5rem; }
+    nav.calendar-nav { display: flex; gap: 0.4rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border); }
+    nav.calendar-nav button { background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); font: inherit; padding: 0.55rem 0.4rem; cursor: pointer; }
+    nav.calendar-nav button.active, nav.calendar-nav button:hover { color: var(--accent); border-bottom-color: var(--accent); }
+    .row { display: flex; gap: 0.5rem; align-items: center; }
+    .row input[type="text"] { flex: 1; background: #00000066; border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.6rem; color: var(--text); font-size: 0.85rem; }
+    button { background: var(--accent); color: #0f1115; border: none; border-radius: 6px; padding: 0.45rem 0.9rem; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+    button.danger { background: var(--fail); }
+    .month-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+    .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; font-size: 0.75rem; color: var(--muted); text-align: center; margin-bottom: 4px; }
+    .month-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .day-cell { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; min-height: 76px; padding: 0.3rem; cursor: pointer; font-size: 0.72rem; }
+    .day-cell:hover { border-color: var(--accent); }
+    .day-num { font-weight: 600; margin-bottom: 0.2rem; }
+    .day-event { background: var(--accent); color: #0f1115; border-radius: 4px; padding: 0.1rem 0.3rem; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+    .week-day { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; min-height: 140px; padding: 0.4rem; cursor: pointer; font-size: 0.75rem; }
+    .week-day:hover { border-color: var(--accent); }
+    .week-day-head { font-weight: 600; margin-bottom: 0.3rem; color: var(--muted); }
+    ul#day-events { list-style: none; margin: 0 0 1rem; padding: 0; }
+    ul#day-events li { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; margin-bottom: 0.5rem; cursor: pointer; display: flex; gap: 0.6rem; flex-wrap: wrap; }
+    ul#day-events li:hover { border-color: var(--accent); }
+    .ev-time { color: var(--accent); font-weight: 600; }
+    .ev-meta { font-size: 0.78rem; color: var(--muted); }
+    .ev-desc { white-space: pre-wrap; }
+    #event-form label, #edit-form label { display: block; margin-bottom: 0.6rem; font-size: 0.85rem; }
+    #event-form input[type="text"], #event-form textarea, #edit-form input[type="text"], #edit-form textarea { width: 100%; background: #00000066; border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.6rem; color: var(--text); font-size: 0.85rem; margin-top: 0.2rem; }
+    #time-fields.hidden { display: none; }
+    .back-link { background: none; color: var(--accent); padding: 0; margin-bottom: 0.75rem; }
+    #member-list { list-style: none; padding: 0; margin: 0 0 0.75rem; }
+    #member-list li { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+
+    /* Grid-Ansichten (Monat/Woche) horizontal scrollbar statt gequetscht —
+       dieselbe "breiter Inhalt scrollt in seinem eigenen Container, nie die
+       ganze Seite" Regel wie bei Tabellen/Diagrammen: 7 Spalten unter ~480px
+       Breite wären sonst so schmal, dass Termin-Titel/Datum unlesbar würden.
+       Auf einem Handy in Portrait bleibt die Rasterbreite konstant (480px)
+       und wird per Wischgeste erreicht, statt jede Spalte künstlich zu
+       stauchen. */
+    .grid-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .weekday-row, .month-grid, .week-grid { min-width: 480px; }
+
+    @media (max-width: 640px) {
+      body { padding: 1rem; }
+      h1 { font-size: 1.4rem; }
+      .calendar-shell { max-width: 100%; }
+      .top-bar { flex-direction: column; align-items: stretch; }
+      .top-bar .push { justify-content: space-between; }
+      code.fp { font-size: 0.72rem; }
+      nav.calendar-nav { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; margin-bottom: 1rem; }
+      nav.calendar-nav button { flex: 0 0 auto; padding: 0.6rem 0.55rem; font-size: 0.8rem; }
+      /* 44px Mindest-Touch-Ziel (iOS-Empfehlung), wie examples/chat/style.css es für seine mobile Ansicht bereits durchzieht. */
+      button { min-height: 2.75rem; padding: 0.6rem 1rem; }
+      .row { flex-wrap: wrap; }
+      .month-bar { font-size: 0.9rem; }
+      .month-bar button { min-height: 2.5rem; padding: 0.5rem 0.9rem; }
+      .day-cell { min-height: 60px; font-size: 0.68rem; padding: 0.25rem; }
+      .week-day { min-height: 110px; }
+      ul#day-events li { padding: 0.7rem 0.8rem; }
+      /* 16px verhindert, dass iOS Safari beim Fokussieren eines Feldes automatisch hineinzoomt (dieselbe Regel wie examples/chat/style.css's .composer-Inputs). */
+      #event-form input, #event-form textarea, #edit-form input, #edit-form textarea, .row input[type="text"] { font-size: 16px; }
+      #time-fields label { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+      #time-fields label input { width: auto; flex: 1 1 auto; min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="calendar-shell">
+    <a class="back" href="/docs/examples.html">&larr; Zurück</a>
+    <h1>Verschlüsselter, geteilter Kalender</h1>
+    <p class="lede">
+      Ein Kalender ist ein <code>Space</code> (wie ein Chat-Room), jeder Termin ein Eintrag darin —
+      Monats-/Wochen-/Tagesansicht, Einladung zum Kalender UND getrennt zu einzelnen Terminen, RSVP,
+      Push-Benachrichtigungen bei Änderungen. Details im Kern-Modul
+      <a href="/docs/code.html?file=/src/modules/calendar.js">src/modules/calendar.js</a>.
+    </p>
+    <div id="status" class="chat-status">Verbinde …</div>
+
+    <div class="top-bar">
+      <code class="fp" id="my-fp" style="margin:0">…</code>
+      <div class="push">
+        <span id="push-status">…</span>
+        <button type="button" id="push-toggle-btn">…</button>
+      </div>
+    </div>
+
+    <nav class="calendar-nav">
+      <button type="button" id="nav-month">Monat</button>
+      <button type="button" id="nav-week">Woche</button>
+      <button type="button" id="nav-day">Tag</button>
+      <button type="button" id="nav-settings">Einstellungen</button>
+    </nav>
+
+    <div id="view-root"></div>
+  </main>
+
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
