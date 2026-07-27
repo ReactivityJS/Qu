@@ -39,11 +39,20 @@
     #game-box { display: flex; flex-direction: column; flex: 1; min-height: 0; }
     #map-wrap { position: relative; flex: 1; min-height: 0; margin-bottom: 0.75rem; }
     #map { position: absolute; inset: 0; border-radius: 10px; background: #1c1f28; }
+    /* Status-Badge: <qu-view key="status"> setzt nur `data-state` (siehe
+       app.mjs) — Farbe UND deutsches Label kommen komplett aus CSS, damit
+       der reale Zustand (Qu) und seine Darstellung nie auseinanderlaufen
+       können, ohne dass dafür ein JS-Callback nötig wäre. */
     .badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
-    .badge.active { background: #4ade8033; color: var(--pass); }
-    .badge.caught { background: #f8717133; color: var(--fail); }
-    .badge.ended { background: #9aa2b133; color: var(--muted); }
+    .badge[data-state="active"] { background: #4ade8033; color: var(--pass); }
+    .badge[data-state="caught"] { background: #f8717133; color: var(--fail); }
+    .badge[data-state="ended"] { background: #9aa2b133; color: var(--muted); }
+    .badge::after { content: attr(data-state); }
+    .badge[data-state="active"]::after { content: "aktiv"; }
+    .badge[data-state="caught"]::after { content: "gefangen"; }
+    .badge[data-state="ended"]::after { content: "beendet"; }
     .hidden { display: none; }
+    .fp-list { display: block; word-break: break-all; font-size: 0.72rem; color: var(--muted); }
 
     .stat-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
     .stat-tile { flex: 1; min-width: 110px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.7rem; }
@@ -71,14 +80,10 @@
     .checkbox-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; }
     .checkbox-row label { margin: 0; }
 
-    /* Team-Übersicht im laufenden Spiel */
+    /* Team-Übersicht im laufenden Spiel — direkt aus <qu-list>/<qu-view> befüllt, siehe die <template>s am Ende der Seite. */
     .team-list { list-style: none; margin: 0.4rem 0 0; padding: 0; }
-    .team-list > li { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.4rem; overflow: hidden; }
-    .team-summary { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.7rem; cursor: pointer; font-size: 0.85rem; }
-    .team-summary .swatch { display: inline-block; width: 0.7em; height: 0.7em; border-radius: 50%; margin-right: 0.4em; }
-    .team-members { padding: 0 0.7rem 0.6rem; font-size: 0.75rem; color: var(--muted); }
-    .team-members code { display: block; word-break: break-all; margin: 0.15rem 0; }
-    .team-members.hidden { display: none; }
+    .team-list > li { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.4rem; padding: 0.5rem 0.7rem; font-size: 0.85rem; }
+    .team-summary { font-weight: 600; margin-bottom: 0.2rem; }
   </style>
 </head>
 <body>
@@ -87,10 +92,13 @@
       <a class="back" href="/docs/examples.html">&larr; Zurück</a>
       <h1>Geo Chase</h1>
       <p class="lede">
-        Ein gejagtes Team meldet in einem einstellbaren Abstand (Standard: 5 Minuten) seinen Standort;
-        ein oder mehrere Fänger-Teams sehen die Punkte als nachgezeichneten Weg auf der Karte, inklusive
-        eines geschätzten Radius für die nächste vermutete Position. Logik in
-        <a href="/docs/code.html?file=/examples/hunt-lib.mjs">hunt-lib.mjs</a>, hier nur die Oberfläche.
+        Ein gejagtes Team meldet in einem einstellbaren Abstand seinen Standort (Voreinstellung: siehe
+        Formular unten); ein oder mehrere Fänger-Teams sehen die Punkte als nachgezeichneten Weg auf der
+        Karte, inklusive eines geschätzten Radius für die nächste vermutete Position. Logik in
+        <a href="/docs/code.html?file=/examples/hunt-lib.mjs">hunt-lib.mjs</a>, hier nur die Oberfläche —
+        Werte wie Status/Konfiguration werden im Template direkt per
+        <a href="/docs/code.html?file=/src/ui/components.js"><code>&lt;qu-view&gt;</code>/<code>&lt;qu-list&gt;</code></a>
+        aus dem Space gelesen, nicht im HTML hinterlegt.
       </p>
       <div id="status" class="chat-status">Verbinde …</div>
 
@@ -103,12 +111,17 @@
         <h2>Neues Spiel erstellen</h2>
         <p>Du bist automatisch Teil des gejagten Teams.</p>
 
+        <!-- Keine value="…"-Attribute hier: die Vorgaben kommen zur
+             Laufzeit aus hunt-lib.mjs's DEFAULT_*-Konstanten (app.mjs),
+             damit es nur eine einzige Quelle für "was ein neues Spiel ohne
+             Angabe annimmt" gibt statt einer zweiten, separat gepflegten
+             Kopie im HTML. -->
         <label for="ping-interval">Ping-Abstand gejagtes Team (Minuten)</label>
-        <input type="number" id="ping-interval" value="2" min="1" step="1" />
+        <input type="number" id="ping-interval" min="1" step="1" />
         <label for="assumed-speed">Angenommene Geschwindigkeit ohne Bewegungshistorie (m/s)</label>
-        <input type="number" id="assumed-speed" value="1.4" min="0" step="0.1" />
+        <input type="number" id="assumed-speed" min="0" step="0.1" />
         <label for="catch-radius">Fangradius — wie nah ein Fänger sein muss (Meter)</label>
-        <input type="number" id="catch-radius" value="50" min="1" step="1" />
+        <input type="number" id="catch-radius" min="1" step="1" />
 
         <div id="hunter-teams-list"></div>
         <button id="add-team-btn" type="button" class="secondary">+ Fänger-Team hinzufügen</button>
@@ -119,7 +132,7 @@
         </div>
         <div id="hunter-tracking-options" class="hidden">
           <label for="hunter-ping-interval">Ping-Abstand Fänger-Teams (Minuten)</label>
-          <input type="number" id="hunter-ping-interval" value="5" min="1" step="1" />
+          <input type="number" id="hunter-ping-interval" min="1" step="1" />
           <div class="checkbox-row">
             <input type="checkbox" id="show-distance-toggle" />
             <label for="show-distance-toggle">Dem gejagten Team den Abstand zu den Fängern anzeigen</label>
@@ -141,7 +154,7 @@
 
     <div class="box hidden" id="game-box">
       <h2 style="flex-shrink:0; display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
-        <span>Status: <span id="game-status" class="badge">…</span></span>
+        <span>Status: <span id="game-status-slot"></span></span>
         <button id="share-btn-ingame" type="button" class="hidden" style="margin:0; padding:0.4rem 0.7rem; font-size:0.8rem;">Spiel teilen</button>
       </h2>
 
@@ -150,15 +163,15 @@
           <h2 id="teams-toggle" style="cursor:pointer">Teams anzeigen ▾</h2>
           <div id="teams-content" class="hidden">
             <p><strong>Gejagtes Team</strong></p>
-            <ul class="team-list" id="hunted-team-list"></ul>
+            <div id="hunted-team-slot"></div>
             <p><strong>Fänger-Teams</strong></p>
-            <ul class="team-list" id="hunter-teams-display"></ul>
+            <ul class="team-list" id="hunter-teams-slot"></ul>
           </div>
         </div>
 
         <div id="hunted-controls" class="box hidden">
           <p>Du bist Teil des <strong>gejagten Teams</strong> — dein Standort wird alle
-          <span id="interval-label">5</span> Minuten automatisch gemeldet, solange Tracking aktiv ist.</p>
+          <span id="interval-label-slot"></span> Minuten automatisch gemeldet, solange Tracking aktiv ist.</p>
           <button id="track-btn" type="button">Tracking starten</button>
           <p id="last-ping-info"></p>
           <p id="next-ping-info"></p>
@@ -181,7 +194,7 @@
 
           <div id="hunter-tracking-controls" class="hidden">
             <p>Dieses Spiel zeigt auch Fänger-Positionen auf der Karte — dein eigener Standort wird alle
-            <span id="hunter-interval-label">5</span> Minuten geteilt, solange aktiv.</p>
+            <span id="hunter-interval-label-slot"></span> Minuten geteilt, solange aktiv.</p>
             <button id="hunter-track-btn" type="button">Standort teilen: starten</button>
             <p id="hunter-last-ping-info"></p>
             <p id="hunter-next-ping-info"></p>
@@ -210,6 +223,39 @@
       <label>Fingerprints (kommagetrennt, optional — auch später per Link beitreten)</label>
       <input type="text" class="team-members" placeholder="z. B. 3e19cdff…, a1b2c3d4…" />
     </div>
+  </template>
+
+  <!-- Qu-Components (src/ui/components.js): erst NACH dem Setzen von
+       `gameBox.qu` (app.mjs's openGame()) aus diesen <template>s geklont und
+       eingehängt — ein <qu-view>/<qu-list>, das schon beim Seitenaufbau
+       verbunden wäre, hätte zu diesem Zeitpunkt noch keinen `.qu`-Kontext
+       (der wird erst nach Identität/Verbindung/Sync bekannt) und würde die
+       eine automatische Nachversuch-Runde verpassen, siehe deren eigene
+       Doku (ui/components.js's `_mount()`). Erst anhängen, wenn `.qu`
+       bereits steht, ist dieselbe Reihenfolge, die die Komponenten selbst
+       überall sonst voraussetzen (z. B. docs/lab/labs/
+       05-references-practice.mjs). -->
+  <template id="status-badge-template">
+    <qu-view class="badge" key="status" attr="data-state"></qu-view>
+  </template>
+  <template id="interval-minutes-template">
+    <qu-view key="config/pingIntervalMinutes"></qu-view>
+  </template>
+  <template id="hunter-interval-minutes-template">
+    <qu-view key="config/hunterPingIntervalMinutes"></qu-view>
+  </template>
+  <template id="hunted-team-template">
+    <qu-view key="huntedTeam" class="fp-list"></qu-view>
+  </template>
+  <template id="hunter-teams-list-template">
+    <qu-list path="hunterTeams">
+      <template>
+        <li>
+          <div class="team-summary"><qu-view key="label"></qu-view></div>
+          <div class="team-members"><qu-view key="members" class="fp-list"></qu-view></div>
+        </li>
+      </template>
+    </qu-list>
   </template>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>

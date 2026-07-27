@@ -34,9 +34,14 @@
 // einzige Subscription liefert bereits Vorhandenes UND künftige Änderungen.
 import { viewKey, viewObject } from '../src/index.js';
 
-const DEFAULT_PING_INTERVAL_MS = 2 * 60_000;
-const DEFAULT_ASSUMED_SPEED_MPS = 1.4; // ruhiges Gehtempo, als Fallback ohne Bewegungshistorie
-const DEFAULT_CATCH_RADIUS_M = 50; // wie nah ein Fänger dem gejagten Team sein muss, um "gefangen" erklären zu dürfen
+// Exportiert (nicht nur modulintern), damit die UI (examples/hunt/app.mjs)
+// ihre Formular-Vorgaben von HIER liest statt sie ein zweites Mal als
+// hartkodierten HTML-Attributwert zu duplizieren — eine einzige Quelle für
+// "was ein neues Spiel ohne explizite Angabe annimmt".
+export const DEFAULT_PING_INTERVAL_MS = 2 * 60_000;
+export const DEFAULT_HUNTER_PING_INTERVAL_MS = 4 * 60_000; // nur relevant, wenn das Feature "Fänger auf der Karte" aktiviert wird
+export const DEFAULT_ASSUMED_SPEED_MPS = 1.4; // ruhiges Gehtempo, als Fallback ohne Bewegungshistorie
+export const DEFAULT_CATCH_RADIUS_M = 50; // wie nah ein Fänger dem gejagten Team sein muss, um "gefangen" erklären zu dürfen
 
 const EARTH_RADIUS_M = 6_371_000;
 const toRad = (deg) => (deg * Math.PI) / 180;
@@ -55,9 +60,27 @@ export function haversineMeters(a, b) {
  * Legt ein neues Spiel an: ein Space, dessen Writer das gejagte Team UND
  * alle Fänger-Teams sind (s.o.), `readers: ['*']` per Default (Link =
  * Zugang, wie beim offenen Forum-Board) — für ein privates Spiel eine
- * konkrete Liste übergeben. `hunterTeams`: `[{ label, members: [fp,...] }]`
- * — jedes Team bekommt eine eigene, generierte `id` (für hunterTeamOf()/die
- * Team-Anzeige), unabhängig davon, ob `id` schon mitgegeben wurde.
+ * konkrete Liste übergeben. `hunterTeams`: `[{ label, members: [fp,...] }]`.
+ *
+ * Jedes Konfig-Feld ist eine EIGENE Leaf-QuBit unter `config/<feld>`
+ * (`config/pingIntervalMinutes`, nicht ein einzelnes `config`-Objekt mit
+ * allen Feldern zusammen) — genau das "jedes Feld seine eigene Leaf-QuBit"-
+ * Prinzip, das bindings.js/README für unabhängig beobachtbare Felder
+ * empfiehlt. Der Grund ist hier kein Schreibkonflikt (wie beim
+ * ursprünglichen Anwendungsfall in bindObject()), sondern Lesbarkeit:
+ * examples/hunt/index.html bindet `<qu-view key="config/pingIntervalMinutes">`
+ * direkt an genau dieses eine Feld — ein zusammengesetztes Objekt könnte ein
+ * `<qu-view>` nicht sinnvoll direkt anzeigen (siehe ui/components.js'
+ * Doku: "ein Item, dessen Felder in EINER kombinierten QuBit liegen ... hat
+ * keine rein deklarative Antwort"). Minuten (nicht Millisekunden) sind hier
+ * bewusst die gespeicherte Einheit — das ist genau die Zahl, die sowohl das
+ * Formular entgegennimmt als auch die Anzeige zeigen soll, keine Umrechnung
+ * nötig, um sie dazustellen. `hunterTeams` ist aus demselben Grund eine
+ * wachsende Collection (`hunterTeams/<teamId>/label` + `.../members`, per
+ * `set()`-artigem generiertem `teamId` statt eines einzelnen Array-Felds) —
+ * das macht `<qu-list path="hunterTeams">` direkt im Template möglich (siehe
+ * ui/components.js' `<qu-list>`-Doku).
+ *
  * Rückgabe: die Space-Id (für den Einladungslink an alle Teams).
  */
 export async function createGame(qu, {
@@ -76,12 +99,7 @@ export async function createGame(qu, {
   catchRadiusMeters = DEFAULT_CATCH_RADIUS_M,
   label = null,
 } = {}) {
-  const normalizedTeams = hunterTeams.map((t) => ({
-    id: t.id ?? crypto.randomUUID(),
-    label: t.label || 'Fänger-Team',
-    members: t.members ?? [],
-  }));
-  const allHunterFps = normalizedTeams.flatMap((t) => t.members);
+  const allHunterFps = hunterTeams.flatMap((t) => t.members ?? []);
   // Der/die Erzeuger:in (Admin, s.u.) braucht selbst Schreibrecht für
   // `config`/`status`, auch falls sie/er keinem der Teams angehört (z. B.
   // eine Spielleitung, die das Spiel nur aufsetzt) — anders als beim
@@ -91,10 +109,19 @@ export async function createGame(qu, {
   const writers = [...new Set([qu.fingerprint, ...huntedTeam, ...allHunterFps])];
   const space = qu.createSpace({ writers, readers });
   await space.ready;
-  await space.get('config').put({
-    huntedTeam, hunterTeams: normalizedTeams, pingIntervalMs, assumedSpeedMps,
-    hunterPingIntervalMs, showDistanceToHunted, catchRadiusMeters, label,
-  });
+
+  await space.get('huntedTeam').put(huntedTeam);
+  await space.get('config/pingIntervalMinutes').put(Math.round(pingIntervalMs / 60_000));
+  await space.get('config/assumedSpeedMps').put(assumedSpeedMps);
+  await space.get('config/catchRadiusMeters').put(catchRadiusMeters);
+  await space.get('config/hunterPingIntervalMinutes').put(hunterPingIntervalMs ? Math.round(hunterPingIntervalMs / 60_000) : null);
+  await space.get('config/showDistanceToHunted').put(showDistanceToHunted);
+  await space.get('config/label').put(label);
+  for (const t of hunterTeams) {
+    const teamId = crypto.randomUUID();
+    await space.get(`hunterTeams/${teamId}/label`).put(t.label || 'Fänger-Team');
+    await space.get(`hunterTeams/${teamId}/members`).put(t.members ?? []);
+  }
   // Ein einzelner String, kein `{ state, by }`-Objekt: WER den Status
   // gesetzt hat, steht bereits verifiziert im Qubit selbst (`.writer`,
   // siehe Session/Verify) — ein zusätzliches `by`-Feld wäre nur eine
@@ -104,10 +131,38 @@ export async function createGame(qu, {
   return space.id;
 }
 
-/** `{ huntedTeam, hunterTeams, pingIntervalMs, assumedSpeedMps, hunterPingIntervalMs, showDistanceToHunted, catchRadiusMeters, label }` — `null`, falls (noch) nicht sichtbar. */
+/**
+ * `{ huntedTeam, hunterTeams, pingIntervalMs, assumedSpeedMps,
+ * hunterPingIntervalMs, showDistanceToHunted, catchRadiusMeters, label }` —
+ * `null`, falls (noch) nicht sichtbar. Baut das zusammengesetzte Bild aus
+ * den einzelnen Leaf-QuBits zusammen (siehe createGame()-Doku), für Code,
+ * der (anders als ein `<qu-view>` im Template) eine fertige Konfiguration
+ * auf einmal braucht (predictNextRadius(), declareCaught(), …) — Minuten
+ * werden hier zurück in Millisekunden gewandelt, die interne Einheit, die
+ * der Rest dieser Datei (setInterval-taugliche Werte) erwartet.
+ */
 export async function getConfig(qu, gameId) {
-  const q = await qu.get(`${gameId}/config`);
-  return q?.value ?? null;
+  const huntedTeamQ = await qu.get(`${gameId}/huntedTeam`);
+  if (!huntedTeamQ) return null; // Space (für diesen Client) noch nicht sichtbar
+  const [pingIntervalMinutesQ, assumedSpeedMpsQ, catchRadiusMetersQ, hunterPingIntervalMinutesQ, showDistanceToHuntedQ, labelQ, hunterTeams] = await Promise.all([
+    qu.get(`${gameId}/config/pingIntervalMinutes`),
+    qu.get(`${gameId}/config/assumedSpeedMps`),
+    qu.get(`${gameId}/config/catchRadiusMeters`),
+    qu.get(`${gameId}/config/hunterPingIntervalMinutes`),
+    qu.get(`${gameId}/config/showDistanceToHunted`),
+    qu.get(`${gameId}/config/label`),
+    listHunterTeams(qu, gameId),
+  ]);
+  return {
+    huntedTeam: huntedTeamQ.value,
+    hunterTeams,
+    pingIntervalMs: (pingIntervalMinutesQ?.value ?? DEFAULT_PING_INTERVAL_MS / 60_000) * 60_000,
+    assumedSpeedMps: assumedSpeedMpsQ?.value ?? DEFAULT_ASSUMED_SPEED_MPS,
+    catchRadiusMeters: catchRadiusMetersQ?.value ?? DEFAULT_CATCH_RADIUS_M,
+    hunterPingIntervalMs: hunterPingIntervalMinutesQ?.value ? hunterPingIntervalMinutesQ.value * 60_000 : null,
+    showDistanceToHunted: showDistanceToHuntedQ?.value ?? false,
+    label: labelQ?.value ?? null,
+  };
 }
 
 /** `'active'|'caught'|'ended'` — `null`, falls (noch) nicht sichtbar. */
@@ -145,10 +200,28 @@ export async function isHunter(qu, gameId) {
   return hunterTeamOf(config, qu.fingerprint) !== null;
 }
 
-/** Alle Fänger-Teams (`[{ id, label, members }]`) — für eine Team-Übersicht in der UI. Leer, falls `config` (noch) nicht sichtbar. */
+/**
+ * Alle Fänger-Teams (`[{ id, label, members }]`) — für eine Team-Übersicht
+ * in der UI (`<qu-list path="hunterTeams">` im Browser, siehe
+ * createGame()-Doku; diese Funktion ist das Node-taugliche Gegenstück
+ * für Code, das die ganze Liste auf einmal braucht). Jedes Team ist zwei
+ * Leaf-QuBits (`hunterTeams/<teamId>/label` + `.../members`) — hier wieder
+ * zu einem Objekt pro Team zusammengefasst, exakt das Muster, das
+ * `<qu-list>`s eigene `itemIdOf()`/`deep: true`-Gruppierung intern auch
+ * verwendet (ui/components.js). Leer, falls der Space (noch) nicht
+ * sichtbar ist.
+ */
 export async function listHunterTeams(qu, gameId) {
-  const config = await getConfig(qu, gameId);
-  return config?.hunterTeams ?? [];
+  const prefix = `${gameId}/hunterTeams`;
+  const rows = await qu.session.query(`${prefix}/**`);
+  const byId = new Map();
+  for (const q of rows) {
+    const [teamId, field] = q.id.slice(prefix.length + 1).split('/');
+    const entry = byId.get(teamId) ?? { id: teamId, label: 'Fänger-Team', members: [] };
+    entry[field] = q.value;
+    byId.set(teamId, entry);
+  }
+  return [...byId.values()];
 }
 
 /**

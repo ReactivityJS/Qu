@@ -5,12 +5,21 @@
 // im selben Stil wie examples/forum/app.mjs.
 //
 // Reaktiv im Qu-Sinne heißt hier: KEIN Codepfad liest einmal und abonniert
-// dann separat noch einmal (das exakte Muster, das viewKey()/viewObject()
-// existieren, um zu vermeiden — siehe docs/lab/labs/
-// 05-references-practice.mjs) — Status kommt über watchStatus(), Pings über
-// watchPings()/watchHunterPings(), alle liefern bereits Vorhandenes UND
-// künftige Änderungen über EINE Subscription. Und kein `location.reload()`
-// als Ersatz für "jetzt mit einer neuen Id weitermachen" — ein frisch
+// dann separat noch einmal, und keine zwei unabhängigen Stellen pflegen
+// dieselbe Tatsache doppelt. Status, Ping-Intervalle und Teams sind direkt
+// als `<qu-view>`/`<qu-list>` (src/ui/components.js) im Template gebunden
+// (siehe index.html's <template>s + openGame() unten) — kein JS liest
+// diese Werte, formatiert sie und schreibt sie in den DOM, das übernehmen
+// die Komponenten selbst, direkt aus dem Space. Wo ein `<qu-view>` nicht
+// reicht (Pings/Fänger-Positionen sind eine wachsende Collection mit
+// Kartenmarkern statt eines einzelnen Textwerts), bauen watchPings()/
+// watchHunterPings() (hunt-lib.mjs) auf `viewObject()` auf — dieselbe eine
+// Subscription liefert bereits Vorhandenes UND künftige Änderungen, nie ein
+// separates "einmal laden" davor. Auch die "Zuletzt gemeldet"-Anzeigen
+// unten lesen NUR aus dieser einen Ping-Historie (pingsTracker/
+// hunterPingsTracker), nicht aus einer zweiten, separat in sendPing()
+// gepflegten Kopie derselben Tatsache. Und kein `location.reload()` als
+// Ersatz für "jetzt mit einer neuen Id weitermachen" — ein frisch
 // erstelltes Spiel geht direkt in openGame() über, ohne die Seite neu zu
 // laden. Ein Reload passiert genau EINMAL bewusst: beim "Spiel beenden"
 // des gejagten Teams — dort ist es keine Abkürzung, sondern die simpelste
@@ -37,10 +46,12 @@
 // Vordergrund halten (siehe #screen-hint in index.html).
 
 import { createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../../src/index.js';
+import '../../src/ui/components.js'; // Seiteneffekt: registriert <qu-view>/<qu-bind>/<qu-list>
 import {
-  createGame, getConfig, watchStatus, isHunted, hunterTeamOf,
+  createGame, getConfig, isHunted, hunterTeamOf,
   pingLocation, watchPings, pingHunterLocation, watchHunterPings, nearestHunterDistance,
   declareCaught, endGame, predictNextRadius, haversineMeters,
+  DEFAULT_PING_INTERVAL_MS, DEFAULT_HUNTER_PING_INTERVAL_MS, DEFAULT_ASSUMED_SPEED_MPS, DEFAULT_CATCH_RADIUS_M,
 } from '../hunt-lib.mjs';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import { parseHashRoute, buildHashRoute } from '../space-app-lib.mjs';
@@ -82,14 +93,14 @@ const shareBtn = el('share-btn');
 const shareBtnInGame = el('share-btn-ingame');
 const installBtn = el('install-btn');
 const gameBox = el('game-box');
-const gameStatusEl = el('game-status');
+const gameStatusSlotEl = el('game-status-slot');
 const teamsBox = el('teams-box');
 const teamsToggle = el('teams-toggle');
 const teamsContent = el('teams-content');
-const huntedTeamListEl = el('hunted-team-list');
-const hunterTeamsDisplayEl = el('hunter-teams-display');
+const huntedTeamSlotEl = el('hunted-team-slot');
+const hunterTeamsSlotEl = el('hunter-teams-slot');
 const huntedControls = el('hunted-controls');
-const intervalLabelEl = el('interval-label');
+const intervalLabelSlotEl = el('interval-label-slot');
 const trackBtn = el('track-btn');
 const lastPingInfoEl = el('last-ping-info');
 const nextPingInfoEl = el('next-ping-info');
@@ -104,17 +115,21 @@ const proximityValueEl = el('proximity-value');
 const caughtBtn = el('caught-btn');
 const catchRangeInfoEl = el('catch-range-info');
 const hunterTrackingControlsDiv = el('hunter-tracking-controls');
-const hunterIntervalLabelEl = el('hunter-interval-label');
+const hunterIntervalLabelSlotEl = el('hunter-interval-label-slot');
 const hunterTrackBtn = el('hunter-track-btn');
 const hunterLastPingInfoEl = el('hunter-last-ping-info');
 const hunterNextPingInfoEl = el('hunter-next-ping-info');
 const mapEl = el('map');
 const wakeLockToggle = el('wakelock-toggle');
 
-function setStatusBadge(state) {
-  gameStatusEl.textContent = { active: 'aktiv', caught: 'gefangen', ended: 'beendet' }[state] ?? state;
-  gameStatusEl.className = `badge ${state}`;
-}
+// Qu-Component-<template>s (siehe index.html) — erst NACH `gameBox.qu = ...`
+// geklont/eingehängt, siehe openGame() unten und der Kommentar bei den
+// <template>s selbst.
+const statusBadgeTemplate = el('status-badge-template');
+const intervalMinutesTemplate = el('interval-minutes-template');
+const hunterIntervalMinutesTemplate = el('hunter-interval-minutes-template');
+const huntedTeamTemplate = el('hunted-team-template');
+const hunterTeamsListTemplate = el('hunter-teams-list-template');
 
 function parseFingerprintList(text) {
   return text.split(',').map((s) => s.trim()).filter(Boolean);
@@ -134,47 +149,6 @@ function fmtDistance(meters) {
 function colorForTeam(config, teamId) {
   const idx = config.hunterTeams.findIndex((t) => t.id === teamId);
   return TEAM_COLORS[idx % TEAM_COLORS.length] ?? '#94a3b8';
-}
-
-/** Eine `<code>`-Zeile je Fingerprint — reine DOM-Konstruktion (kein innerHTML), da Team-Labels/Fingerprints letztlich frei eingegeben werden. */
-function appendFingerprintList(container, fingerprints) {
-  if (!fingerprints.length) {
-    container.appendChild(Object.assign(document.createElement('em'), { textContent: 'noch niemand beigetreten' }));
-    return;
-  }
-  for (const fp of fingerprints) container.appendChild(Object.assign(document.createElement('code'), { textContent: fp }));
-}
-
-/** Eine auf-/zuklappbare Team-Zeile (Zusammenfassung + Mitglieder-Fingerprints) — für sowohl das gejagte Team als auch jedes Fänger-Team. */
-function buildTeamListItem({ title, members, swatchColor }) {
-  const li = document.createElement('li');
-  const summary = document.createElement('div');
-  summary.className = 'team-summary';
-  if (swatchColor) {
-    const swatch = document.createElement('span');
-    swatch.className = 'swatch';
-    swatch.style.background = swatchColor;
-    summary.appendChild(swatch);
-  }
-  summary.appendChild(document.createTextNode(`${title} (${members.length})`));
-  const membersEl = document.createElement('div');
-  membersEl.className = 'team-members hidden';
-  appendFingerprintList(membersEl, members);
-  summary.addEventListener('click', () => membersEl.classList.toggle('hidden'));
-  li.append(summary, membersEl);
-  return li;
-}
-
-function renderTeams(config) {
-  teamsBox.classList.remove('hidden');
-  huntedTeamListEl.textContent = '';
-  huntedTeamListEl.appendChild(buildTeamListItem({ title: 'Gejagtes Team', members: config.huntedTeam }));
-
-  hunterTeamsDisplayEl.textContent = '';
-  for (const team of config.hunterTeams) {
-    hunterTeamsDisplayEl.appendChild(buildTeamListItem({ title: team.label, members: team.members, swatchColor: colorForTeam(config, team.id) }));
-  }
-  teamsToggle.addEventListener('click', () => teamsContent.classList.toggle('hidden'));
 }
 
 /**
@@ -414,6 +388,15 @@ async function main() {
     hunterTrackingOptionsDiv.classList.toggle('hidden', !hunterTrackingEnabledCheckbox.checked);
   });
 
+  // Formular-Vorgaben kommen aus hunt-lib.mjs's DEFAULT_*-Konstanten, nicht
+  // aus hartkodierten `value="…"`-Attributen in index.html (siehe dortiger
+  // Kommentar) — eine einzige Quelle für "was ein neues Spiel ohne
+  // Angabe annimmt".
+  pingIntervalInput.value = String(DEFAULT_PING_INTERVAL_MS / 60_000);
+  assumedSpeedInput.value = String(DEFAULT_ASSUMED_SPEED_MPS);
+  catchRadiusInput.value = String(DEFAULT_CATCH_RADIUS_M);
+  hunterPingIntervalInput.value = String(DEFAULT_HUNTER_PING_INTERVAL_MS / 60_000);
+
   const qu = (await loadOrCreateIdentity(IDENTITY_KEY)).use(createNetworkPlugin()).use(createSpacesPlugin());
   myFpEl.textContent = qu.fingerprint;
 
@@ -439,11 +422,11 @@ async function main() {
     createGameBtn.addEventListener('click', async () => {
       createGameBtn.disabled = true;
       const hunterTeams = collectHunterTeams();
-      const pingIntervalMs = Math.max(1, Number(pingIntervalInput.value) || 5) * 60_000;
-      const assumedSpeedMps = Math.max(0, Number(assumedSpeedInput.value) || 1.4);
-      const catchRadiusMeters = Math.max(1, Number(catchRadiusInput.value) || 50);
+      const pingIntervalMs = Math.max(1, Number(pingIntervalInput.value) || DEFAULT_PING_INTERVAL_MS / 60_000) * 60_000;
+      const assumedSpeedMps = Math.max(0, Number(assumedSpeedInput.value) || DEFAULT_ASSUMED_SPEED_MPS);
+      const catchRadiusMeters = Math.max(1, Number(catchRadiusInput.value) || DEFAULT_CATCH_RADIUS_M);
       const hunterTrackingEnabled = hunterTrackingEnabledCheckbox.checked;
-      const hunterPingIntervalMs = hunterTrackingEnabled ? Math.max(1, Number(hunterPingIntervalInput.value) || 5) * 60_000 : null;
+      const hunterPingIntervalMs = hunterTrackingEnabled ? Math.max(1, Number(hunterPingIntervalInput.value) || DEFAULT_HUNTER_PING_INTERVAL_MS / 60_000) * 60_000 : null;
       const showDistanceToHunted = hunterTrackingEnabled && showDistanceToggle.checked;
       const newGameId = await createGame(qu, {
         huntedTeam: [qu.fingerprint], hunterTeams, pingIntervalMs, assumedSpeedMps,
@@ -481,9 +464,20 @@ async function main() {
       return;
     }
 
-    intervalLabelEl.textContent = String(Math.round(config.pingIntervalMs / 60_000));
-    renderTeams(config);
-    watchStatus(qu, id, (state) => setStatusBadge(state));
+    // `gameBox.qu` MUSS gesetzt sein, BEVOR irgendein <qu-view>/<qu-list>
+    // darunter verbunden wird (siehe ui/components.js's Doku) — deshalb
+    // werden die Qu-Component-<template>s aus index.html erst JETZT
+    // geklont/eingehängt, nicht schon als statisches Markup beim Laden der
+    // Seite. Status, Ping-Intervalle und Teams stehen danach rein
+    // deklarativ da: kein watchStatus()/renderTeams()-Aufruf hier mehr,
+    // <qu-view>/<qu-list> lesen/aktualisieren sich selbst.
+    gameBox.qu = qu.get(id);
+    gameStatusSlotEl.appendChild(statusBadgeTemplate.content.cloneNode(true));
+    intervalLabelSlotEl.appendChild(intervalMinutesTemplate.content.cloneNode(true));
+    huntedTeamSlotEl.appendChild(huntedTeamTemplate.content.cloneNode(true));
+    hunterTeamsSlotEl.appendChild(hunterTeamsListTemplate.content.cloneNode(true));
+    teamsBox.classList.remove('hidden');
+    teamsToggle.addEventListener('click', () => teamsContent.classList.toggle('hidden'));
 
     const hunted = await isHunted(qu, id);
     const hunterTeam = hunterTeamOf(config, qu.fingerprint);
@@ -511,7 +505,7 @@ async function main() {
 
     if (hunted) {
       huntedControls.classList.remove('hidden');
-      setupHuntedControls(qu, id, config, hunterPingsTracker, ownPositionTracker);
+      setupHuntedControls(qu, id, config, pingsTracker, hunterPingsTracker, ownPositionTracker);
       endGameBtn.addEventListener('click', async () => {
         endGameBtn.disabled = true;
         await endGame(qu, id);
@@ -529,8 +523,8 @@ async function main() {
         setupCaughtButton(qu, id, config, pingsTracker, ownPositionTracker);
         if (config.hunterPingIntervalMs) {
           hunterTrackingControlsDiv.classList.remove('hidden');
-          hunterIntervalLabelEl.textContent = String(Math.round(config.hunterPingIntervalMs / 60_000));
-          setupHunterTrackingControls(qu, id, config, ownPositionTracker);
+          hunterIntervalLabelSlotEl.appendChild(hunterIntervalMinutesTemplate.content.cloneNode(true));
+          setupHunterTrackingControls(qu, id, config, hunterPingsTracker, ownPositionTracker);
         }
       }
     }
@@ -539,23 +533,34 @@ async function main() {
 
 // --- Gejagtes Team: Geolocation + periodisches Pingen + optionale
 // Abstands-Anzeige zu den Fängern (Feature `showDistanceToHunted`). ---
-function setupHuntedControls(qu, gameId, config, hunterPingsTracker, ownPositionTracker) {
+function setupHuntedControls(qu, gameId, config, pingsTracker, hunterPingsTracker, ownPositionTracker) {
   let intervalId = null;
   let countdownId = null;
   let tracking = false;
-  let lastPingAt = null;
+  let lastOwnPingTs = null;
+
+  // "Zuletzt gemeldet" kommt AUSSCHLIESSLICH aus der bereits laufenden
+  // Ping-Historie (pingsTracker, dieselbe Subscription, die auch die Karte
+  // speist) — nicht aus einer zweiten, in sendPing() separat gepflegten
+  // Kopie derselben Tatsache. Ein eigener Ping kommt so oder so über
+  // dieselbe watchPings()-Subscription zurück (auch der eigene, siehe
+  // deren viewObject()-Basis), es gibt also nichts, das hier zusätzlich
+  // "gemerkt" werden müsste.
+  pingsTracker.onPing((q) => {
+    if (q.writer !== qu.fingerprint) return;
+    lastOwnPingTs = q.ts;
+    lastPingInfoEl.textContent = `Zuletzt gemeldet: ${new Date(q.ts).toLocaleTimeString()} (${q.value.lat.toFixed(5)}, ${q.value.lon.toFixed(5)})`;
+  });
 
   async function sendPing() {
     const position = ownPositionTracker.getPosition();
     if (!position) return;
     await pingLocation(qu, gameId, { lat: position.lat, lon: position.lon, accuracy: position.accuracy, speedMps: position.speedMps });
-    lastPingAt = Date.now();
-    lastPingInfoEl.textContent = `Zuletzt gemeldet: ${new Date(lastPingAt).toLocaleTimeString()} (${position.lat.toFixed(5)}, ${position.lon.toFixed(5)})`;
   }
 
   function renderCountdown() {
-    if (!lastPingAt) { nextPingInfoEl.textContent = ''; return; }
-    const remaining = Math.max(0, config.pingIntervalMs - (Date.now() - lastPingAt));
+    if (!lastOwnPingTs) { nextPingInfoEl.textContent = ''; return; }
+    const remaining = Math.max(0, config.pingIntervalMs - (Date.now() - lastOwnPingTs));
     nextPingInfoEl.textContent = remaining > 0 ? `Nächste Meldung in ${fmtDuration(remaining / 1000)}` : 'Meldung läuft …';
   }
 
@@ -633,23 +638,30 @@ function setupCaughtButton(qu, gameId, config, pingsTracker, ownPositionTracker)
 
 // --- Fänger-Team: eigenes Standort-Teilen, nur falls das Spiel
 // `hunterPingIntervalMs` gesetzt hat (Feature "Fänger auf der Karte"). ---
-function setupHunterTrackingControls(qu, gameId, config, ownPositionTracker) {
+function setupHunterTrackingControls(qu, gameId, config, hunterPingsTracker, ownPositionTracker) {
   let intervalId = null;
   let countdownId = null;
   let tracking = false;
-  let lastPingAt = null;
+  let lastOwnPingTs = null;
+
+  // "Zuletzt geteilt" kommt AUSSCHLIESSLICH aus der bereits laufenden
+  // Fänger-Ping-Historie (hunterPingsTracker) — dieselbe Begründung wie bei
+  // setupHuntedControls() oben, keine zweite, separat gepflegte Kopie.
+  hunterPingsTracker.onHunterPing((writer, q) => {
+    if (writer !== qu.fingerprint) return;
+    lastOwnPingTs = q.ts;
+    hunterLastPingInfoEl.textContent = `Zuletzt geteilt: ${new Date(q.ts).toLocaleTimeString()}`;
+  });
 
   async function sendPing() {
     const position = ownPositionTracker.getPosition();
     if (!position) return;
     await pingHunterLocation(qu, gameId, { lat: position.lat, lon: position.lon, accuracy: position.accuracy, speedMps: position.speedMps });
-    lastPingAt = Date.now();
-    hunterLastPingInfoEl.textContent = `Zuletzt geteilt: ${new Date(lastPingAt).toLocaleTimeString()}`;
   }
 
   function renderCountdown() {
-    if (!lastPingAt) { hunterNextPingInfoEl.textContent = ''; return; }
-    const remaining = Math.max(0, config.hunterPingIntervalMs - (Date.now() - lastPingAt));
+    if (!lastOwnPingTs) { hunterNextPingInfoEl.textContent = ''; return; }
+    const remaining = Math.max(0, config.hunterPingIntervalMs - (Date.now() - lastOwnPingTs));
     hunterNextPingInfoEl.textContent = remaining > 0 ? `Nächste Meldung in ${fmtDuration(remaining / 1000)}` : 'Meldung läuft …';
   }
 
