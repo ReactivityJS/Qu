@@ -1,16 +1,21 @@
 // Beispiel (Oberfläche): siehe ../hunt-lib.mjs für die eigentliche Logik
-// (Spiel/Ping/Radius-Vorhersage, gebaut auf viewKey()/viewObject()) — diese
-// Datei ist nur die dünne UI-Schicht darüber (Leaflet-Karte, Geolocation,
-// PWA-Installierbarkeit, Web Share), im selben Stil wie examples/forum/app.mjs.
+// (Spiel/Ping/Radius-Vorhersage/Fangreichweite, gebaut auf
+// viewKey()/viewObject()) — diese Datei ist nur die dünne UI-Schicht
+// darüber (Leaflet-Karte, Geolocation, PWA-Installierbarkeit, Web Share),
+// im selben Stil wie examples/forum/app.mjs.
 //
 // Reaktiv im Qu-Sinne heißt hier: KEIN Codepfad liest einmal und abonniert
 // dann separat noch einmal (das exakte Muster, das viewKey()/viewObject()
 // existieren, um zu vermeiden — siehe docs/lab/labs/
 // 05-references-practice.mjs) — Status kommt über watchStatus(), Pings über
-// watchPings(), beide liefern bereits Vorhandenes UND künftige Änderungen
-// über EINE Subscription. Und kein `location.reload()` als Ersatz für
-// "jetzt mit einer neuen Id weitermachen" — ein frisch erstelltes Spiel
-// geht direkt in openGame() über, ohne die Seite neu zu laden.
+// watchPings()/watchHunterPings(), alle liefern bereits Vorhandenes UND
+// künftige Änderungen über EINE Subscription. Und kein `location.reload()`
+// als Ersatz für "jetzt mit einer neuen Id weitermachen" — ein frisch
+// erstelltes Spiel geht direkt in openGame() über, ohne die Seite neu zu
+// laden. Ein Reload passiert genau EINMAL bewusst: beim "Spiel beenden"
+// des gejagten Teams — dort ist es keine Abkürzung, sondern die simpelste
+// korrekte Art, alle laufenden Subscriptions/Geolocation-Watches/Wake
+// Locks sauber loszuwerden und wirklich zum Startbildschirm zurückzukehren.
 //
 // Mobil-Fokus: sobald ein Spiel offen ist, füllt die Karte den gesamten
 // verfügbaren Bildschirm (siehe index.html's `body.in-game`), Screen Wake
@@ -18,21 +23,24 @@
 // und ein paar glanceable Live-Werte (Radius, Alter des letzten Pings,
 // eigene Distanz) sollen die Seite auch ohne Interaktion spannend halten.
 // Installierbar (manifest.webmanifest + sw.js) und teilbar (Web Share
-// Target für eingehende Links, Web Share API für ausgehende) — siehe
-// die jeweiligen Abschnitte unten.
+// Target für eingehende Links, Web Share API für ausgehende) — siehe die
+// jeweiligen Abschnitte unten. Sowohl das gejagte Team als auch jedes
+// Fänger-Team (mehrere sind möglich) sehen dieselbe Karte — Orientierung
+// ist für beide Seiten nützlich, nicht nur für die Fänger.
 //
 // Wichtige Grenze, die diese Datei NICHT löst (kein Web-API dafür
 // existiert): echtes Tracking bei gesperrtem Display oder im Hintergrund.
 // Wake Lock hält nur den Bildschirm an, solange der Tab selbst sichtbar
 // ist — Browser (insbesondere mobile) drosseln/pausieren Timer und
 // Geolocation zuverlässig, sobald die Seite in den Hintergrund wechselt
-// oder das Display sperrt. Das gejagte Team muss die Seite also aktiv im
+// oder das Display sperrt. Alle Teams müssen die Seite also aktiv im
 // Vordergrund halten (siehe #screen-hint in index.html).
 
 import { createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../../src/index.js';
 import {
-  createGame, getConfig, watchStatus, isHunted, isHunter,
-  pingLocation, watchPings, declareCaught, predictNextRadius, haversineMeters,
+  createGame, getConfig, watchStatus, isHunted, hunterTeamOf,
+  pingLocation, watchPings, pingHunterLocation, watchHunterPings, nearestHunterDistance,
+  declareCaught, endGame, predictNextRadius, haversineMeters,
 } from '../hunt-lib.mjs';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import { parseHashRoute, buildHashRoute } from '../space-app-lib.mjs';
@@ -51,14 +59,22 @@ import { parseHashRoute, buildHashRoute } from '../space-app-lib.mjs';
 // isHunted()/isHunter() in hunt-lib.mjs) — kein Konfigurations-/
 // Zeitproblem, sondern zwei verschiedene Identitäten für dieselbe Person.
 const IDENTITY_KEY = 'qu-identity';
+const TEAM_COLORS = ['#f472b6', '#facc15', '#34d399', '#60a5fa', '#fb923c', '#a78bfa'];
 
 const el = (id) => document.getElementById(id);
 const statusEl = el('status');
 const myFpEl = el('my-fp');
 const setupBox = el('setup-box');
-const hunterFpsInput = el('hunter-fps');
 const pingIntervalInput = el('ping-interval');
 const assumedSpeedInput = el('assumed-speed');
+const catchRadiusInput = el('catch-radius');
+const hunterTeamsListEl = el('hunter-teams-list');
+const addTeamBtn = el('add-team-btn');
+const hunterTeamRowTemplate = el('hunter-team-row-template');
+const hunterTrackingEnabledCheckbox = el('hunter-tracking-enabled');
+const hunterTrackingOptionsDiv = el('hunter-tracking-options');
+const hunterPingIntervalInput = el('hunter-ping-interval');
+const showDistanceToggle = el('show-distance-toggle');
 const createGameBtn = el('create-game-btn');
 const shareBox = el('share-box');
 const shareLinkEl = el('share-link');
@@ -67,17 +83,31 @@ const shareBtnInGame = el('share-btn-ingame');
 const installBtn = el('install-btn');
 const gameBox = el('game-box');
 const gameStatusEl = el('game-status');
+const teamsBox = el('teams-box');
+const teamsToggle = el('teams-toggle');
+const teamsContent = el('teams-content');
+const huntedTeamListEl = el('hunted-team-list');
+const hunterTeamsDisplayEl = el('hunter-teams-display');
 const huntedControls = el('hunted-controls');
 const intervalLabelEl = el('interval-label');
 const trackBtn = el('track-btn');
 const lastPingInfoEl = el('last-ping-info');
 const nextPingInfoEl = el('next-ping-info');
+const huntedDistanceRow = el('hunted-distance-row');
+const huntedDistanceValueEl = el('hunted-distance-value');
+const endGameBtn = el('end-game-btn');
 const hunterControls = el('hunter-controls');
 const radiusValueEl = el('radius-value');
 const ageValueEl = el('age-value');
 const proximityTileEl = el('proximity-tile');
 const proximityValueEl = el('proximity-value');
 const caughtBtn = el('caught-btn');
+const catchRangeInfoEl = el('catch-range-info');
+const hunterTrackingControlsDiv = el('hunter-tracking-controls');
+const hunterIntervalLabelEl = el('hunter-interval-label');
+const hunterTrackBtn = el('hunter-track-btn');
+const hunterLastPingInfoEl = el('hunter-last-ping-info');
+const hunterNextPingInfoEl = el('hunter-next-ping-info');
 const mapEl = el('map');
 const wakeLockToggle = el('wakelock-toggle');
 
@@ -99,6 +129,52 @@ function fmtDuration(seconds) {
 
 function fmtDistance(meters) {
   return meters >= 1000 ? `${(meters / 1000).toFixed(2)} km` : `${Math.round(meters)} m`;
+}
+
+function colorForTeam(config, teamId) {
+  const idx = config.hunterTeams.findIndex((t) => t.id === teamId);
+  return TEAM_COLORS[idx % TEAM_COLORS.length] ?? '#94a3b8';
+}
+
+/** Eine `<code>`-Zeile je Fingerprint — reine DOM-Konstruktion (kein innerHTML), da Team-Labels/Fingerprints letztlich frei eingegeben werden. */
+function appendFingerprintList(container, fingerprints) {
+  if (!fingerprints.length) {
+    container.appendChild(Object.assign(document.createElement('em'), { textContent: 'noch niemand beigetreten' }));
+    return;
+  }
+  for (const fp of fingerprints) container.appendChild(Object.assign(document.createElement('code'), { textContent: fp }));
+}
+
+/** Eine auf-/zuklappbare Team-Zeile (Zusammenfassung + Mitglieder-Fingerprints) — für sowohl das gejagte Team als auch jedes Fänger-Team. */
+function buildTeamListItem({ title, members, swatchColor }) {
+  const li = document.createElement('li');
+  const summary = document.createElement('div');
+  summary.className = 'team-summary';
+  if (swatchColor) {
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = swatchColor;
+    summary.appendChild(swatch);
+  }
+  summary.appendChild(document.createTextNode(`${title} (${members.length})`));
+  const membersEl = document.createElement('div');
+  membersEl.className = 'team-members hidden';
+  appendFingerprintList(membersEl, members);
+  summary.addEventListener('click', () => membersEl.classList.toggle('hidden'));
+  li.append(summary, membersEl);
+  return li;
+}
+
+function renderTeams(config) {
+  teamsBox.classList.remove('hidden');
+  huntedTeamListEl.textContent = '';
+  huntedTeamListEl.appendChild(buildTeamListItem({ title: 'Gejagtes Team', members: config.huntedTeam }));
+
+  hunterTeamsDisplayEl.textContent = '';
+  for (const team of config.hunterTeams) {
+    hunterTeamsDisplayEl.appendChild(buildTeamListItem({ title: team.label, members: team.members, swatchColor: colorForTeam(config, team.id) }));
+  }
+  teamsToggle.addEventListener('click', () => teamsContent.classList.toggle('hidden'));
 }
 
 /**
@@ -222,9 +298,121 @@ function resolveIncomingShare() {
   return { ...parseHashRoute(location.hash), prefill };
 }
 
+/**
+ * Die EINE geteilte Geräteposition für die gesamte Seite — bewusst nur ein
+ * einziger `watchPosition()`-Aufruf, unabhängig davon, wie viele Features
+ * ihn gerade brauchen (Kartenmarker, Fangreichweiten-Prüfung, "Abstand zu
+ * Fängern"-Anzeige, Pingen als gejagtes Team ODER als Fänger-Team) — nicht
+ * nur Batterie-/GPS-Kontention sparen, sondern strukturell auch eine
+ * einzige Quelle für "wo bin ich gerade" statt mehrerer unabhängiger,
+ * potenziell leicht widersprüchlicher Erfassungen. Bewusst UNABHÄNGIG von
+ * setupMap()/Leaflet — ein Leaflet-Ladefehler (z. B. CDN nicht erreichbar)
+ * darf keines der anderen Features mit sich reißen. `onUpdate(cb)` ist
+ * Zusatzangebot für setupMap() (den eigenen Marker live nachführen);
+ * `getPosition()` allein reicht für alles andere.
+ */
+function startOwnPositionTracker() {
+  let position = null;
+  const listeners = new Set();
+  try {
+    navigator.geolocation.watchPosition(
+      (pos) => {
+        position = { lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy, speedMps: pos.coords.speed ?? null };
+        listeners.forEach((cb) => cb(position));
+      },
+      () => {}, // kein eigener Standort verfügbar — abhängige Features bleiben einfach ohne ihn nutzbar
+      { enableHighAccuracy: true },
+    );
+  } catch {
+    // Geolocation nicht verfügbar — position bleibt dauerhaft null
+  }
+  return {
+    getPosition: () => position,
+    onUpdate: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
+  };
+}
+
+/**
+ * Reaktive Ping-Historie des gejagten Teams, bewusst UNABHÄNGIG von
+ * setupMap()/Leaflet — genau wie startOwnPositionTracker() oben brauchen
+ * die Fangreichweiten-Prüfung (setupCaughtButton()) und die "Abstand zu
+ * Fängern"-Anzeige (setupHuntedControls()) diese Daten auch dann, wenn die
+ * Karte selbst nicht laden konnte. Baut auf watchPings() (hunt-lib.mjs,
+ * viewObject()) — kein separates "einmal laden" nötig. `onPing(cb)`
+ * liefert beim Aufruf sofort JEDEN bereits bekannten Ping nach (dieselbe
+ * "schon Vorhandenes + künftiges"-Garantie wie viewObject() selbst) und
+ * danach jeden neuen — synchron und lückenlos, weil das Nachliefern und
+ * das Eintragen in die Listener-Liste eine einzige, ununterbrochene
+ * synchrone Operation sind.
+ */
+function trackPings(qu, gameId, config) {
+  const pings = [];
+  const listeners = new Set();
+  watchPings(qu, gameId, config, {
+    createItem: (q) => q,
+    render(q) {
+      pings.push(q);
+      for (const cb of listeners) cb(q);
+    },
+  });
+  return {
+    getPings: () => pings,
+    onPing(cb) {
+      for (const q of pings) cb(q);
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+  };
+}
+
+/** Dasselbe wie trackPings(), nur für alle Fänger-Teams zusammen — nur aktiv, wenn `config.hunterPingIntervalMs` gesetzt ist (Feature "Fänger auf der Karte"). */
+function trackHunterPings(qu, gameId, config) {
+  const hunterPings = [];
+  const listeners = new Set();
+  if (config.hunterPingIntervalMs) {
+    watchHunterPings(qu, gameId, config, {
+      key: (q) => q.writer,
+      createItem: (q) => q.writer,
+      render(writer, value, q) {
+        hunterPings.push(q);
+        for (const cb of listeners) cb(writer, q);
+      },
+    });
+  }
+  return {
+    getHunterPings: () => hunterPings,
+    onHunterPing(cb) {
+      for (const q of hunterPings) cb(q.writer, q);
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+  };
+}
+
+// --- Setup-Formular: dynamische Liste von Fänger-Teams ---
+function addHunterTeamRow(defaultLabel = '') {
+  const clone = hunterTeamRowTemplate.content.cloneNode(true);
+  const row = clone.querySelector('.hunter-team-row');
+  row.querySelector('.team-label').value = defaultLabel;
+  row.querySelector('.remove-team-btn').addEventListener('click', () => row.remove());
+  hunterTeamsListEl.appendChild(row);
+}
+
+function collectHunterTeams() {
+  return [...hunterTeamsListEl.querySelectorAll('.hunter-team-row')].map((row) => ({
+    label: row.querySelector('.team-label').value.trim() || 'Fänger-Team',
+    members: parseFingerprintList(row.querySelector('.team-members').value),
+  }));
+}
+
 async function main() {
   setupWakeLock(wakeLockToggle);
   setupInstallPrompt(installBtn);
+  addHunterTeamRow('Fänger-Team'); // ein Team ist der Normalfall — weitere per Button
+  addTeamBtn.addEventListener('click', () => addHunterTeamRow());
+  hunterTrackingEnabledCheckbox.addEventListener('change', () => {
+    hunterTrackingOptionsDiv.classList.toggle('hidden', !hunterTrackingEnabledCheckbox.checked);
+  });
 
   const qu = (await loadOrCreateIdentity(IDENTITY_KEY)).use(createNetworkPlugin()).use(createSpacesPlugin());
   myFpEl.textContent = qu.fingerprint;
@@ -250,10 +438,17 @@ async function main() {
     setupBox.classList.remove('hidden');
     createGameBtn.addEventListener('click', async () => {
       createGameBtn.disabled = true;
-      const hunterTeam = parseFingerprintList(hunterFpsInput.value);
+      const hunterTeams = collectHunterTeams();
       const pingIntervalMs = Math.max(1, Number(pingIntervalInput.value) || 5) * 60_000;
       const assumedSpeedMps = Math.max(0, Number(assumedSpeedInput.value) || 1.4);
-      const newGameId = await createGame(qu, { huntedTeam: [qu.fingerprint], hunterTeam, pingIntervalMs, assumedSpeedMps });
+      const catchRadiusMeters = Math.max(1, Number(catchRadiusInput.value) || 50);
+      const hunterTrackingEnabled = hunterTrackingEnabledCheckbox.checked;
+      const hunterPingIntervalMs = hunterTrackingEnabled ? Math.max(1, Number(hunterPingIntervalInput.value) || 5) * 60_000 : null;
+      const showDistanceToHunted = hunterTrackingEnabled && showDistanceToggle.checked;
+      const newGameId = await createGame(qu, {
+        huntedTeam: [qu.fingerprint], hunterTeams, pingIntervalMs, assumedSpeedMps,
+        catchRadiusMeters, hunterPingIntervalMs, showDistanceToHunted,
+      });
       history.replaceState(null, '', location.pathname + buildHashRoute(newGameId));
       await openGame(newGameId);
     });
@@ -287,43 +482,75 @@ async function main() {
     }
 
     intervalLabelEl.textContent = String(Math.round(config.pingIntervalMs / 60_000));
-
+    renderTeams(config);
     watchStatus(qu, id, (state) => setStatusBadge(state));
 
     const hunted = await isHunted(qu, id);
-    const hunter = await isHunter(qu, id);
+    const hunterTeam = hunterTeamOf(config, qu.fingerprint);
+    const hunter = hunterTeam !== null;
+
+    // Eigene Position + Ping-Historien: unabhängig von der Karte selbst
+    // (siehe deren jeweilige Doku) — laufen auch weiter, falls Leaflet
+    // gleich nicht laden sollte, weil Fangreichweiten-Prüfung/Distanz-
+    // Anzeige/Tracking-Buttons keine erfolgreich gerenderte Karte brauchen,
+    // nur diese Daten.
+    const ownPositionTracker = startOwnPositionTracker();
+    const pingsTracker = trackPings(qu, id, config);
+    const hunterPingsTracker = trackHunterPings(qu, id, config);
+
+    // Karte: für ALLE sichtbar (gejagtes Team, Fänger-Teams, Beobachter) —
+    // Orientierung ist auch für das gejagte Team nützlich, nicht nur für
+    // die Jäger. Rein visuelle Schicht über den drei Trackern oben — ein
+    // Fehler beim Kartenaufbau (z. B. Leaflet-CDN nicht erreichbar) betrifft
+    // dadurch nur die Kartendarstellung selbst.
+    try {
+      await setupMap(qu, id, config, ownPositionTracker, pingsTracker, hunterPingsTracker);
+    } catch (e) {
+      console.error('Karte konnte nicht geladen werden:', e);
+    }
 
     if (hunted) {
       huntedControls.classList.remove('hidden');
-      setupHuntedControls(qu, id, config);
+      setupHuntedControls(qu, id, config, hunterPingsTracker, ownPositionTracker);
+      endGameBtn.addEventListener('click', async () => {
+        endGameBtn.disabled = true;
+        await endGame(qu, id);
+        location.href = location.pathname; // zurück zum Startbildschirm — siehe Moduldoku oben zu diesem einen bewussten Reload
+      });
     }
     if (hunter || !hunted) {
       // Fänger-Team ODER ein reiner Beobachter (Link ohne eigene Team-Rolle) —
-      // beide bekommen dieselbe Karten-Ansicht; nur der "Team gefunden"-Button
-      // bleibt unten auf echte Fänger beschränkt.
+      // beide bekommen dieselben Karten-Statistiken; nur der "Team
+      // gefunden"-Button (und ein eigenes Standort-Teilen, falls das Spiel
+      // das anbietet) bleiben auf ein echtes Fänger-Team-Mitglied beschränkt.
       hunterControls.classList.remove('hidden');
       caughtBtn.classList.toggle('hidden', !hunter);
-      if (hunter) caughtBtn.addEventListener('click', () => declareCaught(qu, id));
-      await setupMap(qu, id, config);
+      if (hunter) {
+        setupCaughtButton(qu, id, config, pingsTracker, ownPositionTracker);
+        if (config.hunterPingIntervalMs) {
+          hunterTrackingControlsDiv.classList.remove('hidden');
+          hunterIntervalLabelEl.textContent = String(Math.round(config.hunterPingIntervalMs / 60_000));
+          setupHunterTrackingControls(qu, id, config, ownPositionTracker);
+        }
+      }
     }
   }
 }
 
-// --- Gejagtes Team: Geolocation + periodisches Pingen ---
-function setupHuntedControls(qu, gameId, config) {
-  let watchId = null;
+// --- Gejagtes Team: Geolocation + periodisches Pingen + optionale
+// Abstands-Anzeige zu den Fängern (Feature `showDistanceToHunted`). ---
+function setupHuntedControls(qu, gameId, config, hunterPingsTracker, ownPositionTracker) {
   let intervalId = null;
   let countdownId = null;
-  let currentPosition = null;
   let tracking = false;
   let lastPingAt = null;
 
   async function sendPing() {
-    if (!currentPosition) return;
-    const { latitude: lat, longitude: lon, accuracy, speed } = currentPosition.coords;
-    await pingLocation(qu, gameId, { lat, lon, accuracy, speedMps: speed ?? null });
+    const position = ownPositionTracker.getPosition();
+    if (!position) return;
+    await pingLocation(qu, gameId, { lat: position.lat, lon: position.lon, accuracy: position.accuracy, speedMps: position.speedMps });
     lastPingAt = Date.now();
-    lastPingInfoEl.textContent = `Zuletzt gemeldet: ${new Date(lastPingAt).toLocaleTimeString()} (${lat.toFixed(5)}, ${lon.toFixed(5)})`;
+    lastPingInfoEl.textContent = `Zuletzt gemeldet: ${new Date(lastPingAt).toLocaleTimeString()} (${position.lat.toFixed(5)}, ${position.lon.toFixed(5)})`;
   }
 
   function renderCountdown() {
@@ -334,7 +561,6 @@ function setupHuntedControls(qu, gameId, config) {
 
   trackBtn.addEventListener('click', () => {
     if (tracking) {
-      navigator.geolocation.clearWatch(watchId);
       clearInterval(intervalId);
       clearInterval(countdownId);
       tracking = false;
@@ -343,32 +569,121 @@ function setupHuntedControls(qu, gameId, config) {
       nextPingInfoEl.textContent = '';
       return;
     }
-    let firstFix = true;
-    watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        currentPosition = pos;
-        // Der erste tatsächliche GPS-Fix löst sofort einen Ping aus
-        // (nicht schon der Klick selbst — zu diesem Zeitpunkt liegt noch
-        // gar keine Position vor), danach übernimmt allein das Intervall.
-        if (firstFix) { firstFix = false; sendPing().catch((e) => { lastPingInfoEl.textContent = `Fehler: ${e.message}`; }); }
-      },
-      (err) => { lastPingInfoEl.textContent = `Geolocation-Fehler: ${err.message}`; },
-      { enableHighAccuracy: true },
-    );
+    // Nutzt den geteilten ownPositionTracker (siehe dessen Doku) statt
+    // eines eigenen watchPosition()-Aufrufs — derselbe Standort, den auch
+    // die Karte/der Fangreichweiten-Check verwenden.
+    sendPing().catch((e) => { lastPingInfoEl.textContent = `Fehler: ${e.message}`; });
     intervalId = setInterval(() => { sendPing().catch((e) => { lastPingInfoEl.textContent = `Fehler: ${e.message}`; }); }, config.pingIntervalMs);
     countdownId = setInterval(renderCountdown, 1000);
     tracking = true;
     trackBtn.textContent = 'Tracking stoppen';
     trackBtn.classList.add('tracking');
   });
+
+  if (config.showDistanceToHunted) {
+    huntedDistanceRow.classList.remove('hidden');
+    setInterval(() => {
+      // Nutzt den unabhängigen ownPositionTracker (siehe dessen Doku) —
+      // kein zweiter, redundanter watchPosition()-Aufruf nur für diese
+      // Anzeige, und funktioniert auch, falls die Karte selbst nicht
+      // geladen werden konnte.
+      const distance = nearestHunterDistance(ownPositionTracker.getPosition(), hunterPingsTracker.getHunterPings());
+      huntedDistanceValueEl.textContent = distance === null ? '–' : fmtDistance(distance);
+    }, 1000);
+  }
 }
 
-// --- Fänger-Team/Beobachter: Karte mit Weg, vorausberechnetem Radius,
-// eigener Position und Distanz-Feedback ("wärmer"/"kälter"). Reaktiv über
-// watchPings() (hunt-lib.mjs, gebaut auf viewObject()) — kein separates
-// "einmal laden", jeder Marker entsteht/aktualisiert sich ausschließlich
-// über dessen createItem()/render(). ---
-async function setupMap(qu, gameId, config) {
+// --- Fänger-Team: "Team gefunden"-Button, nur innerhalb der Fangreichweite
+// tatsächlich nutzbar (Feature `catchRadiusMeters`) — die eigentliche
+// Prüfung sitzt in hunt-lib.mjs's declareCaught(), hier nur dieselbe Regel
+// als Live-Feedback (deaktivierter Button + Distanzanzeige). ---
+function setupCaughtButton(qu, gameId, config, pingsTracker, ownPositionTracker) {
+  caughtBtn.addEventListener('click', async () => {
+    caughtBtn.disabled = true;
+    try {
+      await declareCaught(qu, gameId, ownPositionTracker.getPosition());
+      catchRangeInfoEl.textContent = '';
+    } catch (e) {
+      catchRangeInfoEl.textContent = e.message;
+    } finally {
+      caughtBtn.disabled = false;
+    }
+  });
+
+  setInterval(() => {
+    const own = ownPositionTracker.getPosition();
+    const pings = pingsTracker.getPings();
+    const last = pings[pings.length - 1];
+    if (!own || !last) {
+      catchRangeInfoEl.textContent = 'Eigener Standort oder Standort des gejagten Teams noch nicht bekannt.';
+      caughtBtn.disabled = true;
+      return;
+    }
+    const distance = haversineMeters(own, { lat: last.value.lat, lon: last.value.lon });
+    const radius = config.catchRadiusMeters;
+    if (distance <= radius) {
+      catchRangeInfoEl.textContent = `In Fangreichweite (${Math.round(distance)} m von ${Math.round(radius)} m).`;
+      caughtBtn.disabled = false;
+    } else {
+      catchRangeInfoEl.textContent = `Noch ${Math.round(distance - radius)} m bis zur Fangreichweite (${Math.round(radius)} m).`;
+      caughtBtn.disabled = true;
+    }
+  }, 1000);
+}
+
+// --- Fänger-Team: eigenes Standort-Teilen, nur falls das Spiel
+// `hunterPingIntervalMs` gesetzt hat (Feature "Fänger auf der Karte"). ---
+function setupHunterTrackingControls(qu, gameId, config, ownPositionTracker) {
+  let intervalId = null;
+  let countdownId = null;
+  let tracking = false;
+  let lastPingAt = null;
+
+  async function sendPing() {
+    const position = ownPositionTracker.getPosition();
+    if (!position) return;
+    await pingHunterLocation(qu, gameId, { lat: position.lat, lon: position.lon, accuracy: position.accuracy, speedMps: position.speedMps });
+    lastPingAt = Date.now();
+    hunterLastPingInfoEl.textContent = `Zuletzt geteilt: ${new Date(lastPingAt).toLocaleTimeString()}`;
+  }
+
+  function renderCountdown() {
+    if (!lastPingAt) { hunterNextPingInfoEl.textContent = ''; return; }
+    const remaining = Math.max(0, config.hunterPingIntervalMs - (Date.now() - lastPingAt));
+    hunterNextPingInfoEl.textContent = remaining > 0 ? `Nächste Meldung in ${fmtDuration(remaining / 1000)}` : 'Meldung läuft …';
+  }
+
+  hunterTrackBtn.addEventListener('click', () => {
+    if (tracking) {
+      clearInterval(intervalId);
+      clearInterval(countdownId);
+      tracking = false;
+      hunterTrackBtn.textContent = 'Standort teilen: starten';
+      hunterTrackBtn.classList.remove('tracking');
+      hunterNextPingInfoEl.textContent = '';
+      return;
+    }
+    // Nutzt den geteilten ownPositionTracker (siehe dessen Doku) statt
+    // eines eigenen watchPosition()-Aufrufs.
+    sendPing().catch((e) => { hunterLastPingInfoEl.textContent = `Fehler: ${e.message}`; });
+    intervalId = setInterval(() => { sendPing().catch((e) => { hunterLastPingInfoEl.textContent = `Fehler: ${e.message}`; }); }, config.hunterPingIntervalMs);
+    countdownId = setInterval(renderCountdown, 1000);
+    tracking = true;
+    hunterTrackBtn.textContent = 'Standort teilen: stoppen';
+    hunterTrackBtn.classList.add('tracking');
+  });
+}
+
+// --- Karte, für alle Rollen: Weg + vorausberechneter Radius des gejagten
+// Teams, optional die Positionen der Fänger-Teams (Feature
+// `hunterPingIntervalMs`), die eigene Position, Distanz-Feedback
+// ("wärmer"/"kälter"). Rein visuelle Schicht über den drei bereits
+// laufenden Trackern (ownPositionTracker/pingsTracker/hunterPingsTracker,
+// siehe deren jeweilige Doku) — diese Funktion selbst hält keine eigenen
+// Daten und ruft weder watchPings()/watchHunterPings() noch
+// watchPosition() auf, nur `onPing()`/`onHunterPing()`/`onUpdate()` der
+// bereits laufenden Tracker. ---
+async function setupMap(qu, gameId, config, ownPositionTracker, pingsTracker, hunterPingsTracker) {
   const map = L.map(mapEl, { zoomControl: true }).setView([0, 0], 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap-Mitwirkende',
@@ -377,22 +692,22 @@ async function setupMap(qu, gameId, config) {
 
   const path = L.polyline([], { color: '#7dd3fc' }).addTo(map);
   const markersLayer = L.layerGroup().addTo(map);
+  const hunterMarkersLayer = L.layerGroup().addTo(map);
   const radiusCircle = L.circle([0, 0], { radius: 0, color: '#f87171', fillOpacity: 0.08, dashArray: '6 6' }).addTo(map);
   const ownMarker = L.circleMarker([0, 0], { radius: 7, color: '#c084fc', fillColor: '#c084fc', fillOpacity: 0.9 });
   const connectorLine = L.polyline([], { color: '#c084fc', weight: 2, dashArray: '3 6' });
 
-  let pings = []; // in Ankunftsreihenfolge, chronologisch (siehe watchPings()/viewObject()'s eigene ts-Sortierung des Anfangsbestands)
-  let ownPosition = null; // { lat, lon } — nur lokal, wird nie an den Space geschrieben
+  let ownPosition = ownPositionTracker.getPosition(); // { lat, lon } | null — nur lokal, wird nie an den Space geschrieben
   let hasFitted = false;
 
   function currentBounds() {
-    const points = pings.map((q) => [q.value.lat, q.value.lon]);
+    const points = pingsTracker.getPings().map((q) => [q.value.lat, q.value.lon]);
     if (ownPosition) points.push([ownPosition.lat, ownPosition.lon]);
     return points;
   }
 
   function updateRadius() {
-    const prediction = predictNextRadius(pings, config, Date.now());
+    const prediction = predictNextRadius(pingsTracker.getPings(), config, Date.now());
     if (!prediction) {
       radiusValueEl.textContent = '–';
       ageValueEl.textContent = '–';
@@ -410,6 +725,7 @@ async function setupMap(qu, gameId, config) {
   }
 
   function updateOwnPosition() {
+    const pings = pingsTracker.getPings();
     if (!ownPosition || !pings.length) {
       proximityValueEl.textContent = '–';
       proximityTileEl.className = 'stat-tile';
@@ -428,56 +744,62 @@ async function setupMap(qu, gameId, config) {
   }
 
   let previousCurrentMarker = null;
-  watchPings(qu, gameId, config, {
-    createItem(q) {
-      const marker = L.circleMarker([q.value.lat, q.value.lon], { radius: 5, color: '#7dd3fc', fillOpacity: 0.9 });
-      marker.bindPopup(new Date(q.ts).toLocaleTimeString());
-      marker.addTo(markersLayer);
-      return marker;
-    },
-    render(marker, value, q) {
-      previousCurrentMarker?.setStyle({ radius: 5, color: '#7dd3fc' }); // die bisher "aktuelle" Position wird wieder ein normaler Weg-Punkt
-      marker.setStyle({ radius: 8, color: '#4ade80' });
-      previousCurrentMarker = marker;
+  pingsTracker.onPing((q) => {
+    const marker = L.circleMarker([q.value.lat, q.value.lon], { radius: 5, color: '#7dd3fc', fillOpacity: 0.9 });
+    marker.bindPopup(new Date(q.ts).toLocaleTimeString());
+    marker.addTo(markersLayer);
 
-      pings.push(q);
-      path.setLatLngs(pings.map((p) => [p.value.lat, p.value.lon]));
-      if (!hasFitted && currentBounds().length) {
-        map.fitBounds(currentBounds(), { maxZoom: 16, padding: [30, 30] });
-        hasFitted = true;
-      }
-      updateRadius();
-      updateOwnPosition();
-      // Nur ein wirklich FRISCHER Ping vibriert — der Anfangsbestand (schon
-      // bekannte Pings beim Öffnen der Karte) soll nicht als eine Salve
-      // Vibrationen ankommen. `q.ts` selbst (statt einer Zeit-seit-Aufruf-
-      // Heuristik) entscheidet das, weil er unabhängig davon stimmt, wie
-      // lange die anfängliche Synchronisierung gedauert hat.
-      if (navigator.vibrate && Date.now() - q.ts < 5000) navigator.vibrate([80, 40, 80]);
-    },
+    previousCurrentMarker?.setStyle({ radius: 5, color: '#7dd3fc' }); // die bisher "aktuelle" Position wird wieder ein normaler Weg-Punkt
+    marker.setStyle({ radius: 8, color: '#4ade80' });
+    previousCurrentMarker = marker;
+
+    path.setLatLngs(pingsTracker.getPings().map((p) => [p.value.lat, p.value.lon]));
+    if (!hasFitted && currentBounds().length) {
+      map.fitBounds(currentBounds(), { maxZoom: 16, padding: [30, 30] });
+      hasFitted = true;
+    }
+    updateRadius();
+    updateOwnPosition();
+    // Nur ein wirklich FRISCHER Ping vibriert — der Anfangsbestand (schon
+    // bekannte Pings beim Öffnen der Karte) soll nicht als eine Salve
+    // Vibrationen ankommen. `q.ts` selbst (statt einer Zeit-seit-Aufruf-
+    // Heuristik) entscheidet das, weil er unabhängig davon stimmt, wie
+    // lange die anfängliche Synchronisierung gedauert hat.
+    if (navigator.vibrate && Date.now() - q.ts < 5000) navigator.vibrate([80, 40, 80]);
+  });
+
+  // Fänger auf der Karte (Feature `hunterPingIntervalMs`, optional) — EIN
+  // beweglicher Marker pro Fänger, kein Marker-Pfad wie beim gejagten Team:
+  // hier interessiert nur die zuletzt geteilte Position.
+  const hunterMarkerByWriter = new Map();
+  hunterPingsTracker.onHunterPing((writer, q) => {
+    const team = hunterTeamOf(config, writer);
+    const color = team ? colorForTeam(config, team.id) : '#94a3b8';
+    let marker = hunterMarkerByWriter.get(writer);
+    if (!marker) {
+      marker = L.circleMarker([q.value.lat, q.value.lon], { radius: 7, color, fillColor: color, fillOpacity: 0.85 });
+      marker.bindTooltip(team?.label ?? 'Fänger');
+      marker.addTo(hunterMarkersLayer);
+      hunterMarkerByWriter.set(writer, marker);
+    } else {
+      marker.setLatLng([q.value.lat, q.value.lon]);
+    }
   });
 
   setInterval(updateRadius, 1000); // Radius wächst live weiter, auch ohne neuen Ping
 
-  // Eigene Position ist rein lokal (nie an den Space geschrieben) — nur
-  // fürs Zentrieren/die Distanzanzeige. Best-effort: bei Ablehnung/Fehler
-  // bleibt die Karte einfach ohne eigenen Marker nutzbar.
-  try {
-    navigator.geolocation.watchPosition(
-      (pos) => {
-        const wasFirst = !ownPosition;
-        ownPosition = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-        ownMarker.setLatLng([ownPosition.lat, ownPosition.lon]);
-        if (wasFirst) { ownMarker.addTo(map); connectorLine.addTo(map); hasFitted = false; }
-        updateOwnPosition();
-        if (!hasFitted && currentBounds().length) { map.fitBounds(currentBounds(), { maxZoom: 16, padding: [30, 30] }); hasFitted = true; }
-      },
-      () => {}, // kein eigener Standort verfügbar — Karte bleibt trotzdem nutzbar
-      { enableHighAccuracy: true },
-    );
-  } catch {
-    // Geolocation nicht verfügbar — ignorieren, reine Zusatzfunktion
-  }
+  // Eigene Position kommt vom geteilten ownPositionTracker (siehe
+  // dessen Doku) — hier nur der eigene Marker/das Zentrieren als Reaktion
+  // darauf, keine zweite Geolocation-Erfassung.
+  if (ownPosition) { ownMarker.setLatLng([ownPosition.lat, ownPosition.lon]).addTo(map); connectorLine.addTo(map); updateOwnPosition(); }
+  ownPositionTracker.onUpdate((position) => {
+    const wasFirst = !ownPosition;
+    ownPosition = position;
+    ownMarker.setLatLng([ownPosition.lat, ownPosition.lon]);
+    if (wasFirst) { ownMarker.addTo(map); connectorLine.addTo(map); hasFitted = false; }
+    updateOwnPosition();
+    if (!hasFitted && currentBounds().length) { map.fitBounds(currentBounds(), { maxZoom: 16, padding: [30, 30] }); hasFitted = true; }
+  });
 }
 
 main().catch((e) => {
