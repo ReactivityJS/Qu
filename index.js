@@ -19,11 +19,15 @@ import { createTestRoutes } from './server/test-runner.mjs';
 import { createPushRoutes } from './server/push-routes.mjs';
 import { createWebRTCRoutes } from './server/webrtc-routes.mjs';
 import { createPortalRoutes } from './server/portal-routes.mjs';
+import { createServiceRegistry } from './server/service-registry.mjs';
+import { createRelayInfoRoutes } from './server/relay-info-routes.mjs';
 import { createRelay } from './relay/relay.mjs';
+import { loadOrGenerateRelayIdentity } from './relay/relay-identity.mjs';
+import { createFail2banService } from './relay/services/fail2ban.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
 import { sendWebPush, generateVapidKeys } from './relay/webpush.mjs';
-import { QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter } from './src/index.js';
+import { QuIdentity, QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter, isValidFingerprint } from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
 
@@ -59,6 +63,104 @@ if (process.env.QU_DEBUG !== '0') {
 // into the former; anything else (including unset) keeps the previous,
 // always-persistent default so existing deployments see no behavior change.
 const persistent = process.env.QU_STORE !== 'memory';
+
+// The Services/Examples/Documentation catalog (portal.mjs, server/
+// portal-routes.mjs) — the single source of truth every consumer reads
+// from, replacing what used to be two independently hand-maintained
+// SERVICE_APPS objects (see server/service-registry.mjs's file doc for
+// the full history). `entry`-only definitions here are the code-level
+// "seed" catalog; an operator with a relayAdmins fingerprint can add
+// FURTHER pure-data (link-only) entries at runtime, no restart, by
+// publishing to `relay-services/<id>` (see relay/relay.mjs) — this array
+// is not the only source once the relay is running, just the bootstrap
+// one. QU_SERVICES_DISABLED (comma-separated ids) turns any of these off
+// at startup, e.g. `QU_SERVICES_DISABLED=forum,hunt`.
+const registry = createServiceRegistry([
+  { id: 'chat', category: 'service', label: '💬 Messenger', description: 'Verschlüsselter 1:1- und Gruppen-Chat, Anrufe, Dateiübertragung — installierbar als PWA.', entry: '/examples/chat/index.html' },
+  { id: 'people', category: 'service', label: '👥 People', description: 'Globales, opt-in Identitäten-Verzeichnis — ein Profil (Alias, Avatar, Zusatz-Attribute), wiederverwendbar über jede Qu-App hinweg.', entry: '/examples/people/index.html' },
+  { id: 'forum', category: 'service', label: '🗂️ Forum', description: 'Themen mit Titel + Antworten auf einem geteilten Space.', entry: '/examples/forum/index.html' },
+  { id: 'cms', category: 'service', label: '📄 CMS', description: 'Seiten/Templates auf einem geteilten Space, mehrere Autoren.', entry: '/examples/cms/index.html' },
+  { id: 'hunt', category: 'service', label: '🗺️ Hunt', description: 'Standort-basiertes Fang-Spiel auf einem geteilten Space.', entry: '/examples/hunt/index.html' },
+  { id: 'example-modules', category: 'example', label: 'Beispiel-Module', description: 'Sechs kurze, fokussierte Module (ToDo-Liste, Forum, App-Space, Sub-Space-Index, Space-App-Basis, CMS-Erweiterung) — Logik getrennt von jeder Oberfläche, mit node --test nachvollziehbar.', entry: '/docs/examples.html' },
+  { id: 'lab', category: 'example', label: 'Interaktives Lab', description: 'Core, Storage, Spaces/ACL, Netzwerk/Relay/Mirror — Schritt für Schritt im Browser, mit echten Objekten in der Konsole zum Weiterprobieren.', entry: '/docs/lab/index.html' },
+  { id: 'playground', category: 'example', label: 'Playground', description: 'Eine fertig initialisierte qu-Instanz in der Konsole, dazu Copy-Paste-Beispiele für get/put/set/on/map, Spaces, Referenzen, Dateien und eine echte Relay-Verbindung.', entry: '/docs/playground.html' },
+  { id: 'readme', category: 'documentation', label: 'README', description: 'Schnelleinstieg, Projektstruktur, Kernprinzipien.', entry: '/docs/view.html?file=/README.md' },
+  { id: 'api', category: 'documentation', label: 'API-Referenz', description: 'Jede öffentliche Funktion/Klasse — Parameter, Rückgabewerte, Beispiele.', entry: '/docs/view.html?file=/API.md' },
+  { id: 'app-guide', category: 'documentation', label: 'App-Guide', description: 'Eine vernetzte App bauen: mehrere Instanzen tauschen Daten über einen echten Relay und einen gemeinsamen App-Space aus.', entry: '/docs/view.html?file=/APP-GUIDE.md' },
+  { id: 'whitepaper', category: 'documentation', label: 'Whitepaper', description: 'Architektur-Spezifikation — Contracts, Sicherheitsmodell, Spaces, Facade.', entry: '/docs/view.html?file=/qu-whitepaper-v0.6.md' },
+  { id: 'tests', category: 'documentation', label: 'Tests', description: 'Dieselbe Testsuite wie npm test, hier im Browser ausgeführt.', entry: '/test/index.html' },
+  // category: 'admin', not 'service' — portal.mjs only ever renders
+  // 'service'/'example'/'documentation' cards, so this never appears in
+  // the public Services tab. That's a discoverability choice, not a
+  // security boundary: static file serving has no notion of "this
+  // visitor's fingerprint" to gate on (identity only proves itself once
+  // the app's own JS connects to the relay) — the actual authorization is
+  // entirely the relayAdmins ACL check on the writes this app makes (see
+  // relay/relay.mjs), same as any other Qu app. Hiding the tab only saves
+  // a non-admin visitor a confusing detour into an app they can open but
+  // can't do anything privileged in.
+  { id: 'relay-admin', category: 'admin', label: 'Relay-Admin', description: 'Services verwalten (nur für QU_RELAY_ADMINS-Fingerprints).', entry: '/examples/relay-admin/index.html' },
+  // Reference custom service (relay/services/fail2ban.mjs, see
+  // server/service-registry.mjs's extension contract doc for the full
+  // reasoning) — registered but OFF by default: this demo deployment
+  // shouldn't silently start banning fingerprints without an operator
+  // deliberately turning it on. Enable it either at startup
+  // (QU_SERVICES_DISABLED does the opposite — remove 'fail2ban' from
+  // that env var's list, or just don't rely on enabledByDefault and flip
+  // it directly here) or live, via the same admin/service/fail2ban
+  // toggle command every other code-defined service already supports —
+  // no restart needed either way once QU_RELAY_ADMINS is configured.
+  { ...createFail2banService(), enabledByDefault: false },
+]);
+for (const id of (process.env.QU_SERVICES_DISABLED || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+  registry.setEnabled(id, false);
+}
+
+// Fingerprints allowed to administer this relay (currently: write the
+// runtime-maintained service catalog, relay-services/<id> — see
+// relay/relay.mjs's relayAdmins option). Empty/unset by default — no admin
+// capability at all until an operator explicitly pins at least one
+// fingerprint here.
+// `.toLowerCase()` matters: a fingerprint is ALWAYS lowercase hex
+// (core/identity.js's fingerprintOfPublicKey() builds it via
+// `byte.toString(16)`, which never produces uppercase) — but a
+// hand-typed or copy-pasted env var (a docker-compose.yml value, a
+// clipboard that auto-capitalized, ...) can easily end up with different
+// casing that LOOKS identical at a glance in a long hex string, and
+// `acl.writers.includes(q.writer)` (core/acl.js) is a plain, case-
+// SENSITIVE string comparison — a single differently-cased character
+// silently makes every write from that admin fail, with no visual cue
+// in a side-by-side comparison. Normalizing here costs nothing (a
+// fingerprint is public, not a secret whose case ever needs preserving)
+// and removes an entire class of "looks the same but isn't" bug reports.
+//
+// Stray leading/trailing `"`/`'` characters are stripped too — a real,
+// reproduced case: a docker-compose.yml / Swarm-stack `environment` entry
+// like `QU_RELAY_ADMINS="fp1, fp2"` can end up with the OUTER quote marks
+// becoming part of the actual string value (YAML/Compose/Swarm quoting
+// rules interact in a way that doesn't always strip them the way a shell
+// would) — `.trim()` alone only removes whitespace, never a quote
+// character, so the FIRST admin fingerprint silently became
+// `"cf89ef5711f6efe9ba1bd504` (25 characters, leading quote) instead of
+// the real 24-hex-character value, and every one of its writes was
+// rejected by the ACL with no visual cue in the printed value (a quote
+// character is easy to miss at the start of a long hex string,
+// especially when copy-pasted rather than typed by hand).
+const QUOTE_RE = /^['"]|['"]$/g;
+const relayAdmins = (process.env.QU_RELAY_ADMINS || '')
+  .split(',')
+  .map((s) => s.trim().replace(QUOTE_RE, '').trim().toLowerCase()) // trim again after stripping quotes — a quote can itself be adjacent to whitespace the first trim() couldn't reach (e.g. `" fp"` — the leading quote hides the space behind it from the string's actual edge)
+  .filter(Boolean);
+// Catches BOTH the quoting mistake above (if a stray quote survives
+// mid-string rather than only at an edge) and any other malformed entry
+// (wrong length, non-hex characters, a fingerprint truncated by a copy-
+// paste) — loud and at startup, not a silent ACL rejection an operator
+// has to reverse-engineer from a rejected push later.
+for (const fp of relayAdmins) {
+  if (!isValidFingerprint(fp)) {
+    console.warn(`[Relay] QU_RELAY_ADMINS entry "${fp}" doesn't look like a valid fingerprint (expected 24 hex characters) — it will never match any writer, check for stray quotes/whitespace in your environment configuration.`);
+  }
+}
 
 /** Loads an existing `{ publicKey, privateKey }` from `filePath`, or generates + saves a fresh one on first run. Used only in persistent mode — see the VAPID block below for why memory mode skips this entirely. */
 function loadOrGenerateVapidKeys(filePath) {
@@ -130,6 +232,22 @@ const iceServers = [
   ...(turnUrls.length ? [{ urls: turnUrls, username: process.env.QU_TURN_USERNAME || '', credential: process.env.QU_TURN_CREDENTIAL || '' }] : []),
 ];
 
+// A relay that regenerates a fresh identity every restart has no stable
+// fingerprint anything can address it by (an admin encrypting a command
+// "only this relay can read", a peer that pinned it once via trustPeer())
+// — persisted the same way the VAPID keypair above already is, and only
+// in persistent mode for the same reason (see relay-identity.mjs's own
+// doc comment). In memory mode a fresh identity is generated here too
+// (not left to createRelay()'s own default) specifically so its
+// fingerprint/epub are known BEFORE `startServer()` below builds
+// /relay/info — a real deployment loses admin-encryption stability across
+// restarts in memory mode either way, but a single run still gets a
+// working, self-consistent relay-admin flow.
+const relayIdentity = persistent
+  ? await loadOrGenerateRelayIdentity(path.join(dataDir, 'relay-identity.json'))
+  : await QuIdentity.generate();
+const relayEpub = await crypto.subtle.exportKey('jwk', relayIdentity.encryptionKey);
+
 // /test/manifest.json is always on (read-only, no code runs); the
 // server-side test-EXECUTION endpoint (/test/run-node-tests) is opt-in via
 // QU_ENABLE_TEST_ENDPOINT=1 — see server/test-runner.mjs for why.
@@ -139,7 +257,8 @@ const server = startServer({
     ...createTestRoutes({ root }),
     ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null }),
     ...createWebRTCRoutes({ iceServers }),
-    ...createPortalRoutes({ root }),
+    ...createPortalRoutes({ root, registry }),
+    ...createRelayInfoRoutes({ fingerprint: relayIdentity.fingerprint, epub: relayEpub, admins: relayAdmins }),
   ],
 });
 
@@ -153,6 +272,12 @@ const store = new QuStore([
   // default.js's isReplicable() check). `pushSubscriptions` below is
   // relay.mjs's OWN, separate durability for what it needs to remember.
   { prefix: 'push-subscription/', adapter: new NullAdapter(), replicate: false },
+  // `admin/<...>` (relay/relay.mjs's admin-command listener): signed+
+  // encrypted admin commands (e.g. toggling a code-defined service) —
+  // processed live, never persisted, never forwarded to another peer.
+  // Same reasoning/mechanism as push-subscription/ above, just for a
+  // different reserved prefix.
+  { prefix: 'admin/', adapter: new NullAdapter(), replicate: false },
 ]);
 const fileStorage = persistent ? new FileSystemFileStorageAdapter(path.join(dataDir, 'files')) : new MemoryFileStorageAdapter();
 
@@ -190,8 +315,20 @@ const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 // "Bob" step and examples/relay-space-demo-lib.mjs's runtime-created App-Spaces
 // rely on. Still fully ACL-gated per push, never a wider grant than the
 // static case (README "Sync, Mirror, Relay").
-const relayApi = await createRelay({ store, fileStorage, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions });
+const relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions, relayAdmins, serviceRegistry: registry });
+await relayApi.relay.publishProfile(); // makes ~<fingerprint>/epub discoverable — the one thing anything encrypting TO this relay needs to look up (also directly served at /relay/info above, no sync required)
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
+console.log(`[Relay] Identity: ${relayIdentity.fingerprint}${persistent ? ' (stable across restarts)' : ' (ephemeral — QU_STORE=memory, a fresh fingerprint every restart)'}`);
+// The FULL list, not just a count — a count ("2 admin fingerprint(s)
+// configured") can never reveal a subtle mismatch (wrong case, a stray
+// quote character from a docker-compose quoting mistake, an extra
+// space) between what an operator THINKS is configured and what
+// actually landed in process.env; printing the exact strings this relay
+// will compare against is what makes that kind of bug visible at a
+// glance instead of needing a second debugging round trip.
+console.log(relayAdmins.length
+  ? `[Relay] Admin fingerprints configured (${relayAdmins.length}): ${relayAdmins.join(', ')}`
+  : '[Relay] No QU_RELAY_ADMINS configured — no admin write access to relay-services/ or admin/');
 console.log(pushEnabled
   ? `[Relay] Web Push enabled (${pushSubscriptions.size} stored subscription(s))`
   : '[Relay] Web Push disabled (QU_PUSH=0)');

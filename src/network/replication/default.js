@@ -212,6 +212,14 @@ export class DefaultReplication {
     }
 
     if (msg.type === 'qu.push') {
+      // A push with no `qubit` at all (malformed/malicious peer) would
+      // otherwise reach #rememberFromPeer()/the ingest gate below and throw
+      // on `q.id`/`q.ts` — outside the try/catch blocks that exist
+      // specifically so a bad push can't crash the connection.
+      if (!msg.qubit || typeof msg.qubit !== 'object') {
+        debug('replication', 'push-malformed', { channelId: this.#channelId });
+        return;
+      }
       try {
         const ctx = { qubit: msg.qubit, peerFingerprint: this.#peerFingerprint, channelId: this.#channelId };
         await this.#ingestGate.run(ctx, async () => {});
@@ -229,7 +237,13 @@ export class DefaultReplication {
         // must never crash the connection or the process. Previously this
         // await was unguarded, so any rejection here became an unhandled
         // promise rejection (Node's default: terminate the process).
-        debug('replication', 'push-rejected', { id: msg.qubit?.id, error: e.message });
+        // `writer` included here (not just `id`/`error`) so a debug-bus
+        // listener can attribute a rejection to WHO caused it — e.g.
+        // relay/services/fail2ban.mjs bans a repeatedly-rejected writer,
+        // without this codebase needing a bespoke "ingest failure" hook:
+        // the existing debug bus (core/debug.js) already carries every
+        // rejection, this just enriches the one field a consumer needs.
+        debug('replication', 'push-rejected', { id: msg.qubit?.id, writer: msg.qubit?.writer, error: e.message });
         console.error(`[Replication] rejected incoming push for ${msg.qubit?.id}:`, e.message);
       }
       return;
@@ -246,8 +260,19 @@ export class DefaultReplication {
       // flow, not a hypothetical one. Harmless when `topic` isn't itself a
       // document id (e.g. a bare prefix like `'~fp/msgs/'`): get() then
       // simply returns null and contributes nothing.
-      const ownDoc = await this.#runtime.get(msg.topic);
-      const rows = await this.#runtime.query(`${msg.topic}/**`);
+      // `msg.topic` is peer-controlled and reaches assertValidPattern()
+      // (via runtime.query()) unvalidated — a topic already containing a
+      // non-terminal `**` (e.g. "a/**/b") makes the appended `/**` pattern
+      // invalid, throwing synchronously instead of just yielding an empty
+      // result the way an ordinary unknown/empty topic already does.
+      let ownDoc, rows;
+      try {
+        ownDoc = await this.#runtime.get(msg.topic);
+        rows = await this.#runtime.query(`${msg.topic}/**`);
+      } catch (e) {
+        debug('replication', 'sync-request-malformed', { topic: msg.topic, error: e.message });
+        return;
+      }
       const all = ownDoc ? [ownDoc, ...rows] : rows;
       const inRange = all.filter((q) => q.ts >= msg.since);
       const replicable = inRange.filter((q) => this.#runtime.store.isReplicable(q.id));

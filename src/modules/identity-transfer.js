@@ -90,9 +90,16 @@ export async function importIdentity(exported, { password } = {}) {
   }
   if (!envelope.enc) return envelope.keys;
   if (!password) throw new Error('[identity-transfer] Dieser Export ist passwortgeschützt — Passwort erforderlich.');
-  const key = await deriveKey(password, fromB64(envelope.salt));
+  // `envelope.salt`/`iv`/`data` are all attacker/user-controlled (a
+  // hand-edited or truncated export string can still pass the FORMAT_PREFIX
+  // + JSON.parse checks above) — fromB64() on a non-base64 value throws a
+  // raw DOMException (atob()'s InvalidCharacterError), not the clean error
+  // this function otherwise promises for "corrupted export". One try/catch
+  // around the whole decrypt path (deriveKey included, not just
+  // crypto.subtle.decrypt itself) catches all of it uniformly.
   let plaintext;
   try {
+    const key = await deriveKey(password, fromB64(envelope.salt));
     plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(envelope.iv) }, key, fromB64(envelope.data));
   } catch {
     throw new Error('[identity-transfer] Falsches Passwort oder beschädigter Export.');

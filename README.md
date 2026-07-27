@@ -991,14 +991,20 @@ Real gemessen (esbuild, `--bundle --minify`, nicht geschätzt):
 
 | Bundle | minifiziert | + gzip |
 |---|---|---|
-| Core (Runtime/Store/Session/Identity/Space-Handle/Clock/ACL/Verify/Crypto/Sign + `qu.js` + Memory/Null-Adapter) | 17,5 KB | 6,2 KB |
-| + Store (Local/Session/IndexedDB/MemoryFileStorage) | 20,0 KB | 6,8 KB |
-| + Network (`createNetworkPlugin()` + Spaces, **ohne** WebRTC) | 27,6 KB | 9,2 KB |
-| + `createWebRTCPlugin()` obendrauf | 32,6 KB | 10,8 KB |
+| Core (Runtime/Store/Session/Identity/Space-Handle/Clock/ACL/Verify/Crypto/Sign + `qu.js` + Memory/Null-Adapter) | 20,9 KB | 7,4 KB |
+| + Store (Local/Session/IndexedDB/MemoryFileStorage) | 23,2 KB | 8,1 KB |
+| + Network (`createNetworkPlugin()` + Spaces, **ohne** WebRTC) | 33,6 KB | 11,3 KB |
+| + `createWebRTCPlugin()` obendrauf | 41,9 KB | 13,8 KB |
+
+(Diese Tabelle wächst mit jeder echten Funktionserweiterung mit — die
+Zahlen sind ein Ist-Stand, kein Zielwert; ein leichter Anstieg gegenüber
+einer älteren Messung hier ist normal, sobald Code hinzukommt, etwa neue
+Härtungs-Prüfungen. Zur Reproduktion: `npm run build`, dann `wc -c` /
+`gzip -c | wc -c` auf `dist/*.min.js`.)
 
 WebRTC ist deshalb ein eigenes Plugin (siehe oben): Apps, die nur über
 einen eigenen Relay per WebSocket synchronisieren — der häufigste Fall —
-zahlen die ~5 KB minifiziert / ~1,6 KB gzip für `RTCPeerConnection`-Code
+zahlen die ~8,3 KB minifiziert / ~2,5 KB gzip für `RTCPeerConnection`-Code
 nicht mit, den sie nie aufrufen. Vor dieser Trennung importierte
 `createNetworkPlugin()` `PeerConnectionManager` unbedingt, wodurch **jede**
 `qu.connect()`-Nutzung WebRTC zwangsweise mitbündelte — real gemessen
@@ -1026,6 +1032,36 @@ nötig: eine Chat-Room bleibt vollständig lokal nutzbar, nur ohne
 Mehrgeräte-Sync. Anhänge brauchen zusätzlich einen `FileHandler`
 (`.put(bytes)` erkennt sie automatisch); Mehrgeräte-Sync zusätzlich einen
 `NetworkPlugin` — Chat selbst bleibt davon unwissend.
+
+Genauso "Beispielcode statt Architektur", aber nicht chat-spezifisch — die
+eigentliche Basis für jede App nach demselben Muster (ToDo, Forum, CMS,
+alles "N Fingerprints teilen sich einen Space"):
+
+- **`space-membership.js`** (`src/modules/space-membership.js`) — die
+  Discovery-/Mitgliedschaftsschicht über `spaces.js`: `ensureSpace(qu, id,
+  members)` legt einen Space mit genau den gewünschten Mitgliedern an (oder
+  no-op, falls schon vorhanden), `notifyMembers()`/`onSpaceInvite()` sorgen
+  dafür, dass jedes Mitglied einen für es angelegten Space automatisch
+  mitbekommt — ohne vorherigen Link-Austausch. Komplett Space-neutral (kein
+  "Room"/"Board"/"Liste" im Code), genau deshalb für Chat *und* ein
+  gemeinsames ToDo *und* ein Forum-Board gleichermaßen nutzbar.
+- **`presence.js`** (`src/modules/presence.js`) — Online-Status und
+  Lesebestätigungen, herausgelöst aus `chat.js`, weil beides keinerlei
+  Chat-spezifischen Inhalt hat (keine Nachrichtenform, kein Text). Jede App
+  auf `space-membership.js` kann `markRead()`/`getReadReceipts()` und
+  `setPresence()`/`onPresence()` direkt nutzen, ganz ohne Chats
+  Sende-Maschinerie mit zu importieren.
+- **`profiles.js`** (`src/modules/profiles.js`) — unabhängig von der
+  Space-Schicht oben: zusätzliche Profil-Attribute (`~<fp>/attrs/<key>`)
+  und ein optionales, global-öffentliches Identitäts-Verzeichnis
+  (opt-in, per `setDirectoryVisible(true)`).
+- **`identity-transfer.js`** (`src/modules/identity-transfer.js`) —
+  dieselbe Identität auf ein zweites Gerät übertragen (Export/Import der
+  privaten Schlüssel, optional passwortgeschützt).
+
+Wie diese Bausteine aufeinander aufbauen (und in welcher Reihenfolge eine
+neue App sie typischerweise braucht) steht in
+[`src/modules/README.md`](./src/modules/README.md).
 
 ## Im Browser (Server starten)
 
@@ -1121,6 +1157,169 @@ legitime Mesh-/Gossip-Weiterleitung) und wie eine eigene `ingestGate`-Regel
 aussieht, stehen in
 [API.md](./API.md#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate).
 
+### Relay-Admin einrichten (`QU_RELAY_ADMINS`)
+
+Kurzanleitung, um einem Relay einen Admin zuzuweisen — ohne diesen Schritt
+bleiben Services-Registry-Verwaltung und Admin-Kommandos (unten)
+komplett wirkungslos (jeder Schreibversuch scheitert an der ACL, per
+Design: `writers: relayAdmins` mit leerer Liste = niemand):
+
+1. **Relay einmal starten** (`node index.js` bzw. `npm start`), egal ob
+   `QU_RELAY_ADMINS` schon gesetzt ist oder nicht.
+2. **Die eigene Identität/Fingerprint besorgen** — dafür genügt es, EINE
+   beliebige Qu-App im Browser zu öffnen (z. B. `/examples/relay-admin/index.html`
+   selbst, oder `/examples/chat`/`/examples/people`) — jede davon legt beim
+   ersten Öffnen automatisch eine lokale Identität an (`localStorage`,
+   `examples/space-app-browser.js`s `loadOrCreateIdentity()`) und zeigt den
+   Fingerprint an (bei `/examples/relay-admin/` direkt oben unter "Deine
+   Identität"). Diese Seite selbst prüft zu diesem Zeitpunkt noch nichts —
+   das Öffnen funktioniert unabhängig davon, ob die Identität schon Admin
+   ist.
+3. **Fingerprint eintragen**: den Relay-Prozess mit
+   `QU_RELAY_ADMINS=<fingerprint>` neu starten (mehrere Admins
+   kommagetrennt: `QU_RELAY_ADMINS=<fp1>,<fp2>`). `index.js` normalisiert
+   auf Kleinschreibung und loggt beim Start die TATSÄCHLICH übernommenen
+   Fingerprints im Klartext (`[Relay] Admin fingerprints configured (N): ...`)
+   — nicht nur eine Anzahl —, damit ein stiller Tippfehler/eine falsche
+   Groß-/Kleinschreibung aus einer `docker-compose.yml`/`.env`-Datei sofort
+   sichtbar ist, statt als scheinbar korrekt konfiguriert durchzugehen.
+   Ein Fingerprint ist IMMER Kleinschreibung (Hex) — falls ein
+   Schreibversuch trotz augenscheinlich passendem Fingerprint mit
+   `[ACL] Write denied for <fp> on admin/…` scheitert, zuerst diesen
+   Log-Eintrag mit dem tatsächlich in der Fehlermeldung genannten `<fp>`
+   Zeichen für Zeichen vergleichen (Copy-Paste-Stellen wie ein `.env`-Wert
+   in Anführungszeichen sind der häufigste Übeltäter).
+4. **Neu laden**: `/examples/relay-admin/index.html` erneut öffnen (dieselbe
+   Identität wird aus `localStorage` wiederverwendet) — Toggle-Versuche
+   wirken jetzt tatsächlich, sichtbar am aktualisierten Katalog. Im
+   Hauptportal (`/`) erscheint jetzt außerdem automatisch ein zusätzlicher
+   "🛠️ Admin"-Tab für genau diese Identität (`portal.mjs` fragt
+   `GET /relay/info`s `admins`-Liste ab und vergleicht sie mit lokal
+   gespeicherten Identitäten — reine Sichtbarkeits-/Komfortfunktion, keine
+   Sicherheitsgrenze; wer die URL kennt, kommt so oder so rein, die
+   eigentliche Durchsetzung bleibt die ACL-Prüfung beim Schreiben).
+
+Wichtig: `QU_RELAY_ADMINS` ist **nur per Neustart/Redeploy** änderbar,
+nicht zur Laufzeit über das Admin-Event-Protokoll (siehe unten) — bewusst,
+damit eine kompromittierte Admin-Identität sich nicht selbst dauerhaft
+weitere Rechte verschaffen kann. In `QU_STORE=memory`-Modus (flüchtig) hat
+der Relay selbst außerdem bei jedem Neustart eine NEUE eigene Identität
+(kein stabiler Fingerprint) — für einen dauerhaft funktionierenden
+Admin-Kanal ist der persistente Modus (Standard, kein `QU_STORE=memory`)
+nötig, siehe `relay/relay-identity.mjs`.
+
+**Services-Registry** (`server/service-registry.mjs`) — eine einzige
+Quelle der Wahrheit dafür, welche Services/Beispiele/Dokumentation ein
+Deployment anbietet, statt der früheren, zweifach (server- UND
+client-seitig, unabhängig voneinander) von Hand gepflegten Liste. Zwei
+Arten von Einträgen:
+- **Code-definiert** (in `index.js`, kann eigene HTTP-Routen/Ingest-Gates
+  mitbringen) — nur das `enabled`-Flag ist zur Laufzeit umschaltbar
+  (`QU_SERVICES_DISABLED=forum,hunt` beim Start), eine neue Route/ein neuer
+  Gate-Code braucht weiterhin einen Neustart.
+- **Store-definiert** (reine Daten: Name, Pfad, ein `entry`-Link-Ziel,
+  z. B. ein Verweis auf eine woanders gehostete Instanz) — lebt als
+  gewöhnliches, signiertes QuBit unter `relay-services/<id>`, im echten
+  (persistenten) Store, nicht auf einem `NullAdapter` — übersteht also
+  einen Neustart. Schreibrecht hat nur eine per `QU_RELAY_ADMINS`
+  (kommagetrennte Fingerprints) gepinnte Identität (`relay/relay.mjs`s
+  ACL-Zweig für dieses Präfix); Leserecht ist öffentlich, da der Katalog
+  (`GET /relay/services`) für den Portal-Client sichtbar sein muss. Ein
+  solcher Eintrag ist damit **ganz ohne Neustart** hinzufügbar/editierbar
+  — genau der Fall, in dem "runtime pflegen" tatsächlich sicher möglich
+  ist, weil dabei keine ausführbare Logik übers Netz transportiert wird,
+  nur Daten.
+
+Die Relay-Identität selbst ist stabil über Neustarts hinweg
+(`relay/relay-identity.mjs`, `.relay-data/relay-identity.json`, dasselbe
+Muster wie die VAPID-Schlüssel oben) — Voraussetzung dafür, dass ein
+Admin gezielt AN diesen Relay verschlüsseln kann (`~<relayFp>/epub`, per
+`publishProfile()` beim Start veröffentlicht).
+
+**Admin-Kommandos** (`admin/<...>`, `relay/relay.mjs`s `runtime.on('admin/**', ...)`-
+Listener) — für sensiblere Aktionen als die öffentlich sichtbare
+Services-Registry oben, aktuell: Ein-/Ausschalten eines CODE-definierten
+Services (`admin/service/<id>`, s.o.). Anders als `relay-services/<id>`
+ist ein Admin-Kommando sowohl **signiert als auch verschlüsselt** — nur
+eine `QU_RELAY_ADMINS`-Identität darf schreiben (dieselbe Verify+ACL-
+Pipeline wie jeder andere Write), und der Inhalt ist nur mit dem privaten
+Schlüssel DIESES Relays entschlüsselbar (`core/crypto.js`s `encryptFor`/
+`decryptWith`, adressiert an `relay.fingerprint` über dessen
+`~<relayFp>/epub`). Deliberately keine neue Wire-Form — ein Admin-Kommando
+ist ein gewöhnliches QuBit auf einem `NullAdapter`-Präfix
+(`replicate:false`, index.js), exakt derselbe Trick wie
+`push-subscription/<fp>`, nur zusätzlich verschlüsselt statt nur signiert.
+Ein `{ enabled, ttl }`-Kommando ist **temporär**: der Relay merkt sich den
+Zustand von unmittelbar davor und stellt ihn nach `ttl`ms selbst wieder
+her, außer ein neueres Kommando für dieselbe Service-Id trifft vorher ein
+(dann gewinnt das neuere, der alte geplante Revert wird verworfen). Eine
+falsch adressierte oder unverschlüsselte Nachricht auf diesem Präfix wird
+verworfen (`debug('relay', 'admin-command-*', …)`), nie als Fehler nach
+außen geworfen — ein Admin-Kanal, der durch eine fehlgeformte Nachricht
+zum Absturz gebracht werden könnte, wäre schlimmer als ein still
+ignoriertes Kommando.
+
+Die Admin-Fingerprint-Liste selbst (`QU_RELAY_ADMINS`) ist bewusst NUR per
+Neustart/Redeploy änderbar, nicht über das Wire-Protokoll — eine
+kompromittierte Admin-Identität könnte sich sonst dauerhaft selbst
+Rechte hinzufügen.
+
+**Relay-Admin-UI** (`examples/relay-admin/`) — eine Browser-App, um Services
+per Klick statt von Hand signierter/verschlüsselter Events umzuschalten.
+Dieselbe lokal persistierte Identität wie jede andere Qu-App (kein eigener
+Login) — ob sie tatsächlich administrieren darf, entscheidet ausschließlich
+das Relay beim Schreibversuch (`QU_RELAY_ADMINS`), nicht die Seite selbst:
+Verstecken der Seite (Kategorie `'admin'`, taucht deshalb nie im normalen
+Services-Tab auf) ist eine Auffindbarkeits-Entscheidung, keine
+Sicherheitsgrenze — statisches Datei-Ausliefern hat keine Möglichkeit,
+einen Fingerprint vorab zu prüfen (der beweist sich erst, wenn die Seite
+selbst sich mit dem Relay verbindet). Ein per Klick ausgelöster Toggle
+wirft bei Ablehnung KEINEN Fehler auf `publish()` selbst — ein
+zurückgewiesener Push scheitert asynchron, serverseitig, ohne Rückmeldung
+an den Absender (`network/replication/default.js`s Push-Pfad ist
+Fire-and-Forget) — die UI liest deshalb den Katalog nach jedem Versuch neu
+und zeigt Erfolg/Fehlschlag anhand des TATSÄCHLICHEN neuen Zustands an,
+nicht anhand des Ausbleibens einer Exception. Erfordert clientseitig
+`createSpacesPlugin()`, obwohl kein einziger Space angelegt wird — sonst
+lehnt bereits der LOKALE Core-Default (`~<fp>/**`-Beschränkung) jeden
+`admin/service/<id>`-Schreibversuch ab, bevor er das Netzwerk überhaupt
+erreicht (die Bootstrap-Regel für einen manifestlosen generischen Space
+lässt den lokalen Write durch — die eigentliche Autorisierung bleibt
+vollständig die Relay-seitige ACL-Prüfung oben, siehe
+`test/relay-admin-flow.test.mjs`, das genau diese Lücke einmal real
+gefangen hat).
+
+**Custom-Services** (`server/service-registry.mjs`s Erweiterungsvertrag,
+Referenzimplementierung `relay/services/fail2ban.mjs`) — ein Dritt-Anbieter
+erweitert ein Deployment über eine eigene `createXService(opts) ->
+Definition`-Fabrik (dieselbe Namenskonvention wie `createXPlugin()`/
+`createXRoutes()`), deren Ergebnis in `createServiceRegistry([...])`
+landet. Bewusst **Code-Ebene, Deploy-Zeit** — eine NEUE Custom-Service
+braucht weiterhin einen Neustart, genau wie jede andere Option von
+`createRelay()`/`index.js`. Das ist keine Lücke, die später durch
+Remote-/Laufzeit-Registrierung "behoben" werden sollte: Ein Custom-Service
+kann über seine `ingestGates` Pushes für den GANZEN Relay ablehnen/
+annehmen (dieselbe Vertrauensstufe wie `requireDirectWriterGate`/
+`rateLimitGate`) — Code aus einer Netzwerknachricht zu laden hieße, Code
+auszuführen, den ein Admin nur BEHAUPTET zu besitzen, nicht Code, den der
+Betreiber selbst gewählt und geprüft hat. Was echt remote administrierbar
+ist, ganz ohne Neustart: das Enable/Disable-Flag eines bereits
+installierten Custom-Services (wie jeder andere Service) und eigene
+Admin-Aktionen über `onAdminEvent()` (`admin/service/<id>/<action>`,
+z. B. `fail2ban`s `unban` — Konfiguration, nie neue Logik).
+
+`fail2ban.mjs` bannt einen Fingerprint nach `maxFailuresPerWindow`
+abgelehnten Pushes innerhalb von `windowMs` für `banDurationMs` — anders
+als `rateLimiter` (zu viel LEGITIMER Traffic) geht es hier um WIEDERHOLT
+ABGELEHNTE Pushes (falsche Signatur, ACL-Verstoß, kaputte Payload). Lernt
+davon **ohne** einen neuen Hook im Core: `network/replication/default.js`s
+bestehendes `debug('replication', 'push-rejected', { writer, … })`-Event
+(derselbe Debug-Bus, den `enableConsoleDebug()` schon nutzt) trägt bereits
+alles Nötige — `attachDebugBus()` abonniert nur diesen bereits
+existierenden Bus. Standardmäßig im Demo-Deployment registriert, aber
+deaktiviert (`enabledByDefault: false`, `index.js`) — ein Betreiber schaltet
+es gezielt per Admin-Kommando ein.
+
 **Ein echter Fund beim Testen im echten Browser:** `FileSystemStorageAdapter`/
 `FileSystemFileStorageAdapter` waren versehentlich im zentralen,
 browserfähigen `src/index.js` exportiert — jede Seite, die davon
@@ -1146,7 +1345,9 @@ unzustellbarer Nachrichten bis zum ersten `onMessage()`-Aufruf — in allen
 drei Channel-Implementierungen (Loopback, WS-Server, WS-Client), nicht nur
 dort, wo es zuerst auffiel.
 
-**Presence & Lesebestätigungen** (`modules/chat.js`): Online-Status ist ein
+**Presence & Lesebestätigungen** (`modules/presence.js` — herausgelöst aus
+`modules/chat.js`, da beides keinen Chat-spezifischen Inhalt hat, siehe
+oben): Online-Status ist ein
 Heartbeat auf einen festen Pro-Mitglied-Slot (`${room}/presence/${fp}`,
 LWW) — ein Leser gilt nur als online, wenn `lastSeen` frisch genug ist,
 unabhängig vom zuletzt veröffentlichten Status (deckt auch den Fall ab, in

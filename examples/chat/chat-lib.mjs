@@ -130,6 +130,151 @@ export function linkify(text) {
   return segments;
 }
 
+// `*fett*` (WhatsApp-Konvention) und `~durchgestrichen~` (dito). Für
+// unterstrichen/kursiv bewusst NICHT WhatsApp/Markdown gefolgt (dort gibt
+// es kein eigenes Unterstreichen-Zeichen, `_…_` bedeutet dort "kursiv") —
+// hier stattdessen `_unterstrichen_` (einfacher Unterstrich, sieht selbst
+// schon wie eine Unterstreichung aus) und `__kursiv__` (doppelter
+// Unterstrich), da Unterstreichen im Alltag häufiger gebraucht wird als
+// Kursivschrift. Alle vier Male dieselbe Regel: das Zeichen direkt NEBEN
+// Text (kein Leerzeichen unmittelbar danach beim Öffnen bzw. davor beim
+// Schließen) — "3 * 4 * 5" bleibt dadurch Rechenzeichen statt fälschlich
+// als fett interpretiert zu werden, genau wie in echtem WhatsApp/Markdown.
+// Reihenfolge der Alternativen ist bewusst: `__…__` VOR `_…_` — eine
+// (nicht-possessive) Regex-Alternation nimmt die ERSTE passende
+// Alternative, nicht die längste; stünde `_…_` zuerst, würde es einen
+// öffnenden Doppel-Unterstrich fälschlich schon nach dem ERSTEN Zeichen
+// "schließen".
+const FORMAT_RE = /\*(?!\s)([^*\n]+?)(?<!\s)\*|__(?!\s)([^_\n]+?)(?<!\s)__|_(?!\s)([^_\n]+?)(?<!\s)_|~(?!\s)([^~\n]+?)(?<!\s)~/g;
+
+/**
+ * Zerlegt EINEN Text-Abschnitt (schon linkify()-getrennt — läuft nie über
+ * einen Link selbst, s. renderMessageText() in app.mjs) in Formatierungs-
+ * Segmente: `[{ type: 'text'|'bold'|'italic'|'underline'|'strike', value }]`.
+ * Nicht verschachtelt (kein "fett UND kursiv gleichzeitig") — für eine
+ * Chat-Nachricht bewusst so einfach wie möglich gehalten, kein vollständiger
+ * Markdown-Parser.
+ */
+export function parseFormatting(text) {
+  const segments = [];
+  let lastIndex = 0;
+  for (const match of String(text ?? '').matchAll(FORMAT_RE)) {
+    const index = match.index;
+    if (index > lastIndex) segments.push({ type: 'text', value: text.slice(lastIndex, index) });
+    if (match[1] !== undefined) segments.push({ type: 'bold', value: match[1] });
+    else if (match[2] !== undefined) segments.push({ type: 'italic', value: match[2] });
+    else if (match[3] !== undefined) segments.push({ type: 'underline', value: match[3] });
+    else segments.push({ type: 'strike', value: match[4] });
+    lastIndex = index + match[0].length;
+  }
+  if (lastIndex < text.length) segments.push({ type: 'text', value: text.slice(lastIndex) });
+  return segments;
+}
+
+const LIST_ITEM_RE = /^(?:[-*]|\d+\.)\s+(.+)$/;
+
+/**
+ * Zerlegt eine Nachricht in Block-Elemente — `{ type: 'paragraph', lines }`
+ * (zusammenhängende Zeilen ohne Listenmarkierung) oder `{ type: 'list',
+ * ordered, items }` (aufeinanderfolgende Zeilen, die mit `- `/`* ` bzw.
+ * `<Zahl>. ` beginnen — `-` und `*` zählen als DIESELBE Listenart, ein
+ * Wechsel zwischen ihnen reißt die Liste nicht auseinander, ein Wechsel
+ * zwischen unnummeriert und nummeriert dagegen schon). `<ol>` nummeriert
+ * beim Rendern immer bei 1 neu durch (die tatsächlich getippte Zahl wird
+ * nur als Listenmarker erkannt, nicht als Startwert übernommen) — für eine
+ * Chat-Nachricht eine bewusst einfache, alltagstaugliche Vereinfachung,
+ * kein Markdown-vollständiger Parser.
+ */
+export function parseMessageBlocks(text) {
+  const blocks = [];
+  let currentList = null;
+  let currentParagraph = null;
+  for (const line of String(text ?? '').split('\n')) {
+    const m = line.match(LIST_ITEM_RE);
+    if (m) {
+      currentParagraph = null;
+      const ordered = /^\d/.test(line.trimStart());
+      if (!currentList || currentList.ordered !== ordered) {
+        currentList = { type: 'list', ordered, items: [] };
+        blocks.push(currentList);
+      }
+      currentList.items.push(m[1]);
+    } else {
+      currentList = null;
+      if (!currentParagraph) {
+        currentParagraph = { type: 'paragraph', lines: [] };
+        blocks.push(currentParagraph);
+      }
+      currentParagraph.lines.push(line);
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Baut einen teilbaren Karten-Link aus Koordinaten — welcher Anbieter
+ * (OpenStreetMap/Google/Apple/eigene URL) kommt aus den App-Einstellungen
+ * (map-provider-select, app.mjs). Der Link wird als normale Chat-Nachricht
+ * verschickt und braucht daher KEINE eigene Nachrichten-/Renderer-Logik —
+ * die bereits vorhandene Link-Vorschau (linkify()/buildLinkPreview() in
+ * app.mjs) greift automatisch. `customTemplate` darf `{lat}`/`{lng}`
+ * enthalten; fehlt es oder ist es leer, fällt "custom" auf OpenStreetMap
+ * zurück statt eine kaputte URL zu bauen.
+ */
+export function buildLocationUrl(provider, lat, lng, customTemplate) {
+  const latStr = String(lat);
+  const lngStr = String(lng);
+  if (provider === 'google') return `https://www.google.com/maps/search/?api=1&query=${latStr},${lngStr}`;
+  if (provider === 'apple') return `https://maps.apple.com/?ll=${latStr},${lngStr}&q=Standort`;
+  if (provider === 'custom' && customTemplate) return customTemplate.replaceAll('{lat}', latStr).replaceAll('{lng}', lngStr);
+  return `https://www.openstreetmap.org/?mlat=${latStr}&mlon=${lngStr}#map=16/${latStr}/${lngStr}`;
+}
+
+/**
+ * Erkennt einen von buildLocationUrl() (osm/google/apple) erzeugten
+ * Karten-Link und liefert dessen Koordinaten zurück — Grundlage für eine
+ * echte Vorschau (Kartenausschnitt + "📍 Standort" statt nur Hostname/rohe
+ * URL) in buildLinkPreview() (app.mjs). `null` bei jedem anderen Link,
+ * INKLUSIVE einer "eigenen URL" (deren Platzhalter-Schema ist beliebig,
+ * nicht zuverlässig rückwärts zu parsen) — dafür bleibt die generische
+ * Chip-Vorschau.
+ */
+export function parseLocationFromUrl(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  if (u.hostname.endsWith('openstreetmap.org')) {
+    const lat = parseFloat(u.searchParams.get('mlat'));
+    const lng = parseFloat(u.searchParams.get('mlon'));
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  } else if (u.hostname.endsWith('google.com') && u.pathname.includes('/maps/')) {
+    const [lat, lng] = (u.searchParams.get('query') ?? '').split(',').map(Number);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  } else if (u.hostname.endsWith('maps.apple.com')) {
+    const [lat, lng] = (u.searchParams.get('ll') ?? '').split(',').map(Number);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  }
+  return null;
+}
+
+/**
+ * URL einer einzelnen Slippy-Map-Kachel (dieselbe Quelle, auf die der
+ * Karten-Link selbst schon verweist — kein zusätzlicher Drittanbieter,
+ * kein eigener Vorschau-/Screenshot-Dienst nötig) — leichtgewichtige
+ * Bild-Vorschau für einen erkannten Standort-Link.
+ */
+export function staticMapTileUrl(lat, lng, zoom = 15) {
+  const n = 2 ** zoom;
+  const x = Math.floor(((lng + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return `https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
+}
+
+/** Erkennt einen per 🎤-Recorder gesendeten Anhang (app.mjs) an dessen Dateinamens-Konvention — Grundlage dafür, ihn im Chat explizit als "Sprachnachricht" statt als generischen Audio-Anhang (z. B. ein verschickter Song) zu kennzeichnen. */
+export function isVoiceMessageFilename(name) {
+  return /^Sprachnachricht-\d+\.\w+$/.test(name ?? '');
+}
+
 /** 'image' | 'video' | 'audio' | 'file' — bestimmt, welcher Player/welche Vorschau für einen Anhang gerendert wird. */
 export function mediaKind(mime) {
   if (!mime) return 'file';

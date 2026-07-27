@@ -1,0 +1,79 @@
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e6e8ee;
+  --muted: #9aa2b1;
+  --accent: #7dd3fc;
+  --ok: #4ade80;
+  --err: #f87171;
+  --border: #262b38;
+  font-size: 16px;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+  margin: 0;
+  padding: 2rem;
+  line-height: 1.6;
+}
+main { max-width: 720px; margin: 0 auto; }
+h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+h2 { font-size: 1.05rem; margin: 0; }
+p.lede { color: var(--muted); margin-top: 0; }
+a { color: var(--accent); }
+code { background: rgba(255,255,255,0.06); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.85em; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-top: 1rem;
+}
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+.label { color: var(--muted); display: inline-block; min-width: 8.5rem; }
+
+.status { padding: 0.75rem 1rem; border-radius: 8px; margin-top: 1rem; }
+.status.ok { background: rgba(74,222,128,0.12); color: var(--ok); }
+.status.err { background: rgba(248,113,113,0.12); color: var(--err); }
+
+.service-list { list-style: none; margin: 0; padding: 0; }
+.service-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.service-list li:last-child { border-bottom: none; }
+.service-list .name { flex: 1; }
+.service-list .name .id { color: var(--muted); font-size: 0.85em; }
+.service-list .category-badge {
+  font-size: 0.75em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+}
+.service-list button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+.service-list button.enabled { border-color: var(--ok); color: var(--ok); }
+.service-list button.disabled { border-color: var(--err); color: var(--err); }
+.service-list button:disabled { opacity: 0.5; cursor: default; }
+
+button#refresh-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}

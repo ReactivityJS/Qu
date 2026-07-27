@@ -1,5 +1,5 @@
-// Beispiel: "Verfolgungsjagd" — ein gejagtes Team meldet in einem festen
-// Intervall (Default 5 Minuten) seinen Standort, ein oder mehrere
+// Beispiel: "Geo Chase" — ein gejagtes Team meldet in einem festen
+// Intervall (Default 2 Minuten) seinen Standort, ein oder mehrere
 // Fänger-Teams sehen die Punkte (und damit den nachgezeichneten Weg) auf
 // einer Karte und versuchen, das gejagte Team zu finden und in Reichweite
 // zu fangen. Reine Logik hier, ohne Browser/Karte — die Oberfläche
@@ -34,7 +34,7 @@
 // einzige Subscription liefert bereits Vorhandenes UND künftige Änderungen.
 import { viewKey, viewObject } from '../src/index.js';
 
-const DEFAULT_PING_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_PING_INTERVAL_MS = 2 * 60_000;
 const DEFAULT_ASSUMED_SPEED_MPS = 1.4; // ruhiges Gehtempo, als Fallback ohne Bewegungshistorie
 const DEFAULT_CATCH_RADIUS_M = 50; // wie nah ein Fänger dem gejagten Team sein muss, um "gefangen" erklären zu dürfen
 
@@ -304,14 +304,23 @@ export async function endGame(qu, gameId) {
  * könnte — reine Funktion auf bereits geladenen Pings (siehe listPings()),
  * kein eigener QU-Zugriff, damit sie sich unabhängig testen lässt.
  *
- * Geschwindigkeit: mit zwei oder mehr Pings wird die tatsächlich
- * zurückgelegte Strecke zwischen den letzten beiden Pings durch die
- * vergangene Zeit geteilt (beobachtete Geschwindigkeit) — nur mit einem
+ * Geschwindigkeit: NICHT nur aus dem LETZTEN Intervall (ein einzelner
+ * Ausreißer — eine Rast, ein kurzer Sprint — würde die Vorhersage sonst
+ * verzerren, obwohl über die gesamte bisherige Strecke ein ganz anderes
+ * Tempo üblich war), sondern aus zwei Größen über die GESAMTE
+ * Ping-Historie: der DURCHSCHNITTLICHEN Geschwindigkeit (Gesamtstrecke /
+ * Gesamtzeit, glättet einzelne Ausreißer weg) und der SCHNELLSTEN je
+ * zwischen zwei aufeinanderfolgenden Pings beobachteten Geschwindigkeit
+ * (fängt eine kurze, schnelle Etappe auf, die im Durchschnitt sonst
+ * untergehen würde) — verwendet wird jeweils das GRÖSSERE von beiden. Der
+ * Radius ist eine grobe OBERE Schätzung ("könnte hier drin sein"), kein
+ * Pfad-Vorhersagealgorithmus: ein zu KLEINER Radius (weil zufällig gerade
+ * die letzte oder die durchschnittliche Etappe langsam war) wäre für die
+ * suchenden Jäger irreführender als ein zu großzügiger. Nur mit einem
  * einzigen Ping (keine Bewegungshistorie) greift `config.assumedSpeedMps`
  * als Fallback. Der Radius selbst ist `geschwindigkeit * seit-dem-letzten-
  * Ping-vergangene-Zeit`, zuzüglich einer eventuellen GPS-Ungenauigkeit
- * (`accuracy` des letzten Pings) als Sicherheitsmarge — bewusst eine grobe
- * obere Schätzung ("könnte hier drin sein"), kein Pfad-Vorhersagealgorithmus.
+ * (`accuracy` des letzten Pings) als Sicherheitsmarge.
  */
 export function predictNextRadius(pings, config, now = Date.now()) {
   if (!pings.length) return null;
@@ -320,11 +329,22 @@ export function predictNextRadius(pings, config, now = Date.now()) {
 
   let speedMps = last.value.speedMps ?? config?.assumedSpeedMps ?? DEFAULT_ASSUMED_SPEED_MPS;
   if (pings.length >= 2) {
-    const prev = pings[pings.length - 2];
-    const dtS = (last.ts - prev.ts) / 1000;
-    if (dtS > 0) {
-      const distM = haversineMeters({ lat: prev.value.lat, lon: prev.value.lon }, { lat: last.value.lat, lon: last.value.lon });
-      speedMps = distM / dtS;
+    let totalDistM = 0;
+    let totalDtS = 0;
+    let peakSpeedMps = 0;
+    for (let i = 1; i < pings.length; i++) {
+      const prev = pings[i - 1];
+      const cur = pings[i];
+      const dtS = (cur.ts - prev.ts) / 1000;
+      if (dtS <= 0) continue; // gleichzeitige/rückdatierte Pings (Uhr-Drift) tragen nichts zur Geschwindigkeit bei
+      const distM = haversineMeters({ lat: prev.value.lat, lon: prev.value.lon }, { lat: cur.value.lat, lon: cur.value.lon });
+      totalDistM += distM;
+      totalDtS += dtS;
+      peakSpeedMps = Math.max(peakSpeedMps, distM / dtS);
+    }
+    if (totalDtS > 0) {
+      const avgSpeedMps = totalDistM / totalDtS;
+      speedMps = Math.max(avgSpeedMps, peakSpeedMps);
     }
   }
 

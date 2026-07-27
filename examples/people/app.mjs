@@ -194,10 +194,22 @@ async function main() {
     attrsSubOff = off;
   }
   let attrsSubOff = null;
+  // Dasselbe Muster wie replaceAttrsSub() oben, nur für den eigenen
+  // Verzeichnis-Sichtbarkeits-Status — dessen Toggle wurde bisher NUR
+  // einmalig beim Öffnen des Profils gelesen (kein Live-Abo, anders als
+  // die Attribute). Ein zweites offenes Tab/Gerät derselben Identität, das
+  // die Sichtbarkeit ändert, während DIESES Profil-Fenster schon offen ist,
+  // ließ den Schalter dadurch veraltet stehen, bis man ihn erneut öffnete.
+  function replaceVisibilitySub(off) {
+    visibilitySubOff?.();
+    visibilitySubOff = off;
+  }
+  let visibilitySubOff = null;
   function hideAllScreens() {
     profileModal.hidden = true;
     viewProfileModal.hidden = true;
     replaceAttrsSub(null); // kein Screen mehr offen, der von Attribut-Änderungen live betroffen wäre
+    replaceVisibilitySub(null);
   }
 
   let lastRenderedHash = null;
@@ -228,6 +240,15 @@ async function main() {
     setAvatar(avatarPreviewBtn, myProfile.alias, myAvatarQ?.value ?? null);
     const ownEntry = await qu.get(`${DIRECTORY_ID}/entries/${qu.fingerprint}`);
     visibleToggle.checked = !!ownEntry?.value?.visible;
+    // Live nachziehen, solange dieser Screen offen ist — s. replaceVisibilitySub()s
+    // Doku oben. onDirectoryChange() liefert JEDE Identität, die ihre
+    // Sichtbarkeit ändert, daher hier explizit auf die eigene gefiltert
+    // (dieselbe "Pfad ist Adressierung, nicht Vertrauen"-Regel wie überall
+    // sonst: der verifizierte `writer`, nicht der Pfad, entscheidet).
+    replaceVisibilitySub(qu.onDirectoryChange((q) => {
+      if (q.writer !== qu.fingerprint) return;
+      visibleToggle.checked = !!q.value?.visible;
+    }));
     attrErrorEl.textContent = '';
     await renderOwnAttrs();
     // Live statt nur beim eigenen Bearbeiten: eine zweite Instanz derselben
@@ -272,11 +293,22 @@ async function main() {
     const attrs = await qu.listProfileAttrs(qu.fingerprint);
     renderAttrList(attrListEl, attrEmptyEl, attrs, { removable: true });
   }
+  /**
+   * `attrs`: `{ key: { value, private } }` (s. listProfileAttrs()'s Doku in
+   * profiles.js). `private` ist nur für die EIGENE Liste (`removable: true`)
+   * überhaupt von Interesse — ein privates Feld eines FREMDEN Profils
+   * erreicht diese Funktion sowieso nie (Entschlüsselung schlägt für eine
+   * nicht adressierte Leserin fehl, listProfileAttrs() filtert es schon
+   * heraus), ein Sichtbarkeits-Hinweis wäre dort also immer nur "🌐
+   * Öffentlich" auf jeder Zeile — redundant, deshalb dort bewusst
+   * ausgeblendet statt es trotzdem anzuzeigen.
+   */
   function renderAttrList(listEl, emptyEl, attrs, { removable = false } = {}) {
     const keys = Object.keys(attrs);
     listEl.textContent = '';
     emptyEl.hidden = keys.length > 0;
     for (const key of keys) {
+      const { value, private: isPrivate } = attrs[key];
       const li = document.createElement('li');
       li.className = 'attr-row';
       const keyEl = document.createElement('span');
@@ -284,9 +316,22 @@ async function main() {
       keyEl.textContent = key;
       const valueEl = document.createElement('span');
       valueEl.className = 'attr-value';
-      valueEl.textContent = attrs[key];
+      valueEl.textContent = value;
       li.append(keyEl, valueEl);
       if (removable) {
+        // Umschalten schreibt denselben Wert einfach mit umgekehrter
+        // encryptFor-Einstellung neu (put() derselben Schlüssel-Adresse,
+        // s. setProfileAttr()) — kein Entfernen+Neuanlegen nötig.
+        const privacyBtn = document.createElement('button');
+        privacyBtn.type = 'button';
+        privacyBtn.className = 'attr-privacy-btn';
+        privacyBtn.title = isPrivate ? 'Privat — antippen, um öffentlich zu machen' : 'Öffentlich — antippen, um privat zu machen';
+        privacyBtn.textContent = isPrivate ? '🔒 Privat' : '🌐 Öffentlich';
+        privacyBtn.addEventListener('click', async () => {
+          await qu.setProfileAttr(key, value, isPrivate ? {} : { encryptFor: [qu.fingerprint] });
+          await renderOwnAttrs();
+        });
+        li.appendChild(privacyBtn);
         const removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.className = 'attr-remove-btn';

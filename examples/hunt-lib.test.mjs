@@ -243,3 +243,36 @@ test('predictNextRadius: an explicit per-ping speedMps (e.g. Geolocation coords.
   const result = predictNextRadius(pings, { assumedSpeedMps: 1.4 }, 10_000);
   assert.equal(result.speedMps, 5);
 });
+
+test('predictNextRadius: a single slow LAST interval (e.g. a rest stop) does not collapse the estimate — the earlier, faster pace still counts', () => {
+  const a = { lat: 52.5200, lon: 13.4050 };
+  const b = { lat: 52.5290, lon: 13.4050 }; // ~1000m north
+  const pings = [
+    { ts: 0, value: { lat: a.lat, lon: a.lon, accuracy: 0 } },
+    { ts: 100_000, value: { lat: b.lat, lon: b.lon, accuracy: 0 } }, // ~10 m/s over 100s
+    { ts: 1_100_000, value: { lat: b.lat, lon: b.lon, accuracy: 0 } }, // stood still for 1000s — the last interval alone is ~0 m/s
+  ];
+  const result = predictNextRadius(pings, { assumedSpeedMps: 1.4 }, 1_100_000);
+  // Naively taking only the LAST interval's speed would give ~0 m/s here — a
+  // radius that barely grows even though the tracked person moved fast
+  // earlier and could, in principle, be moving again right now. Picking
+  // the larger of the whole-history average and the peak interval speed
+  // (both computed over ALL pings, not just the last one) keeps the
+  // estimate anchored to the fastest pace actually observed instead.
+  assert.ok(result.speedMps > 5, `expected the earlier ~10 m/s pace to still dominate, got ${result.speedMps} m/s`);
+});
+
+test('predictNextRadius: a single fast interval buried in an otherwise slow history is not averaged away', () => {
+  const start = { lat: 52.5200, lon: 13.4050 };
+  const sprintEnd = { lat: 52.5290, lon: 13.4050 }; // ~1000m north
+  const pings = [
+    { ts: 0, value: { lat: start.lat, lon: start.lon, accuracy: 0 } },
+    { ts: 1000 * 1000, value: { lat: start.lat, lon: start.lon, accuracy: 0 } }, // barely moved for 1000s (~0 m/s)
+    { ts: 1010 * 1000, value: { lat: sprintEnd.lat, lon: sprintEnd.lon, accuracy: 0 } }, // then covered ~1000m in 10s (~100 m/s)
+  ];
+  const result = predictNextRadius(pings, { assumedSpeedMps: 1.4 }, 1010 * 1000);
+  // A pure average over the whole history (~1000m / 1010s ≈ 1 m/s) would
+  // wash out that one fast burst — the peak-interval speed is what should
+  // win here, since the person just demonstrated they CAN move that fast.
+  assert.ok(result.speedMps > 50, `expected the peak ~100 m/s burst to dominate, got ${result.speedMps} m/s`);
+});

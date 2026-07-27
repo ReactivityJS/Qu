@@ -46,6 +46,13 @@ export class Router {
   }
 
   updateMetric(channelId, metric) {
+    // A non-finite metric would otherwise silently break resolve()'s
+    // `r.metric === best` tie check below: Math.min() with a NaN operand
+    // returns NaN, and nothing ever equals NaN, so that whole group would
+    // resolve to zero chosen routes (a qubit silently never pushed to
+    // ANY route in the group) instead of falling back to routing by the
+    // routes that do have a real metric.
+    if (!Number.isFinite(metric)) return;
     const r = this.#routes.get(channelId);
     if (r) r.metric = metric;
   }

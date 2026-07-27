@@ -2,7 +2,18 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <!-- interactive-widget=resizes-content (neuer, wachsend unterstützter Teil
+       der Viewport-Meta-Spezifikation, v. a. Chrome/Android): weist den
+       Browser an, die Bildschirmtastatur wie eine ECHTE Verkleinerung des
+       sichtbaren Bereichs zu behandeln (layout- UND visual viewport
+       gemeinsam), statt sie nur optisch "über" den Inhalt zu legen, ohne
+       dass sich `100vh`/`100dvh`/`window.innerHeight` mitändern. Genau das
+       ist die Wurzel des sonst bekannten Symptoms "Fußzeile bleibt an
+       ihrem alten Platz, darunter lässt sich in leeren Raum scrollen" —
+       app.mjs's syncViewportHeight()/`--app-height` (window.visualViewport-
+       basiert) bleibt zusätzlich als Fallback aktiv für Browser, die dieses
+       Meta-Attribut (noch) ignorieren. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#0b0d12" />
   <meta name="description" content="Verschlüsselter Chat (1:1 und Gruppen) auf Basis von QU — Identität und Nachrichten bleiben auf dem Gerät." />
   <title>QU — Chat</title>
@@ -50,21 +61,94 @@
           <div id="chat-peer-identity" class="chat-peer-identity"></div>
           <div class="chat-peer-status" id="peer-status">…</div>
         </div>
+        <button id="chat-search-btn" class="icon-btn" type="button" title="In diesem Chat suchen">🔍</button>
         <button id="audio-call-btn" class="icon-btn" type="button" title="Anrufen">📞</button>
         <button id="video-call-btn" class="icon-btn" type="button" title="Videoanruf">🎥</button>
         <button id="chat-settings-btn" class="icon-btn" type="button" title="Chat-Einstellungen">⚙</button>
       </header>
 
+      <!-- Angeheftete Nachrichten dieses Chats (Element-Vorbild) — sichtbar,
+           sobald mindestens eine Nachricht angeheftet ist. Zeigt die
+           zuletzt angeheftete zuoberst; ein Klick springt zu ihr (derselbe
+           Anker-Mechanismus wie ein Zeit-Link, s. scrollToMessage()). -->
+      <div id="pinned-bar" class="pinned-bar" hidden>
+        <button id="pinned-bar-jump" class="pinned-bar-jump" type="button">
+          <span class="pinned-bar-icon">📌</span>
+          <span id="pinned-bar-text" class="pinned-bar-text"></span>
+        </button>
+        <button id="pinned-bar-list-btn" class="pinned-bar-count" type="button" title="Alle angehefteten Nachrichten"></button>
+      </div>
+
       <ul id="message-list" class="message-list"></ul>
 
+      <!-- Antwort-Vorschau — sichtbar, solange replyTarget gesetzt ist (s.
+           app.mjs's renderReplyPreview()), verschwindet erst nach dem
+           Senden oder einem Tipp auf ✕. -->
+      <div id="reply-preview" class="reply-preview" hidden>
+        <div class="reply-preview-body">
+          <div class="reply-preview-author" id="reply-preview-author"></div>
+          <div class="reply-preview-text" id="reply-preview-text"></div>
+        </div>
+        <button id="reply-cancel-btn" class="icon-btn" type="button" title="Antwort abbrechen">✕</button>
+      </div>
       <div id="pending-files" class="pending-files"></div>
+      <!-- Sprachnachricht: löst den normalen Composer ab (siehe .composer/
+           .voice-recorder in style.css). Fünf Zustände (app.mjs'
+           setVoiceRecorderState()): "armed" (Mikrofon freigegeben, aber
+           noch NICHTS aufgenommen — erst ein bewusster Tipp auf Start
+           beginnt die Aufnahme, kein Loslegen direkt beim Antippen von 🎤,
+           damit die ersten Sekunden nicht überraschend verpasst werden) ->
+           "recording" -> optional "paused" (⏸/▶, falls der Browser
+           MediaRecorder#pause() unterstützt) -> "preview" (Vorhören,
+           Verwerfen oder Senden). -->
+      <div id="voice-recorder" class="voice-recorder" hidden>
+        <button id="voice-discard-btn" class="icon-btn" type="button" title="Verwerfen">🗑</button>
+        <div id="voice-status" class="voice-status">
+          <span id="voice-rec-dot" class="voice-rec-dot"></span>
+          <span id="voice-timer">0:00</span>
+        </div>
+        <audio id="voice-preview-audio" hidden controls></audio>
+        <!-- Als CSS-gezeichnete Formen statt Unicode-Glyphen (⏺⏸▶⏹) — die
+             sehen je nach Gerät/Schriftart unterschiedlich (teils gar nicht
+             oder verwechselbar ähnlich) aus. Kreis/Balken/Dreieck/Quadrat
+             sind auf jedem Gerät exakt gleich UND folgen der aus jeder
+             Aufnahme-App bekannten Konvention: roter Kreis = aufnehmen,
+             rotes Quadrat = beenden — bewusst unterschiedliche SILHOUETTEN,
+             nicht nur unterschiedliche Farben (auch für Farbenblinde klar
+             unterscheidbar). -->
+        <button id="voice-start-btn" class="icon-btn voice-record-btn" type="button" title="Aufnahme starten"><span class="voice-icon voice-icon-record"></span></button>
+        <button id="voice-pause-btn" class="icon-btn" type="button" title="Pause" hidden><span class="voice-icon voice-icon-pause"></span></button>
+        <button id="voice-resume-btn" class="icon-btn voice-resume-btn" type="button" title="Aufnahme fortsetzen" hidden><span class="voice-icon voice-icon-play"></span></button>
+        <button id="voice-stop-btn" class="icon-btn voice-stop-btn" type="button" title="Aufnahme beenden (noch nicht senden)" hidden><span class="voice-icon voice-icon-stop"></span></button>
+        <button id="voice-send-btn" class="send-btn" type="button" title="Senden" hidden>&#10148;</button>
+      </div>
       <form id="composer" class="composer">
         <button id="emoji-btn" class="icon-btn" type="button" title="Emoji">😊</button>
         <div id="emoji-picker" class="emoji-picker" hidden></div>
-        <button id="attach-btn" class="icon-btn" type="button" title="Anhang">📎</button>
-        <input id="file-input" type="file" multiple hidden accept="image/*,video/*,audio/*" />
+        <!-- Ab einer schmalen (Handy-)Breite blendet style.css .extras-toggle-btn
+             ein und .composer-extras auf ein Popup um (bottom: 100%, wie
+             .emoji-picker) statt es normal in der Eingabezeile mitlaufen zu
+             lassen — ab der Breakpoint-Breite zeigt .composer-extras
+             (display: contents) dieselben drei Buttons stattdessen wieder
+             EINZELN direkt in der Zeile, wie zuvor. Dieselben Elemente/
+             Klick-Handler in app.mjs für beide Darstellungen, nur die
+             Anordnung ändert sich per CSS. -->
+        <button id="extras-toggle-btn" class="icon-btn extras-toggle-btn" type="button" title="Weitere Optionen">➕</button>
+        <div id="composer-extras" class="composer-extras">
+          <button id="attach-btn" class="icon-btn" type="button" title="Anhang"><span class="icon-btn-glyph">📎</span><span class="icon-btn-label">Anhang</span></button>
+          <input id="file-input" type="file" multiple hidden accept="image/*,video/*,audio/*" />
+          <button id="location-btn" class="icon-btn" type="button" title="Standort teilen"><span class="icon-btn-glyph">📍</span><span class="icon-btn-label">Standort teilen</span></button>
+          <button id="hunt-btn" class="icon-btn" type="button" title="Geo Chase einladen"><span class="icon-btn-glyph">🎯</span><span class="icon-btn-label">Geo Chase</span></button>
+        </div>
         <textarea id="text-input" rows="1" placeholder="Nachricht schreiben …"></textarea>
-        <button id="send-btn" class="send-btn" type="submit" title="Senden">&#10148;</button>
+        <!-- WhatsApp-Verhalten: 🎤 (Sprachnachricht) solange nichts zu senden
+             da ist, wechselt automatisch auf ➤ (Senden), sobald Text/ein
+             Anhang vorliegt — EIN Button statt zwei getrennter, s.
+             updateSendButtonMode()/app.mjs. type="button" hier im Startzustand
+             (nicht "submit"): ein leeres Formular darf nicht durch Enter/Klick
+             abgeschickt werden können, solange der Button noch der
+             Mikrofon-Knopf ist. -->
+        <button id="send-btn" class="send-btn" type="button" title="Sprachnachricht aufnehmen">🎤</button>
       </form>
     </section>
 
@@ -107,6 +191,33 @@
     </div>
   </div>
 
+  <!-- Fremdes Profil, inline als Unterseite DIESES Chats — #/<roomId>/profile/<fp>
+       (statt wie bisher ein externer Link/neuer Tab zu examples/people).
+       Nur-Lese-Ansicht (öffentliche Attribute) — Bearbeiten bleibt weiterhin
+       Sache der eigenen Identität in examples/people, dorthin verlinkt
+       #chat-profile-view-external-link als Ausweiche. Schließen per
+       Zurück-Button ODER Browser-"Zurück" (closeScreen() = history.back(),
+       dasselbe Muster wie jeder andere Chat-Unterpfad). -->
+  <div id="profile-view-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <button id="profile-view-back-btn" class="back-btn" type="button">&larr;</button>
+      <div class="profile-avatar-row">
+        <div id="profile-view-avatar" class="avatar lg"></div>
+        <div>
+          <h2 id="profile-view-alias">…</h2>
+          <div class="fp-display" id="profile-view-fp">…</div>
+        </div>
+      </div>
+      <h3>Attribute</h3>
+      <ul id="profile-view-attr-list" class="attr-list"></ul>
+      <div id="profile-view-attr-empty" class="modal-hint">Keine öffentlichen Attribute.</div>
+      <p class="modal-hint"><a id="profile-view-external-link" href="#" target="_blank" rel="noopener">In der People-App öffnen →</a></p>
+      <div class="modal-actions">
+        <button id="profile-view-close-btn" class="btn btn-secondary" type="button">Schließen</button>
+      </div>
+    </div>
+  </div>
+
   <!-- App-Einstellungen (Push, Töne, Zurücksetzen) — #/settings -->
   <div id="app-settings-modal" class="modal-backdrop" hidden>
     <div class="modal">
@@ -120,14 +231,46 @@
       <label class="toggle-row"><input type="checkbox" id="sound-messages-toggle" /> Ton bei neuen Nachrichten</label>
       <label class="toggle-row"><input type="checkbox" id="sound-calls-toggle" /> Klingelton bei Anrufen</label>
       <p class="modal-hint">Pro Chat lässt sich zusätzlich stummschalten (siehe die Einstellungen des jeweiligen Chats).</p>
+      <label>Anzeige</label>
+      <label class="toggle-row"><input type="checkbox" id="show-date-toggle" /> Datum zusätzlich zur Uhrzeit an jeder Nachricht anzeigen</label>
+      <p class="modal-hint">Standardmäßig aus (nur Uhrzeit) — der Tages-Trenner in der Nachrichtenliste zeigt das Datum ohnehin schon einmal pro Tag.</p>
+      <label>Eingabe</label>
+      <label class="toggle-row"><input type="checkbox" id="enter-to-send-toggle" /> Eingabetaste sendet die Nachricht</label>
+      <p class="modal-hint">Standardmäßig aus: Eingabetaste bricht immer nur die Zeile um, gesendet wird ausschließlich per ➤-Button. An: Eingabetaste sendet zusätzlich.</p>
+      <label>Formatierung</label>
+      <ul class="format-legend">
+        <li><code>*fett*</code> → <strong>fett</strong></li>
+        <li><code>_unterstrichen_</code> → <u>unterstrichen</u></li>
+        <li><code>__kursiv__</code> → <em>kursiv</em></li>
+        <li><code>~durchgestrichen~</code> → <s>durchgestrichen</s></li>
+        <li><code>- </code>, <code>* </code> oder <code>1. </code> am Zeilenanfang → Liste</li>
+        <li>Umschalt+Eingabetaste → Zeilenumbruch (funktioniert immer, unabhängig von der Einstellung oben, auf Mobile wie Desktop)</li>
+      </ul>
       <label>Medien</label>
       <label class="toggle-row"><input type="checkbox" id="auto-load-media-toggle" /> Bilder, Videos und Dateien automatisch laden</label>
       <p class="modal-hint">Aus: neue Anhänge zeigen erst Name/Größe, geladen wird nur nach einem Tipp darauf — schont mobiles Datenvolumen. Schon vorhandene/eigene Anhänge sind davon unberührt.</p>
+      <label for="map-provider-select">Standort teilen — Kartenanbieter</label>
+      <select id="map-provider-select">
+        <option value="osm">OpenStreetMap (Standard)</option>
+        <option value="google">Google Maps</option>
+        <option value="apple">Apple Maps</option>
+        <option value="custom">Eigene URL …</option>
+      </select>
+      <div id="map-custom-url-row" hidden>
+        <label for="map-custom-url-input">Eigene Karten-URL (mit <code>{lat}</code>/<code>{lng}</code>)</label>
+        <input type="text" id="map-custom-url-input" placeholder="https://karte.example.org/?lat={lat}&amp;lng={lng}" autocomplete="off" />
+      </div>
+      <p class="modal-hint">Der 📍-Button im Chat sendet den eigenen Standort als Karten-Link mit dem hier gewählten Anbieter.</p>
+      <label>Privatsphäre</label>
+      <label class="toggle-row"><input type="checkbox" id="presence-sharing-toggle" /> Online-Status mit Kontakten teilen</label>
+      <p class="modal-hint">Standardmäßig aus. Aus: Kontakte sehen bei dir kein grünes "online" mehr, du siehst deren Online-Status aber weiterhin ganz normal (das ist unabhängig davon). Gilt geräteübergreifend erst nach dem nächsten Verbinden.</p>
+      <label class="toggle-row"><input type="checkbox" id="share-target-toggle" checked /> Teilen an QU Chat entgegennehmen</label>
+      <p class="modal-hint">Standardmäßig an. Aus: ein "Teilen an QU Chat" aus Galerie/Browser/anderen Apps wird sofort verworfen, ohne dass Inhalte je gespeichert werden. Wichtig: das entfernt QU Chat nicht aus dem System-Teilen-Menü selbst — das steuert Android/iOS, nicht diese Einstellung, und aktualisiert sich meist erst nach einem App-Update/einer Neuinstallation.</p>
       <label>Fehlerbehebung</label>
       <div class="modal-actions">
         <button id="reset-app-btn" class="btn btn-secondary" type="button">App zurücksetzen</button>
       </div>
-      <p class="modal-hint">Erneuert Service Worker &amp; Browser-Cache und lädt neu — für den Fall, dass ein Update (z. B. am Anruf-Code) nicht ankommt. Fingerprint, Kontakte und Nachrichten bleiben erhalten.</p>
+      <p class="modal-hint">Erneuert Service Worker &amp; Browser-Cache und lädt neu — für den Fall, dass ein Update (z. B. am Anruf-Code) nicht ankommt. Fingerprint, Kontakte und Nachrichten bleiben erhalten. Hilft auch, wenn Android/iOS das System-Teilen-Menü noch nicht an eine geänderte "Teilen an QU Chat entgegennehmen"-Einstellung angepasst haben — einen sofortigen Zwang dazu gibt es technisch nicht (das entscheidet allein das Betriebssystem), aber ein Zurücksetzen + einmal Neuöffnen der App beschleunigt es meist.</p>
       <div class="modal-actions">
         <button id="app-settings-close-btn" class="btn btn-secondary" type="button">Schließen</button>
       </div>
@@ -151,6 +294,25 @@
       <div class="modal-actions">
         <button id="add-contact-cancel-btn" class="btn btn-secondary" type="button">Abbrechen</button>
         <button id="add-contact-save-btn" class="btn btn-primary" type="button">Chat starten</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ziel für "Teilen an QU Chat" (System-Teilen-Dialog aus Galerie/
+       Browser/anderen Apps, s. manifest.webmanifest's share_target +
+       sw.js's handleShareTarget()) — #/share/<id>. Zeigt eine Kurz-
+       zusammenfassung + Chat-Auswahl; die eigentliche Übernahme in den
+       Composer passiert danach in dessen showChatScreen(), wie ein ganz
+       normal angehängter/eingegebener Inhalt. -->
+  <div id="share-target-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <h2>Teilen an …</h2>
+      <p class="modal-hint" id="share-target-summary">Lädt …</p>
+      <label>In welchem Chat öffnen?</label>
+      <ul id="share-target-room-list" class="share-target-room-list"></ul>
+      <div class="modal-error" id="share-target-error"></div>
+      <div class="modal-actions">
+        <button id="share-target-cancel-btn" class="btn btn-secondary" type="button">Abbrechen</button>
       </div>
     </div>
   </div>
@@ -200,8 +362,8 @@
       </div>
 
       <label class="toggle-row"><input type="checkbox" id="chat-mute-toggle" /> Diesen Chat stummschalten</label>
-      <label class="toggle-row"><input type="checkbox" id="chat-encryption-toggle" checked /> Ende-zu-Ende verschlüsselt</label>
-      <p class="modal-hint" id="chat-encryption-hint">Deine künftigen Nachrichten werden Ende-zu-Ende verschlüsselt — lesbar nur für die Mitglieder dieses Chats, nicht für den Relay-Betreiber.</p>
+      <label class="toggle-row"><input type="checkbox" id="chat-encryption-toggle" checked disabled /> Ende-zu-Ende verschlüsselt</label>
+      <p class="modal-hint" id="chat-encryption-hint">Deine künftigen Nachrichten werden Ende-zu-Ende verschlüsselt — lesbar nur für die Mitglieder dieses Chats, nicht für den Relay-Betreiber. Kann nicht deaktiviert werden.</p>
 
       <label>Chat löschen</label>
       <div class="modal-actions">
@@ -213,6 +375,51 @@
         <button id="chat-settings-close-btn" class="btn btn-secondary" type="button">Schließen</button>
       </div>
     </div>
+  </div>
+
+  <!-- Aktionsmenü einer einzelnen Nachricht — EIN gemeinsames Popup für
+       jede Nachricht (nicht pro Bubble ein eigenes), per JS (app.mjs's
+       openMessageActionsMenu()) neben dem jeweils angetippten ⋮-Button
+       positioniert, exakt dasselbe Öffnen/Schließen-Muster wie
+       #emoji-picker. "Teilen" nur sichtbar, wenn navigator.share
+       überhaupt existiert. -->
+  <div id="message-actions-menu" class="message-actions-menu" hidden>
+    <button id="msg-action-react" class="message-action-item" type="button">😊 Reagieren</button>
+    <button id="msg-action-pin" class="message-action-item" type="button">📌 Anheften</button>
+    <button id="msg-action-reply" class="message-action-item" type="button">↩️ Antworten</button>
+    <button id="msg-action-edit" class="message-action-item" type="button">✏️ Bearbeiten</button>
+    <button id="msg-action-forward" class="message-action-item" type="button">➡️ Weiterleiten</button>
+    <button id="msg-action-share" class="message-action-item" type="button">📤 Teilen</button>
+    <button id="msg-action-copy" class="message-action-item" type="button">📋 Text kopieren</button>
+    <button id="msg-action-copy-link" class="message-action-item" type="button">🔗 Link kopieren</button>
+  </div>
+
+  <!-- Schnellauswahl für eine Reaktion — öffnet sich anstelle des
+       Aktionsmenüs (msg-action-react-Handler in app.mjs), dasselbe
+       Positionierungs-/Öffnen-Schließen-Muster. -->
+  <div id="reaction-picker" class="reaction-picker" hidden>
+    <button type="button" class="reaction-picker-item" data-emoji="👍">👍</button>
+    <button type="button" class="reaction-picker-item" data-emoji="❤️">❤️</button>
+    <button type="button" class="reaction-picker-item" data-emoji="😂">😂</button>
+    <button type="button" class="reaction-picker-item" data-emoji="😮">😮</button>
+    <button type="button" class="reaction-picker-item" data-emoji="😢">😢</button>
+    <button type="button" class="reaction-picker-item" data-emoji="🙏">🙏</button>
+    <button type="button" class="reaction-picker-item" data-emoji="🔥">🔥</button>
+    <button type="button" class="reaction-picker-item" data-emoji="✅">✅</button>
+    <button id="reaction-picker-more-btn" class="reaction-picker-item reaction-picker-more" type="button" title="Weitere Emojis">+</button>
+  </div>
+
+  <!-- Erweiterte Emoji-Auswahl fürs Reagieren — öffnet sich über das "+" in
+       #reaction-picker, gefüllt aus derselben EMOJIS-Liste wie der normale
+       Emoji-Picker im Composer (app.mjs's buildReactionExtendedPicker()). -->
+  <div id="reaction-picker-extended" class="reaction-picker-extended" hidden></div>
+
+  <!-- Liste ALLER angehefteten Nachrichten dieses Chats — geöffnet über den
+       Zähler-Button in #pinned-bar, wenn mehr als eine angeheftet ist.
+       renderPinnedListPopup() (app.mjs) füllt #pinned-list-items. -->
+  <div id="pinned-list-popup" class="pinned-list-popup" hidden>
+    <div class="pinned-list-header">📌 Angeheftete Nachrichten</div>
+    <ul id="pinned-list-items" class="pinned-list-items"></ul>
   </div>
 
   <!-- Lightbox: Vollbild + Zoom für Bilder -->

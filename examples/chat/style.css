@@ -24,7 +24,7 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { height: 100%; }
+html, body { height: 100%; overflow: hidden; }
 body {
   margin: 0;
   background: var(--bg);
@@ -38,7 +38,13 @@ body {
      Browser beim Fokussieren eines Eingabefelds die ganze Seite ein Stück
      hochscrollen (natives "scroll focused element into view"), wodurch
      Header/Eingabeleiste sichtbar "mit rausscrollen" — genau das
-     gemeldete Symptom. */
+     gemeldete Symptom. `overflow: hidden` auf html/body oben zusätzlich
+     als zweite, unabhängige Sperre (manche mobilen Browser respektieren
+     `position: fixed` bei aufgeklappter Tastatur nicht immer zuverlässig,
+     s. index.html's `interactive-widget=resizes-content`-Doku) — beide
+     zusammen garantieren, dass NIE unterhalb von .app sichtbarer Leerraum
+     erscheint, egal welcher der beiden Mechanismen im jeweiligen Browser
+     tatsächlich greift. */
   position: fixed;
   inset: 0;
   width: 100%;
@@ -110,6 +116,15 @@ button { font-family: inherit; }
 .avatar.xl { width: 6.5rem; height: 6.5rem; font-size: 2.1rem; flex-shrink: 0; }
 .profile-avatar-row { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 0.5rem; }
 .profile-avatar-row .btn { display: block; margin-bottom: 0.4rem; font-size: 0.78rem; padding: 0.35rem 0.7rem; }
+/* Attribut-Liste im inline Profil-View-Screen (#profile-view-modal) —
+   identisch zu examples/people/style.css's .attr-* (dort editierbar, hier
+   nur lesend), absichtlich dupliziert statt importiert: zwei separate
+   Apps mit eigenem Stylesheet, kein gemeinsames CSS-Modul in diesem
+   Projekt (dieselbe Haltung wie app.mjs's resizeAvatar()-Duplikation). */
+.attr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.attr-row { display: flex; align-items: center; gap: 0.5rem; background: var(--panel-2); border-radius: 0.5rem; padding: 0.5rem 0.7rem; }
+.attr-key { color: var(--muted); font-size: 0.8rem; min-width: 5rem; }
+.attr-value { flex: 1; word-break: break-word; font-size: 0.9rem; }
 .avatar .dot {
   position: absolute;
   right: -1px;
@@ -140,6 +155,11 @@ button { font-family: inherit; }
   font-size: 1.1rem;
   flex-shrink: 0;
 }
+/* Nur von attach-btn/location-btn/voice-btn benutzt — im Icon-Modus
+   (Standard, s. .composer-extras oben) unsichtbar; im Handy-Popup
+   (760px-Breakpoint unten) wieder eingeblendet, damit eine vertikale
+   Liste aus drei Icons allein (ohne Beschriftung) nicht mehrdeutig ist. */
+.icon-btn-label { display: none; }
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 .icon-btn:active { transform: scale(0.94); }
 .icon-btn.active { background: var(--danger); border-color: var(--danger); color: #fff; }
@@ -181,10 +201,23 @@ button { font-family: inherit; }
    eigene absolute Positionierung relativ zu .contact statt zu .avatar.
    `qu-profile-card > .dot` grenzt das gezielt auf den DM-Fall ein, damit
    es die bestehende `.avatar .dot`-Regel der Gruppe nicht überschreibt. */
+/* grid-area statt fixer left/top-Pixelwerte — .qu-profile-avatar sitzt
+   selbst nicht an einer festen Position innerhalb von .contact (die
+   "avatar"-Zone ist über zwei Zeilen hoch und wird vertikal zentriert,
+   siehe .contact's align-items), ein hartkodierter Absolut-Offset trifft
+   den Rand daher nur zufällig statt zuverlässig — landete zuvor sichtbar
+   nahe der Avatar-MITTE statt am Rand. Beide, Avatar UND Punkt, teilen sich
+   dieselbe Zone und werden gleich (center/center) darin ausgerichtet —
+   ihre Mittelpunkte fallen so IMMER exakt zusammen, unabhängig von der
+   tatsächlichen Zeilenhöhe; der anschließende transform verschiebt den
+   Punkt von diesem gemeinsamen Mittelpunkt aus gezielt zur Avatar-Ecke
+   (halbe Avatar-Breite minus halbe Punkt-Breite, plus ein Hauch Überhang
+   wie bei `.avatar .dot`s right:-1px/bottom:-1px oben). */
 .contact qu-profile-card > .dot {
-  position: absolute;
-  left: 1.35rem;
-  top: 1.35rem;
+  grid-area: avatar;
+  align-self: center;
+  justify-self: center;
+  transform: translate(0.7rem, 0.7rem);
   width: 0.65rem;
   height: 0.65rem;
   border-radius: 50%;
@@ -274,6 +307,21 @@ button { font-family: inherit; }
 
 .msg { max-width: 78%; align-self: flex-start; display: flex; flex-direction: column; }
 .msg.mine { align-self: flex-end; }
+/* Kopfzeile über der Bubble (buildMessageHeader()) — ZWEI Zeilen: oben
+   Absender (Link ins volle Profil) + ⋮-Aktionsmenü, unten Uhrzeit/Datum +
+   Lese-Häkchen. Bei einer eigenen Nachricht jeweils rechtsbündig statt
+   links, damit beide Zeilen zur rechtsbündigen Bubble passen (.msg.mine's
+   align-self: flex-end oben). */
+.msg-header { display: flex; flex-direction: column; gap: 0.1rem; font-size: 0.74rem; padding: 0 0.2rem 0.15rem; color: var(--muted); }
+.msg-header-top { display: flex; align-items: center; gap: 0.4rem; }
+.msg.mine .msg-header-top { flex-direction: row-reverse; }
+.msg-header-bottom { display: flex; align-items: center; gap: 0.3rem; }
+.msg.mine .msg-header-bottom { justify-content: flex-end; }
+/* Autorname darf zur Not schrumpfen (Ellipsis) statt das ⋮-Menü aus der
+   oberen Zeile zu drängen. */
+.msg-author { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-decoration: none; font-weight: 600; }
+.msg-author:hover { text-decoration: underline; }
+.msg-pinned-badge { font-size: 0.72rem; }
 .msg-bubble {
   background: var(--bubble-in);
   border-radius: 16px;
@@ -288,12 +336,35 @@ button { font-family: inherit; }
   100% { box-shadow: 0 0 0 2px transparent; }
 }
 .msg-text { white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; }
-.msg-meta { display: flex; gap: 0.3rem; align-items: center; justify-content: flex-end; font-size: 0.68rem; color: var(--muted); margin-top: 0.2rem; }
-.msg-meta .tick { color: var(--muted); }
-.msg-meta .tick.read { color: var(--accent-strong); }
-.msg-meta .tick.pending { opacity: 0.55; }
+/* Blockebene (parseMessageBlocks()/renderMessageText() in app.mjs) —
+   Absätze und Listen innerhalb einer Bubble, ohne die üblichen
+   Browser-Standardabstände von <ul>/<ol>/<p>, die in einer schmalen
+   Sprechblase zu viel Platz fressen würden. */
+.msg-paragraph { margin: 0; }
+.msg-paragraph + .msg-paragraph,
+.msg-paragraph + .msg-list,
+.msg-list + .msg-paragraph,
+.msg-list + .msg-list { margin-top: 0.35rem; }
+.msg-list { margin: 0; padding-left: 1.3rem; }
+.msg-list li { margin: 0.1rem 0; }
+/* Inline-Formatierung (parseFormatting()) — Browser-Standarddarstellung
+   der Tags reicht eigentlich schon, hier nur zur Klarheit explizit. */
+.msg-text strong { font-weight: 700; }
+.msg-text em { font-style: italic; }
+.msg-text u { text-decoration: underline; }
+.msg-text s { text-decoration: line-through; }
+/* Uhrzeit/Datum-Link, "bearbeitet"-Marker und Häkchen leben jetzt ALLE in
+   der .msg-header-Kopfzeile selbst (buildMessageHeader()) statt zusätzlich
+   noch einmal unten rechts in der Bubble — eine einzige, an fester Position
+   stehende Stelle für alle Metadaten statt zweier verschiedener je nach
+   Nachrichtentyp (Text vs. reiner Anhang). */
+.msg-time { color: inherit; text-decoration: none; }
+.msg-time:hover { text-decoration: underline; }
+.tick { color: var(--muted); }
+.tick.read { color: var(--accent-strong); }
+.tick.pending { opacity: 0.55; }
+.msg-edited { font-style: italic; opacity: 0.75; }
 .sync-badge { display: block; margin-top: 0.35rem; font-size: 0.72rem; color: var(--accent-strong); background: color-mix(in srgb, var(--accent-strong) 12%, transparent); border-radius: 6px; padding: 0.3rem 0.5rem; }
-.msg-sender { font-size: 0.72rem; color: var(--accent); margin-bottom: 0.15rem; }
 
 .msg-link {
   display: block;
@@ -309,6 +380,16 @@ button { font-family: inherit; }
 .msg-link .link-host { display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; color: var(--accent); }
 .msg-link .link-url { font-size: 0.78rem; color: var(--muted); word-break: break-all; }
 .msg-text a { color: var(--accent-strong); }
+
+/* Standort-Vorschau (erkannter Karten-Link, s. buildLinkPreview()) —
+   Label+Koordinaten bleiben auch OHNE das Bild (Ladefehler/offline)
+   sichtbar, siehe img's error-Handler in app.mjs. */
+.msg-location { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem; }
+.msg-location-thumb { width: 4.5rem; height: 4.5rem; border-radius: 8px; object-fit: cover; flex-shrink: 0; background: var(--panel-2); }
+.msg-location-info { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.msg-location-coords { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.voice-message-label { display: flex; align-items: center; gap: 0.3rem; font-size: 0.72rem; color: var(--accent); margin-bottom: 0.3rem; }
 
 .attachment { margin-top: 0.4rem; }
 .attachment-media {
@@ -363,6 +444,16 @@ button { font-family: inherit; }
 }
 .composer textarea:focus { outline: none; border-color: var(--accent); }
 .composer .icon-btn { background: none; border: none; }
+
+/* Default (breit genug, s. den 760px-Breakpoint unten): 📎/📍/🎤 laufen
+   direkt in der Eingabezeile mit — .composer-extras trägt sie nur als
+   Klammer im Markup (app.mjs braucht einen Container zum Ein-/Ausblenden
+   des Popups auf Handy-Breite), erscheint hier aber selbst NICHT im Layout
+   ("display: contents"), ihre Kind-Buttons verhalten sich also exakt wie
+   vorher direkte Geschwister von textarea/emoji-btn. Der "➕"-Umschalter
+   ist hier unnötig (jede Aktion hat eh schon ihr eigenes Icon). */
+.composer-extras { display: contents; }
+.extras-toggle-btn { display: none; }
 .send-btn {
   background: var(--accent-strong);
   color: #06202b;
@@ -389,10 +480,19 @@ button { font-family: inherit; }
   border-radius: 12px;
   padding: 0.5rem;
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  /* minmax(0, 1fr) statt nur 1fr: eine "nackte" 1fr-Spur darf laut Grid-
+     Spec nie kleiner als der eigene Inhalt werden (impliziter min-width:
+     auto) — bei 8 Spuren in 17rem reichte das Emoji+Padding pro Button
+     knapp nicht, das Raster wurde dadurch BREITER als die Box, was einen
+     horizontalen UND (durch den dadurch verkleinerten Restplatz) einen
+     zweiten, vertikalen Scrollbalken gleichzeitig erzwang. minmax(0, 1fr)
+     erlaubt der Spur, tatsächlich zu schrumpfen — Raster passt exakt in
+     die Box, overflow-x bleibt zusätzlich hart auf hidden als Garantie. */
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 0.1rem;
   max-height: 12rem;
   overflow-y: auto;
+  overflow-x: hidden;
   width: 17rem;
   max-width: calc(100vw - 1.4rem);
 }
@@ -407,12 +507,284 @@ button { font-family: inherit; }
 }
 .emoji-picker button:hover { background: var(--border); }
 
+/* Popup für die Nachrichten-Aktionen (↩️➡️📤📋🔗) — ein einziges gemeinsames
+   Element, per JS neben dem jeweils angetippten ⋮-Button positioniert
+   (position: fixed, deshalb KEIN bottom/left wie .emoji-picker hier, das
+   setzt app.mjs direkt inline). */
+.message-actions-menu {
+  position: fixed;
+  z-index: 60;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.3rem;
+  min-width: 11rem;
+  box-shadow: 0 4px 16px #00000050;
+}
+.message-action-item {
+  all: unset;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.message-action-item:hover, .message-action-item:focus-visible { background: var(--border); }
+
+/* Schnellauswahl für eine Reaktion — dasselbe position:fixed-Muster wie
+   .message-actions-menu oben, nur als Emoji-Raster statt einer Liste. */
+.reaction-picker {
+  position: fixed;
+  z-index: 60;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3rem;
+  display: flex;
+  gap: 0.15rem;
+  box-shadow: 0 4px 16px #00000050;
+}
+.reaction-picker-item {
+  all: unset;
+  cursor: pointer;
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: 0.3rem;
+  border-radius: 50%;
+}
+.reaction-picker-item:hover, .reaction-picker-item:focus-visible { background: var(--border); }
+.reaction-picker-more { font-size: 1.1rem; color: var(--muted); font-weight: 600; }
+.reaction-picker-more:hover, .reaction-picker-more:focus-visible { color: var(--text); }
+
+/* Erweiterte Emoji-Auswahl (über das "+" in .reaction-picker) — dasselbe
+   Raster-Muster wie der Composer-Emoji-Picker (.emoji-picker), aber
+   position: fixed statt absolute (dieselbe Positionierungslogik wie
+   .reaction-picker/.message-actions-menu, s. positionPopup() in app.mjs). */
+.reaction-picker-extended {
+  position: fixed;
+  z-index: 60;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.5rem;
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr)); /* minmax(0, 1fr): s. .emoji-pickers Doku — verhindert denselben doppelten-Scrollbalken-Bug */
+  gap: 0.1rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  width: 17rem;
+  max-width: calc(100vw - 1.4rem);
+  box-shadow: 0 4px 16px #00000050;
+}
+.reaction-picker-extended button {
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  padding: 0.3rem;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1;
+}
+.reaction-picker-extended button:hover, .reaction-picker-extended button:focus-visible { background: var(--border); }
+
+/* Reaktions-Pills unter der Bubble (buildReactionsRow()) — .mine hebt
+   hervor, dass die eigene Identität mit DIESEM Emoji reagiert hat
+   (Antippen entfernt sie dann wieder statt sie erneut hinzuzufügen). */
+.msg-reactions { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+.msg.mine .msg-reactions { justify-content: flex-end; }
+.reaction-pill {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+.reaction-pill.mine { border-color: var(--accent-strong); background: color-mix(in srgb, var(--accent-strong) 15%, transparent); }
+.reaction-pill:hover { border-color: var(--accent); }
+
+/* Angeheftete-Nachrichten-Leiste (Element-Vorbild) — sitzt direkt unter dem
+   Chat-Header, oberhalb der Nachrichtenliste, sichtbar sobald mindestens
+   eine Nachricht angeheftet ist (renderPinnedBar()). */
+.pinned-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.pinned-bar-jump {
+  all: unset;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text);
+}
+.pinned-bar-icon { flex-shrink: 0; }
+.pinned-bar-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; }
+.pinned-bar-jump:hover .pinned-bar-text { color: var(--accent); }
+.pinned-bar-count {
+  all: unset;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.pinned-bar-count:hover { color: var(--accent); border-color: var(--accent); }
+
+.pinned-list-popup {
+  position: fixed;
+  z-index: 60;
+  width: min(320px, 90vw);
+  max-height: min(400px, 70vh);
+  overflow-y: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px #00000050;
+}
+.pinned-list-header { padding: 0.6rem 0.8rem; font-size: 0.82rem; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--border); }
+.pinned-list-items { list-style: none; margin: 0; padding: 0.3rem; }
+.pinned-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+}
+.pinned-list-item:hover { background: var(--border); }
+.pinned-list-jump { all: unset; cursor: pointer; flex: 1; min-width: 0; }
+.pinned-list-author { font-size: 0.76rem; color: var(--accent-strong); font-weight: 600; }
+.pinned-list-text { font-size: 0.82rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pinned-list-unpin { all: unset; cursor: pointer; flex-shrink: 0; font-size: 0.9rem; padding: 0.2rem; border-radius: 50%; }
+.pinned-list-unpin:hover { background: var(--border); }
+
+.reply-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  border-top: 1px solid var(--border);
+  border-left: 3px solid var(--accent-strong);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.reply-preview-body { flex: 1; min-width: 0; }
+.reply-preview-author { font-size: 0.78rem; color: var(--accent-strong); font-weight: 600; }
+.reply-preview-text { font-size: 0.82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Zitierter Ausschnitt EINER anderen Nachricht (q.value.replyTo) oben in
+   der Bubble — Autor+Zeitpunkt wie im Composer-Vorschau-Balken (s. o.),
+   plus der zum Zeitpunkt der Antwort gespeicherte Text-Schnappschuss
+   (bleibt lesbar, selbst falls das Original lokal längst nicht mehr da
+   ist). Ein Klick springt zum Original, sofern es in der aktuell
+   geladenen Historie steht (scrollToMessage()). */
+.msg-quote {
+  background: #00000030;
+  border-left: 3px solid var(--accent-strong);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  margin-bottom: 0.35rem;
+  cursor: pointer;
+}
+.msg-quote:hover { background: #00000050; }
+.msg-quote-author { font-size: 0.76rem; color: var(--accent-strong); font-weight: 600; }
+.msg-quote-time { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.1rem; }
+.msg-quote-text { font-size: 0.82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Weitergeleitet (q.value.forwardedFrom) — eigener Rahmen-Akzent (grau/
+   neutral statt Accent-Farbe) UND kein "cursor: pointer"/Hover-Effekt der
+   Basis-.msg-quote, da hier NICHT zum Original gesprungen werden kann
+   (buildForwardedQuote()s eigene Doku: das liegt evtl. in einem anderen
+   Raum). */
+.msg-forwarded { border-left-color: var(--muted); cursor: default; }
+.msg-forwarded:hover { background: #00000030; }
+.msg-forwarded .msg-quote-author { color: var(--muted); }
+
+/* Immer sichtbar (nicht nur bei Hover) — Touch-Geräte haben kein Hover,
+   siehe die übrige Composer-/Popup-Gestaltung dieser App. In der
+   .msg-header-Kopfzeile (Autor links, dieser Button rechts, s.
+   .msg-header's justify-content: space-between); margin-left: auto lässt
+   ihn zusätzlich ganz nach rechts wandern, auch wenn der Autorname mal
+   sehr kurz ist. */
+.msg-actions-btn {
+  all: unset;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0.15rem 0.4rem;
+  margin-left: auto;
+  border-radius: 6px;
+}
+.msg-actions-btn:hover, .msg-actions-btn:focus-visible { background: var(--border); color: var(--text); }
+
 .pending-files { display: flex; gap: 0.4rem; flex-wrap: wrap; padding: 0 0.7rem 0.5rem; flex-shrink: 0; }
 .pending-file { display: flex; align-items: center; gap: 0.3rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.25rem 0.5rem; font-size: 0.75rem; }
 .pending-file button { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 0.9rem; }
 .pending-file button:disabled { opacity: 0.4; cursor: default; }
 .pending-file-progress { font-size: 0.7rem; color: var(--accent-strong); font-style: italic; }
 .pending-file-progress:empty { display: none; }
+
+.voice-recorder {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  padding-bottom: max(0.6rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.voice-status { display: flex; align-items: center; gap: 0.5rem; flex: 1; color: var(--text); font-variant-numeric: tabular-nums; }
+/* Grau/statisch im "armed"-Zustand (Mikrofon frei, noch nicht gestartet)
+   — erst .recording (echte Aufnahme läuft) bekommt Rot+Puls; .paused
+   bleibt rot, aber ohne Puls, sichtbar unterscheidbar von beiden. */
+.voice-rec-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--muted); }
+.voice-status.recording .voice-rec-dot { background: var(--danger); animation: voice-rec-pulse 1.2s ease-in-out infinite; }
+.voice-status.paused .voice-rec-dot { background: var(--danger); opacity: 0.5; }
+@keyframes voice-rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.voice-recorder audio { flex: 1; height: 2.35rem; }
+/* Start/Stop rot umrandet (an der Aufnahme selbst dreht sich hier etwas),
+   Fortsetzen bewusst NICHT rot (nur "weiter", nichts Neues/Riskantes) —
+   Farbe UND Form (Kreis/Quadrat/Dreieck unten) tragen die Unterscheidung
+   gemeinsam, keine der beiden allein. */
+.voice-record-btn, .voice-stop-btn { border: 1px solid var(--danger) !important; }
+.voice-resume-btn { border: 1px solid var(--accent) !important; }
+
+/* Als Formen statt Textzeichen gezeichnet (s. index.html's Doku dazu) —
+   0.85rem Kantenlänge/Durchmesser, mittig über .icon-btn's eigenes
+   display:flex/align-items/justify-content zentriert. */
+.voice-icon { width: 0.8rem; height: 0.8rem; position: relative; }
+.voice-icon-record { border-radius: 50%; background: var(--danger); }
+.voice-icon-stop { border-radius: 2px; background: var(--danger); }
+.voice-icon-pause::before, .voice-icon-pause::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 0.22rem; background: var(--text); border-radius: 1px;
+}
+.voice-icon-pause::before { left: 0.08rem; }
+.voice-icon-pause::after { right: 0.08rem; }
+.voice-icon-play {
+  width: 0; height: 0;
+  border-top: 0.45rem solid transparent;
+  border-bottom: 0.45rem solid transparent;
+  border-left: 0.7rem solid var(--accent);
+}
 
 .status-bar { font-size: 0.72rem; color: var(--muted); padding: 0.3rem 1rem; text-align: center; }
 .status-bar.err { color: var(--danger); }
@@ -447,8 +819,41 @@ button { font-family: inherit; }
   overflow-y: auto;
 }
 .modal h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
+/* Kopf (Titel bzw. Zurück-Pfeil) und Fuß (Schließen/Abbrechen/Speichern)
+   jedes Modals bleiben beim Scrollen sichtbar — unabhängig davon, wie lang
+   der Inhalt dazwischen ist, muss man nie erst scrollen, um schließen/
+   zurückgehen/speichern zu können. `.modal > h2:first-child` deckt jedes
+   Modal ab, das mit einer Überschrift beginnt (die Mehrheit), `.modal >
+   .back-btn:first-child` das eine, das stattdessen mit dem Zurück-Pfeil
+   beginnt (#profile-view-modal) — `.modal > .modal-actions:last-child`
+   trifft in JEDEM Modal genau die abschließende Aktionsleiste, nie eine
+   der ggf. weiter oben liegenden Formular-internen (z. B. Gruppenname
+   umbenennen in #chat-settings-modal), weil die nie das LETZTE Kind sind.
+   Die negativen Ränder brechen bewusst aus dem eigenen padding von .modal
+   aus (volle Breite bis zum Rand), padding+Hintergrund am selben Element
+   machen daraus wieder eine blickdichte Leiste über dem darunter
+   wegscrollenden Inhalt. */
+.modal > h2:first-child,
+.modal > .back-btn:first-child {
+  position: sticky;
+  top: -1.25rem;
+  z-index: 2;
+  background: var(--panel);
+  margin: -1.25rem -1.25rem 0.75rem;
+  padding: 1.25rem 1.25rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.modal > .modal-actions:last-child {
+  position: sticky;
+  bottom: -1.25rem;
+  z-index: 2;
+  background: var(--panel);
+  margin: 0.75rem -1.25rem -1.25rem;
+  padding: 0.75rem 1.25rem 1.25rem;
+  border-top: 1px solid var(--border);
+}
 .modal label { display: block; font-size: 0.78rem; color: var(--muted); margin: 0.7rem 0 0.3rem; }
-.modal input[type="text"] {
+.modal input[type="text"], .modal select {
   width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -500,6 +905,9 @@ button { font-family: inherit; }
 .push-status { margin: 0; }
 .modal-hint { color: var(--muted); font-size: 0.78rem; margin: 0.4rem 0 0; }
 .modal-hint a { color: var(--accent-strong); }
+.modal-hint code { background: var(--panel-2); border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.9em; }
+.format-legend { list-style: none; margin: 0.3rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.82rem; color: var(--muted); }
+.format-legend code { background: var(--panel-2); border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.95em; color: var(--text); }
 .toggle-row { display: flex !important; align-items: center; gap: 0.5rem; color: var(--text) !important; font-size: 0.88rem !important; margin: 0.5rem 0 !important; cursor: pointer; }
 .toggle-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent-strong); cursor: pointer; }
 
@@ -533,6 +941,22 @@ button { font-family: inherit; }
   background: none; border: none; color: var(--danger); cursor: pointer; font-size: 1rem; padding: 0.2rem 0.4rem;
 }
 .group-member-picker .empty-hint, .group-member-list .empty-hint { padding: 0.6rem; color: var(--muted); font-size: 0.82rem; }
+
+.share-target-room-list {
+  list-style: none; margin: 0; padding: 0;
+  max-height: 40vh; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.share-target-room-list li { border-bottom: 1px solid var(--border); }
+.share-target-room-list li:last-child { border-bottom: none; }
+.share-target-room-btn {
+  all: unset;
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.55rem 0.6rem;
+  width: 100%; box-sizing: border-box;
+  cursor: pointer; color: var(--text); font-size: 0.9rem;
+}
+.share-target-room-btn:hover, .share-target-room-btn:focus-visible { background: var(--panel-2); }
 
 /* --- Anruf (Audio/Video, WebRTC — siehe app.mjs's Anruf-Abschnitt) --- */
 .call-overlay {
@@ -688,6 +1112,35 @@ button { font-family: inherit; }
   .app.chat-open .chat-panel { display: flex; }
   .back-btn { display: inline-flex; align-items: center; }
   .attachment-media { max-width: 70vw; }
+
+  /* Auf Handy-Breite bräuchten 😊+📎+📍+🎤+Textfeld+Senden nebeneinander
+     zu viel Platz — das Eingabefeld selbst würde dadurch unbrauchbar
+     schmal. 📎/📍/🎤 wandern daher hinter einen einzelnen "➕"-Umschalter
+     in ein Popup (gleiches Muster wie .emoji-picker: über der Eingabezeile,
+     schließt bei Klick daneben/auf eine der drei Aktionen — s. app.mjs).
+     Jede Touch-Fläche bleibt dabei die volle .icon-btn-Größe, keine
+     verkleinerten Buttons. */
+  .composer-extras {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 0.7rem;
+    margin-bottom: 0.4rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.3rem;
+    flex-direction: column;
+    gap: 0.1rem;
+    box-shadow: 0 4px 16px #00000050;
+  }
+  .composer-extras.open { display: flex; }
+  /* min-height statt fixer height — 2.75rem (44px) ist die gängige
+     Mindest-Touch-Zielgröße, größer als das sonst überall genutzte
+     2.25rem-.icon-btn-Rund. */
+  .composer-extras .icon-btn { width: 100%; min-height: 2.75rem; height: auto; border-radius: 10px; justify-content: flex-start; gap: 0.7rem; padding: 0.55rem 0.8rem; font-size: 1.05rem; }
+  .composer-extras .icon-btn-label { display: inline; font-size: 0.92rem; }
+  .extras-toggle-btn { display: flex; }
 }
 
 @media (min-width: 761px) {

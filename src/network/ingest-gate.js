@@ -26,6 +26,19 @@ export function requireDirectWriterGate() {
 
 export function rateLimitGate(rateLimiter) {
   return async (ctx, next) => {
+    // Prefer the QuBit's claimed writer over the connection's proven
+    // peerFingerprint: rate-limiting per WRITER is what actually stops one
+    // identity from flooding, even across several connections. This is
+    // safe from spoofing ONLY when requireDirectWriterGate() is installed
+    // ahead of this gate in the same pipeline (DefaultReplication does) —
+    // that gate already rejects any push whose claimed writer isn't the
+    // connection's own proven fingerprint, so by the time rateLimitGate
+    // runs, `ctx.qubit.writer` (if present) IS `ctx.peerFingerprint`.
+    // Without that ordering, an attacker could claim a different writer
+    // per push to dodge the limiter entirely. channelId is the last
+    // resort, for pushes with neither a writer claim nor a known peer
+    // fingerprint — coarser (per-connection, not per-identity) but still
+    // better than not rate-limiting at all.
     const key = ctx.qubit?.writer ?? ctx.peerFingerprint ?? ctx.channelId;
     if (!rateLimiter.allow(key)) {
       throw new Error(`[IngestGate] push rejected: rate limit exceeded for "${key}"`);

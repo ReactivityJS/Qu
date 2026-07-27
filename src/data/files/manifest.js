@@ -3,7 +3,18 @@ import { debug } from '../../core/debug.js';
 import { assertFileStorageAdapter } from './contract.js';
 import { encryptFor as encryptValueFor, decryptWith, encryptBytesFor, decryptBytesWith } from '../../core/crypto.js';
 
-const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64 KiB
+// 256 KiB, nicht 64 KiB (frühere Default) — jede Chunk-Übertragung ist ein
+// eigener Request/Response-Roundtrip (transfer.js's requestFile()); bei
+// einer großen Datei (z. B. 200 MB) dominiert bei 64 KiB die reine
+// Roundtrip-Anzahl (~3200 Roundtrips) über eine vorhandene Relay-
+// Mobilfunk-/WLAN-Bandbreite die tatsächliche Übertragungsdauer, nicht
+// Bandbreite selbst. Die 4-fache Chunk-Größe braucht nur ein Viertel so
+// viele Roundtrips (und Hash-/Verschlüsselungs-Operationen) für dieselbe
+// Datei, bleibt aber weit unter ws-server.mjs's MAX_MESSAGE_BYTES (32 MiB)
+// selbst nach Base64-Kodierung. Rein die Voreinstellung für NEUE Uploads —
+// bereits veröffentlichte Manifeste tragen ihre eigene `chunkSize` und
+// bleiben davon unberührt.
+const DEFAULT_CHUNK_SIZE = 256 * 1024; // 256 KiB
 const YIELD_EVERY_N_CHUNKS = 8; // give the event loop (and the WebSocket connection's own housekeeping) room to breathe on a long file
 // See adapters/indexeddb-file-storage.js's putChunks() doc — this is how
 // many chunks share one storage transaction. Exported so transfer.js's
@@ -190,6 +201,7 @@ export async function readFileMeta(manifest, identity = null) {
  * core/crypto.js's decryptWith()/decryptBytesWith().
  */
 export async function reassembleFile(fileStorage, manifest, identity = null) {
+  assertValidManifest(manifest);
   const parts = [];
   let total = 0;
   for (const hash of manifest.chunks) {
@@ -207,8 +219,21 @@ export async function reassembleFile(fileStorage, manifest, identity = null) {
   return decryptBytesWith(identity, manifest.contentEncryption, out);
 }
 
+/**
+ * A qubit at a file's manifest id whose value isn't actually a file
+ * manifest (a malformed write, or a plain non-file qubit that happens to
+ * sit at a guessed/reused id) must fail with a clear message here, not a
+ * raw TypeError three lines into a `for...of` over `undefined`.
+ */
+function assertValidManifest(manifest) {
+  if (!manifest || !Array.isArray(manifest.chunks)) {
+    throw new Error('[Files] not a valid file manifest (missing/invalid "chunks" array)');
+  }
+}
+
 /** Which of a manifest's chunk hashes are NOT yet present in `fileStorage`. */
 export async function missingChunks(fileStorage, manifest) {
+  assertValidManifest(manifest);
   const missing = [];
   for (const hash of manifest.chunks) {
     if (!(await fileStorage.hasChunk(hash))) missing.push(hash);

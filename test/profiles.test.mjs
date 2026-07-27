@@ -18,7 +18,10 @@ test('setProfileAttr()/getProfileAttr()/listProfileAttrs(): plain custom attribu
 
   assert.equal(await bob.getProfileAttr(alice.fingerprint, 'bio'), 'hello world');
   const all = await bob.listProfileAttrs(alice.fingerprint);
-  assert.deepEqual(all, { bio: 'hello world', website: 'https://example.com' });
+  assert.deepEqual(all, {
+    bio: { value: 'hello world', private: false },
+    website: { value: 'https://example.com', private: false },
+  });
 });
 
 test('getProfileAttr(): never-set or deleted attribute reads as null, not an error', async () => {
@@ -43,6 +46,28 @@ test('setProfileAttr(): encryptFor restricts a single field, unrelated plain fie
   assert.equal(await bob.getProfileAttr(alice.fingerprint, 'secret-note'), 'only bob should read this');
   assert.equal(await mallory.getProfileAttr(alice.fingerprint, 'secret-note'), null, 'not an addressed recipient');
   assert.equal(await mallory.getProfileAttr(alice.fingerprint, 'bio'), 'public bio', 'the plain field is unaffected by the other field\'s encryption');
+});
+
+test('listProfileAttrs(): `private` reflects each field\'s CURRENT encryption for the owner\'s own view — never falsely `false` for a field a non-owner simply could not decrypt', async () => {
+  const alice = await makePeer();
+  const bob = await makePeer(alice.runtime);
+  await Promise.all([alice, bob].map((qu) => qu.publishProfile()));
+
+  // "Privat" (nur für Alice selbst, s. examples/people's attrPrivateToggle) —
+  // encryptFor: [nur die eigene Identität].
+  await alice.setProfileAttr('diary', 'dear diary', { encryptFor: [alice.fingerprint] });
+  await alice.setProfileAttr('bio', 'public bio');
+
+  const own = await alice.listProfileAttrs(alice.fingerprint);
+  assert.deepEqual(own, {
+    diary: { value: 'dear diary', private: true },
+    bio: { value: 'public bio', private: false },
+  });
+
+  // Bob (nicht adressiert für "diary") sieht dieses Feld gar nicht erst —
+  // kein `private: false`, das fälschlich "öffentlich" vorgäbe.
+  const bobsView = await bob.listProfileAttrs(alice.fingerprint);
+  assert.deepEqual(bobsView, { bio: { value: 'public bio', private: false } });
 });
 
 test('onProfileAttrsChange(): live subscription fires for new/changed/deleted attributes', async () => {
