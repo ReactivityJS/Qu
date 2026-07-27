@@ -1,7 +1,7 @@
 {
-  "name": "QU Verfolgungsjagd",
-  "short_name": "QU Hunt",
-  "description": "Standort-Verfolgungsjagd auf Basis von QU — Standort-Pings, nachgezeichneter Weg und ein vorausberechneter Suchradius, alles Peer-to-Peer über einen Relay synchronisiert.",
+  "name": "QU Geo Chase",
+  "short_name": "Geo Chase",
+  "description": "Geo Chase auf Basis von QU — Standort-Pings, nachgezeichneter Weg und ein vorausberechneter Suchradius, alles Peer-to-Peer über einen Relay synchronisiert.",
   "start_url": "./index.html",
   "scope": "./",
   "id": "./index.html",

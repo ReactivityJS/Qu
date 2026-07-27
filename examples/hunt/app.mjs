@@ -180,23 +180,46 @@ function setupShareButtons(buttons, { title, text, getUrl }) {
 }
 
 /**
- * Eingehendes Teilen: `manifest.webmanifest`s `share_target` liefert einen
- * von einer anderen App geteilten Link als `?url=`/`?text=` (GET-Query,
- * siehe Manifest) statt als Hash — hier wird daraus wieder die Route, die
- * der Rest dieser Datei erwartet (`#<gameId>`), und die Query-String-Spur
- * per `history.replaceState` aus der Adressleiste entfernt (kein Reload,
- * kein erneuter Eintrag in der Browser-History).
+ * Zwei verschiedene ankommende Query-Strings, beide behandelt statt eines
+ * Hash-Wechsels (den ein `share_target`-Redirect verlöre, UND ein noch gar
+ * nicht existierendes Spiel hätte ohnehin keine Id für einen Hash):
+ *
+ * 1. Eingehendes Teilen: `manifest.webmanifest`s `share_target` liefert
+ *    einen von einer anderen App geteilten Link als `?url=`/`?text=`
+ *    (GET-Query) — daraus wird wieder die Route, die der Rest dieser Datei
+ *    erwartet (`#<gameId>`).
+ * 2. Eine "neues Spiel"-Einladung von woanders (z. B. examples/chat's
+ *    Geo-Chase-Button, s. dessen eigene Doku) als `?interval=<Minuten>`/
+ *    `?speed=<m/s>` — bewusst NUR diese beiden lose gekoppelten Werte,
+ *    keine tiefere Schnittstelle: der einladende Absender legt das Spiel
+ *    NICHT selbst an (kein direkter Zugriff auf createGame()/den Space von
+ *    außerhalb dieser App), sondern gibt nur Vorschläge fürs Formular mit;
+ *    wer den Link öffnet, sieht sie als normale, weiter änderbare Eingabe-
+ *    werte und erstellt das Spiel ganz regulär selbst über `createGameBtn`
+ *    unten (wird dadurch automatisch Teil des gejagten Teams).
+ *
+ * Die Query-String-Spur wird in beiden Fällen per `history.replaceState`
+ * aus der Adressleiste entfernt (kein Reload, kein neuer History-Eintrag).
  */
 function resolveIncomingShare() {
+  let prefill = null;
   if (location.search) {
     const params = new URLSearchParams(location.search);
     const sharedHash = [params.get('url'), params.get('text'), params.get('title')]
       .filter(Boolean)
       .map((candidate) => candidate.match(/#([0-9a-f-]{36})/i)?.[1])
       .find(Boolean);
+    if (!sharedHash) {
+      const interval = Number(params.get('interval'));
+      const speed = Number(params.get('speed'));
+      prefill = {
+        pingIntervalMinutes: Number.isFinite(interval) && interval > 0 ? interval : null,
+        assumedSpeedMps: Number.isFinite(speed) && speed >= 0 ? speed : null,
+      };
+    }
     history.replaceState(null, '', location.pathname + (sharedHash ? `#${sharedHash}` : location.hash));
   }
-  return parseHashRoute(location.hash);
+  return { ...parseHashRoute(location.hash), prefill };
 }
 
 async function main() {
@@ -209,7 +232,7 @@ async function main() {
   const channel = createWebSocketChannel(relayUrl());
   await channel.connect();
 
-  const { spaceId: gameId } = resolveIncomingShare();
+  const { spaceId: gameId, prefill } = resolveIncomingShare();
 
   // Ein neues Spiel bekommt seine Id erst zur Laufzeit (`qu.createSpace()`,
   // siehe README Abschnitt 3/APP-GUIDE Schritt 3) — deshalb hier
@@ -222,6 +245,8 @@ async function main() {
 
   if (!gameId) {
     statusEl.textContent = 'Verbunden — bereit, ein neues Spiel zu erstellen';
+    if (prefill?.pingIntervalMinutes != null) pingIntervalInput.value = String(prefill.pingIntervalMinutes);
+    if (prefill?.assumedSpeedMps != null) assumedSpeedInput.value = String(prefill.assumedSpeedMps);
     setupBox.classList.remove('hidden');
     createGameBtn.addEventListener('click', async () => {
       createGameBtn.disabled = true;
@@ -249,8 +274,8 @@ async function main() {
     gameBox.classList.remove('hidden');
     document.body.classList.add('in-game'); // schaltet auf die Vollbild-Handy-Ansicht (index.html)
     setupShareButtons([shareBtn, shareBtnInGame], {
-      title: 'QU Verfolgungsjagd',
-      text: 'Mach mit bei unserer Verfolgungsjagd:',
+      title: 'QU Geo Chase',
+      text: 'Mach mit bei unserem Geo Chase:',
       getUrl: () => shareLinkEl.value,
     });
 

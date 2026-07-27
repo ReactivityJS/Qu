@@ -18,12 +18,6 @@ import {
   linkify, mediaKind, sortByActivity, buildPath, parsePathSegments, fmtCallDuration,
   buildLocationUrl, parseLocationFromUrl, staticMapTileUrl, isVoiceMessageFilename,
 } from './chat-lib.mjs';
-// createGame(): reine Logik ohne `window`-Zugriff (dieselbe Trennung wie
-// chat-lib.mjs), hier direkt wiederverwendet statt dupliziert — ein
-// Hunter-Spiel ist einfach ein weiterer qu.createSpace()-Aufruf, genau wie
-// ein Chat-Raum, kein hunt-spezifischer Sonderpfad.
-import { createGame } from '../hunt-lib.mjs';
-import { buildHashRoute } from '../space-app-lib.mjs';
 import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert <qu-profile-card> (renderRoomHeader()/renderGroupMemberList()) UND <qu-people-search> (Neuer-Chat-Formular)
 
 // Anruf-Diagnose: jede Signaling-/ICE-/Verbindungs-Phase eines Anrufs
@@ -2008,17 +2002,37 @@ async function main() {
   }
 
   /**
+   * Ob die Liste GERADE am Ende verfolgt werden soll — laufend über den
+   * `scroll`-Listener unten aktuell gehalten, NICHT bei jedem Bedarf frisch
+   * aus isNearBottom() neu berechnet. Der Unterschied ist wichtig für den
+   * ResizeObserver weiter unten: wächst die Fußzeile (Composer/Antwort-
+   * Bearbeiten-Weiterleiten-Vorschau/Datei-Chips/Sprachrekorder, z. B. weil
+   * eine mehrzeilige Nachricht getippt/eingefügt wird), schrumpft
+   * #message-lists eigene Höhe per Flexbox SOFORT, OHNE dass irgendwer
+   * gescrollt hätte. Ein an DIESEM Punkt frisch berechnetes isNearBottom()
+   * sähe fälschlich einen großen Abstand zum Ende (clientHeight kleiner,
+   * scrollTop unverändert) und würde nicht mehr nachscrollen — genau dann,
+   * wenn die zuletzt sichtbare Nachricht sonst hinter der jetzt größeren
+   * Fußzeile verschwindet. Diese Markierung bleibt dagegen `true`, bis
+   * tatsächlich weggescrollt wird, unabhängig von einer zwischenzeitlichen
+   * Größenänderung der Liste selbst.
+   */
+  let stickingToBottom = true;
+  messageListEl.addEventListener('scroll', () => { stickingToBottom = isNearBottom(); });
+
+  /**
    * Nur dann ans Ende scrollen, wenn man SCHON dort war — sonst reißt
    * jede neue Nachricht (oder ein nachträglich ladendes Bild/Video, das
    * die Liste erst jetzt sichtbar wachsen lässt) jemanden aus der
-   * gerade gelesenen älteren Historie. Wird an zwei Stellen aufgerufen:
-   * beim Anhängen einer neuen Live-Nachricht (appendLiveMessage()) und
-   * innerhalb von renderAttachment(), sobald ein Anhang tatsächlich
-   * seine endgültige Höhe erreicht (Bild `load`, Video `loadedmetadata`,
-   * oder direkt nach dem Einfügen für Audio/Datei-Fallback).
+   * gerade gelesenen älteren Historie. Wird an mehreren Stellen aufgerufen:
+   * beim Anhängen einer neuen Live-Nachricht (appendLiveMessage()),
+   * innerhalb von renderAttachment(), sobald ein Anhang tatsächlich seine
+   * endgültige Höhe erreicht (Bild `load`, Video `loadedmetadata`, oder
+   * direkt nach dem Einfügen für Audio/Datei-Fallback), UND vom
+   * ResizeObserver unten, sobald sich #message-lists eigene Höhe ändert.
    */
   function stickToBottomIfNeeded() {
-    if (isNearBottom()) scrollToVeryBottom();
+    if (stickingToBottom) scrollToVeryBottom();
   }
 
   /**
@@ -2039,6 +2053,22 @@ async function main() {
       });
     });
   }
+
+  // Die Fußzeile (Composer selbst, Antwort-/Bearbeiten-/Weiterleiten-
+  // Vorschau, Datei-Chips, Sprachrekorder) kann jederzeit wachsen oder
+  // schrumpfen — mehrzeiliger Text, ein angehängtes Bild, ein geöffneter
+  // Sprachrekorder — und nimmt #message-list dabei per Flexbox sofort
+  // denselben Platz weg, ohne dass irgendwer gescrollt hätte. EIN
+  // ResizeObserver auf #message-list selbst fängt JEDE solche
+  // Größenänderung ab, egal wodurch ausgelöst, statt jede einzelne Stelle
+  // im Code einzeln patchen zu müssen, die die Fußzeile beeinflusst —
+  // hält die zuletzt sichtbare Nachricht dabei am unteren Rand sichtbar,
+  // sofern man ohnehin schon dort war (stickingToBottom oben), sonst
+  // verschwindet sie sichtbar HINTER der größer werdenden Fußzeile.
+  // Ungefährlich für einen Beobachtungs-Regelkreis: der Callback ändert
+  // nur `scrollTop` (Scroll-Position), nie die beobachtete Box-Größe
+  // selbst — kein erneutes ResizeObserver-Feuern durch die eigene Wirkung.
+  new ResizeObserver(() => stickToBottomIfNeeded()).observe(messageListEl);
 
   /**
    * Baut sofort/synchron nur den Platzhalter (`wrap`) und gibt ihn direkt
@@ -3297,47 +3327,34 @@ async function main() {
     );
   });
 
-  // --- Hunter-Spiel einladen — legt das Spiel SELBST an (hunt-lib.mjs's
-  // createGame(), dieselbe reine Logik, die examples/hunt/app.mjs auch
-  // selbst aufruft — ein Hunter-Spiel ist einfach ein weiterer
-  // qu.createSpace()-Aufruf, kein hunt-spezifischer Sonderpfad) und
-  // verlinkt DIREKT auf genau dieses konkrete, geteilte Spiel
-  // (`../hunt/index.html#<gameId>`) statt nur auf die leere Einstiegsseite
-  // — ein Klick führt die Empfängerin also direkt hinein, kein zweiter,
-  // separat zu teilender Schritt. Team-Aufteilung: die eigene Identität
-  // gejagt, alle ÜBRIGEN Mitglieder DIESES Chats als Jäger — kein eigenes
-  // Konfigurationsformular hier, das deckt den 1:1-Fall (der weit
-  // häufigere) genau ab; eine andere Aufteilung lässt sich nach dem Öffnen
-  // direkt in examples/hunt (eigener Space, eigene ACL) anpassen. Immer
-  // noch KEIN neuer Nachrichtentyp und KEINE inline eingebettete
-  // Qu-Komponente — der Link geht als normaler Text raus, die bestehende
-  // Link-Vorschau übernimmt die Darstellung. Ein voll eingebettetes,
-  // interaktives Hunter-Widget INNERHALB einer Chat-Nachricht (eigener
-  // Sandbox-/Embedding-Mechanismus, Wechsel zwischen Chat und Spiel ohne
-  // Tab-Wechsel) bliebe ein eigenständiges, mehrwöchiges Architekturstück
-  // (Sandbox-Strategie, Space-Verschachtelung, Layout-Management) — hier
-  // bewusst NICHT gebaut, um keine verfrühte, schwer wieder rückgängig zu
-  // machende Embedding-Entscheidung zu treffen; ein Link direkt ins
-  // konkrete, geteilte Spiel deckt den eigentlichen Bedarf ("gemeinsam
-  // spielen") schon ohne dieses Risiko ab.
-  huntBtn.addEventListener('click', async () => {
+  // --- Geo Chase einladen — KEIN Zugriff auf hunt-lib.mjs/createSpace()
+  // von hier aus: dieser Button erzeugt nur einen LINK zu examples/hunts
+  // eigener "Neues Spiel"-Seite, das eigentliche Erstellen (qu.createSpace(),
+  // welche Identität als "gejagt" gilt) bleibt vollständig Sache jener App.
+  // Vorher legte dieser Button das Spiel SELBST per direktem createGame()-
+  // Import an, mit dem CHAT-Fingerprint als huntedTeam — das brach genau
+  // dann, wenn die Chat- und die Hunt-Identität nicht dieselbe war (hier
+  // inzwischen vereinheitlicht, s. examples/hunt/app.mjs's IDENTITY_KEY-
+  // Doku), UND koppelte diese Datei unnötig eng an Hunts internes
+  // Datenmodell. Stattdessen jetzt eine schmale, stabile URL-Schnittstelle
+  // (`?interval=<Minuten>&speed=<m/s>`, s. examples/hunt/app.mjs's
+  // resolveIncomingShare()) — reine Vorschlagswerte fürs dortige Formular,
+  // kein automatisches Erstellen. Wer den Link öffnet (typischerweise man
+  // selbst, um das eigene Spiel zu starten) sieht das voll editierbare
+  // Formular (Intervall/Geschwindigkeit vorbelegt, Fänger-Fingerprints
+  // weiterhin frei eintragbar) und wird beim Erstellen automatisch Teil
+  // des gejagten Teams — dieselbe Rollenzuordnung wie bei jedem anderen
+  // Hunt-Spiel, kein Sonderfall für den Chat-Einstieg. Ein voll
+  // eingebettetes, interaktives Geo-Chase-Widget INNERHALB einer
+  // Chat-Nachricht bliebe ein eigenständiges, mehrwöchiges Architekturstück
+  // (Sandbox-/Embedding-Mechanismus, Space-Verschachtelung) — hier bewusst
+  // nicht gebaut.
+  huntBtn.addEventListener('click', () => {
     if (!activeRoomId) return;
-    const room = roomById(activeRoomId);
-    if (!room) return;
-    huntBtn.disabled = true;
-    try {
-      const others = room.members.filter((fp) => fp !== qu.fingerprint);
-      const gameId = await createGame(qu, { huntedTeam: [qu.fingerprint], hunterTeam: others, label: roomDisplayName(room) });
-      const url = new URL(`../hunt/index.html${buildHashRoute(gameId)}`, location.href).href;
-      textInput.value = textInput.value ? `${textInput.value} ${url}` : `Lust auf eine Verfolgungsjagd? ${url}`;
-      autoGrow();
-      composer.requestSubmit();
-    } catch (e) {
-      console.error('[chat] Hunter-Spiel anlegen fehlgeschlagen:', e);
-      statusBar.textContent = `Hunter-Spiel konnte nicht angelegt werden: ${e.message}`;
-    } finally {
-      huntBtn.disabled = false;
-    }
+    const url = new URL('../hunt/index.html?interval=5&speed=1.4', location.href).href;
+    textInput.value = textInput.value ? `${textInput.value} ${url}` : `Lust auf ein Geo Chase? ${url}`;
+    autoGrow();
+    composer.requestSubmit();
   });
 
   // --- Sprachnachricht — Aufnehmen -> Abhören -> Verwerfen ODER Senden.
