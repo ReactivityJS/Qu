@@ -2364,9 +2364,24 @@ async function main() {
    * konsumiert, ein zusätzliches CSS-`pre-wrap` würde sie sonst doppelt
    * darstellen) oder eine Liste (`- `/`* `/`1. ` am Zeilenanfang, als
    * echtes `<ul>`/`<ol>`).
+   *
+   * `trailingInline` (optional, buildMessageItem()s Uhrzeit+Häkchen-Bündel):
+   * WhatsApp-Trick — als LETZTES Kind des LETZTEN Absatzes eingehängt
+   * (nicht als eigene Zeile danach!), damit `float: right` (style.css) den
+   * davorstehenden Text darum herumbrechen lässt, sichtbar unten rechts IM
+   * Textfluss statt in einer eigenen Zeile. Nur möglich, wenn der letzte
+   * Block wirklich ein Absatz ist (Text zum Umfließen vorhanden) — endet
+   * die Nachricht auf einer LISTE, gibt es keinen Fließtext, in den sich
+   * das Element einfügen ließe; die Funktion hängt es dann stattdessen als
+   * eigene, rechtsbündige Zeile ganz ans Ende an. Rückgabe: `true`, wenn
+   * `trailingInline` tatsächlich in einen Absatz eingehängt wurde (float-
+   * Variante) — `buildMessageItem()` braucht das NICHT auszuwerten, beide
+   * Fälle sind hier schon vollständig erledigt.
    */
-  function renderMessageText(container, text) {
-    for (const block of parseMessageBlocks(text)) {
+  function renderMessageText(container, text, trailingInline) {
+    const blocks = parseMessageBlocks(text);
+    blocks.forEach((block, i) => {
+      const isLastBlock = i === blocks.length - 1;
       if (block.type === 'list') {
         const listEl = document.createElement(block.ordered ? 'ol' : 'ul');
         listEl.className = 'msg-list';
@@ -2376,15 +2391,21 @@ async function main() {
           listEl.appendChild(li);
         }
         container.appendChild(listEl);
+        if (isLastBlock && trailingInline) {
+          const metaRow = el('div', 'msg-meta-row');
+          metaRow.appendChild(trailingInline);
+          container.appendChild(metaRow);
+        }
       } else {
         const p = el('div', 'msg-paragraph');
-        block.lines.forEach((line, i) => {
-          if (i > 0) p.appendChild(document.createElement('br'));
+        block.lines.forEach((line, i2) => {
+          if (i2 > 0) p.appendChild(document.createElement('br'));
           renderInlineText(p, line);
         });
+        if (isLastBlock && trailingInline) p.appendChild(trailingInline);
         container.appendChild(p);
       }
-    }
+    });
   }
 
   /**
@@ -2518,7 +2539,41 @@ async function main() {
     return row;
   }
 
-  /** Kopfzeile über der Bubble: Absender (Link ins volle Profil in examples/people) links, ⋮-Aktionsmenü rechts — für JEDE Nachricht, nicht nur in Gruppen (konsistente Optik, "Du" bei eigenen Nachrichten). */
+  /**
+   * Schmale Kopfzeile ÜBER der Bubble: NUR Absender (Link ins volle Profil)
+   * links, optionales 📌-Abzeichen, ⋮-Aktionsmenü rechts — für JEDE
+   * Nachricht, nicht nur in Gruppen (konsistente Optik, "Du" bei eigenen
+   * Nachrichten). Alles andere (Zeit, Häkchen, Reaktionen) gehört zum
+   * eigentlichen INHALT der Nachricht und steht deshalb INNERHALB der
+   * Bubble (buildMessageMetaInline()/buildReactionsRow() unten) — nur was
+   * über der Nachricht "schwebt" (wer schreibt, was kann ich damit tun)
+   * steht hier außerhalb.
+   */
+  function buildMessageHeader(q, roomId, mine) {
+    const header = el('div', 'msg-header');
+    // href bleibt ein echter externer Link (Rechtsklick "in neuem Tab
+    // öffnen" funktioniert dadurch weiterhin) — ein normaler Klick
+    // navigiert stattdessen INNERHALB des Chats zum Profil-View-Screen
+    // (/<roomId>/profile/<fp>, s. showProfileViewScreen() unten), statt
+    // die App komplett zu verlassen.
+    const authorLink = document.createElement('a');
+    authorLink.className = 'msg-author';
+    authorLink.href = `../people/index.html#/${encodeURIComponent(q.writer)}`;
+    authorLink.rel = 'noopener';
+    authorLink.textContent = authorNameFor(q.writer);
+    authorLink.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      navigate(roomId, 'profile', q.writer);
+    });
+    header.appendChild(authorLink);
+    if (pinsByRoom.get(roomId)?.has(String(q.id).split('/').pop())) {
+      header.appendChild(el('span', 'msg-pinned-badge', '📌'));
+    }
+    header.appendChild(buildMessageActionsBtn(q, roomId));
+    return header;
+  }
+
   /**
    * Uhrzeit (optional + Datum, s. showDateInMessages()-Einstellung) als
    * klickbarer Anker-Link auf GENAU diese Nachricht (`/<roomId>/msg/<id>`,
@@ -2542,60 +2597,29 @@ async function main() {
   }
 
   /**
-   * EINE Kopfzeile pro Nachricht mit ALLEM Metadaten drin: Autor (links,
-   * Link ins volle Profil), optionales 📌-Abzeichen, optionaler
-   * "bearbeitet"-Marker, Uhrzeit/Datum-Anker-Link, bei eigenen Nachrichten
-   * das Lese-Häkchen, ganz rechts (margin-left: auto) das ⋮-Aktionsmenü.
-   * Bewusst NICHT mehr die Uhrzeit zusätzlich unten rechts IN der Bubble
-   * (früherer float-in-Text-Trick) — bei ohnehin JEDER Nachricht einer
-   * eigenen Kopfzeile (kein WhatsApp-Style-Gruppieren aufeinanderfolgender
-   * Nachrichten) wäre eine zweite Stelle für dieselbe Information nur
-   * Redundanz gewesen; eine einzige, an fester Position stehende Kopfzeile
-   * ist leichter zu scannen (Slack/Discord-Konvention) UND hält .msg-text/
-   * Anhänge frei von eingestreutem Meta-Markup.
+   * Uhrzeit/Datum-Link + "bearbeitet"-Marker + Häkchen, als EIN Bündel,
+   * INNERHALB der Bubble (WhatsApp/Telegram-Konvention: die Zeit gehört
+   * zum Inhalt, den sie datiert, nicht zu einer separaten Kopfzeile).
+   * Wird entweder als letztes Kind DIREKT in den Textfluss von .msg-text
+   * eingehängt (float: right, klassischer Messenger-Trick: der Text davor
+   * bricht um dieses Element herum, landet unten rechts INNERHALB der
+   * Bubble statt in einer eigenen Zeile außerhalb) oder — wenn es keinen
+   * Text gibt, dem Text also nichts zum Umbrechen bliebe (reiner Anhang,
+   * reiner Standort-Link) — als eigene rechtsbündige Zeile am Ende der
+   * Bubble (buildMessageItem() unten entscheidet das).
    */
-  function buildMessageHeader(q, roomId, showDate, edited, mine) {
-    const header = el('div', 'msg-header');
-    // Zwei Zeilen statt einer: oben Autor + 📌-Abzeichen + ⋮-Menü, unten
-    // "bearbeitet"-Marker + Uhrzeit/Datum-Link + Lese-Häkchen — bewusst
-    // GETRENNT (nicht alles in einer Zeile), damit Name/Menü und
-    // Zeit/Status jeweils klar zusammengehören statt in einer langen,
-    // gemischten Zeile zu stehen.
-    const top = el('div', 'msg-header-top');
-    // href bleibt ein echter externer Link (Rechtsklick "in neuem Tab
-    // öffnen" funktioniert dadurch weiterhin) — ein normaler Klick
-    // navigiert stattdessen INNERHALB des Chats zum Profil-View-Screen
-    // (/<roomId>/profile/<fp>, s. showProfileViewScreen() unten), statt
-    // die App komplett zu verlassen.
-    const authorLink = document.createElement('a');
-    authorLink.className = 'msg-author';
-    authorLink.href = `../people/index.html#/${encodeURIComponent(q.writer)}`;
-    authorLink.rel = 'noopener';
-    authorLink.textContent = authorNameFor(q.writer);
-    authorLink.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      navigate(roomId, 'profile', q.writer);
-    });
-    top.appendChild(authorLink);
-    if (pinsByRoom.get(roomId)?.has(String(q.id).split('/').pop())) {
-      top.appendChild(el('span', 'msg-pinned-badge', '📌'));
-    }
-    top.appendChild(buildMessageActionsBtn(q, roomId));
-    header.appendChild(top);
-
-    const bottom = el('div', 'msg-header-bottom');
-    if (edited) bottom.appendChild(el('span', 'msg-edited', '✏️'));
-    bottom.appendChild(buildMessageTimeLink(q, roomId, showDate));
+  function buildMessageMetaInline(q, roomId, showDate, edited, mine) {
+    const span = el('span', 'msg-time-row');
+    if (edited) span.appendChild(el('span', 'msg-edited', '✏️ bearbeitet '));
+    span.appendChild(buildMessageTimeLink(q, roomId, showDate));
     if (mine) {
       const tick = document.createElement('qu-msg-tick');
       tick.dataset.id = q.id;
       tick.dataset.ts = q.ts;
       tick.dataset.roomId = roomId;
-      bottom.appendChild(tick);
+      span.appendChild(tick);
     }
-    header.appendChild(bottom);
-    return header;
+    return span;
   }
 
   /**
@@ -2614,10 +2638,15 @@ async function main() {
     li.dataset.ts = q.ts;
     li.dataset.id = q.id;
     const { text: displayText, edited } = resolveMessageText(list, q);
-    li.appendChild(buildMessageHeader(q, roomId, showDate, edited, mine));
+    // Schmale Kopfzeile (nur Autor/📌/⋮) AUSSERHALB der Bubble — ALLES
+    // andere (Zitat, Text, Anhänge, Zeit/Häkchen, Reaktionen) gehört zum
+    // Inhalt der Nachricht und lebt deshalb GEMEINSAM in derselben Bubble,
+    // klar optisch abgehoben (eigener Hintergrund) vom Rest der Liste.
+    li.appendChild(buildMessageHeader(q, roomId, mine));
     const bubble = el('div', 'msg-bubble');
     if (q.value?.forwardedFrom) bubble.appendChild(buildForwardedQuote(q.value.forwardedFrom));
     if (q.value?.replyTo) bubble.appendChild(buildReplyQuote(q.value.replyTo));
+    let metaInsertedInline = false;
     if (displayText) {
       // Ein Text, der NUR aus einem einzelnen Link besteht (z. B. genau
       // das, was der 📍-Standort-Button verschickt), bräuchte sonst die
@@ -2629,8 +2658,9 @@ async function main() {
       const isBareLink = segs.length === 1 && segs[0].type === 'link';
       if (!isBareLink) {
         const textEl = el('div', 'msg-text');
-        renderMessageText(textEl, displayText);
+        renderMessageText(textEl, displayText, buildMessageMetaInline(q, roomId, showDate, edited, mine));
         bubble.appendChild(textEl);
+        metaInsertedInline = true;
       }
       const preview = buildLinkPreview(displayText);
       if (preview) bubble.appendChild(preview);
@@ -2647,9 +2677,18 @@ async function main() {
       badge.dataset.roomId = roomId;
       bubble.appendChild(badge);
     }
-    li.appendChild(bubble);
+    // Fallback OHNE Text zum Umbrechen (reiner Anhang/Standort-Link) —
+    // renderMessageText() selbst übernimmt den Fall "Text vorhanden, aber
+    // endet auf einer Liste" bereits (s. dessen Doku); hier bleibt nur
+    // "gar kein Text" übrig.
+    if (!metaInsertedInline) {
+      const metaRow = el('div', 'msg-meta-row');
+      metaRow.appendChild(buildMessageMetaInline(q, roomId, showDate, edited, mine));
+      bubble.appendChild(metaRow);
+    }
     const reactionsRow = buildReactionsRow(roomId, q.id);
-    if (reactionsRow) li.appendChild(reactionsRow);
+    if (reactionsRow) bubble.appendChild(reactionsRow);
+    li.appendChild(bubble);
     return li;
   }
 
