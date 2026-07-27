@@ -127,11 +127,17 @@
           <button id="attach-btn" class="icon-btn" type="button" title="Anhang"><span class="icon-btn-glyph">📎</span><span class="icon-btn-label">Anhang</span></button>
           <input id="file-input" type="file" multiple hidden accept="image/*,video/*,audio/*" />
           <button id="location-btn" class="icon-btn" type="button" title="Standort teilen"><span class="icon-btn-glyph">📍</span><span class="icon-btn-label">Standort teilen</span></button>
-          <button id="voice-btn" class="icon-btn" type="button" title="Sprachnachricht aufnehmen"><span class="icon-btn-glyph">🎤</span><span class="icon-btn-label">Sprachnachricht</span></button>
           <button id="hunt-btn" class="icon-btn" type="button" title="Verfolgungsjagd-Spiel einladen"><span class="icon-btn-glyph">🎯</span><span class="icon-btn-label">Hunter-Spiel</span></button>
         </div>
         <textarea id="text-input" rows="1" placeholder="Nachricht schreiben …"></textarea>
-        <button id="send-btn" class="send-btn" type="submit" title="Senden">&#10148;</button>
+        <!-- WhatsApp-Verhalten: 🎤 (Sprachnachricht) solange nichts zu senden
+             da ist, wechselt automatisch auf ➤ (Senden), sobald Text/ein
+             Anhang vorliegt — EIN Button statt zwei getrennter, s.
+             updateSendButtonMode()/app.mjs. type="button" hier im Startzustand
+             (nicht "submit"): ein leeres Formular darf nicht durch Enter/Klick
+             abgeschickt werden können, solange der Button noch der
+             Mikrofon-Knopf ist. -->
+        <button id="send-btn" class="send-btn" type="button" title="Sprachnachricht aufnehmen">🎤</button>
       </form>
     </section>
 

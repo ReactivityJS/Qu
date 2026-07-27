@@ -18,6 +18,12 @@ import {
   linkify, mediaKind, sortByActivity, buildPath, parsePathSegments, fmtCallDuration,
   buildLocationUrl, parseLocationFromUrl, staticMapTileUrl, isVoiceMessageFilename,
 } from './chat-lib.mjs';
+// createGame(): reine Logik ohne `window`-Zugriff (dieselbe Trennung wie
+// chat-lib.mjs), hier direkt wiederverwendet statt dupliziert — ein
+// Hunter-Spiel ist einfach ein weiterer qu.createSpace()-Aufruf, genau wie
+// ein Chat-Raum, kein hunt-spezifischer Sonderpfad.
+import { createGame } from '../hunt-lib.mjs';
+import { buildHashRoute } from '../space-app-lib.mjs';
 import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert <qu-profile-card> (renderRoomHeader()/renderGroupMemberList()) UND <qu-people-search> (Neuer-Chat-Formular)
 
 // Anruf-Diagnose: jede Signaling-/ICE-/Verbindungs-Phase eines Anrufs
@@ -198,7 +204,6 @@ const extrasToggleBtn = $('extras-toggle-btn');
 const composerExtras = $('composer-extras');
 const locationBtn = $('location-btn');
 const huntBtn = $('hunt-btn');
-const voiceBtn = $('voice-btn');
 const voiceRecorderEl = $('voice-recorder');
 const voiceDiscardBtn = $('voice-discard-btn');
 const voiceStatusEl = $('voice-status');
@@ -391,6 +396,32 @@ function autoGrow() {
   // Browser (style.css's `overflow-y: hidden`-Default) schon bei einer
   // einzelnen Zeile eine Scrollbar-Spur, obwohl gar nichts überläuft.
   textInput.style.overflowY = overflows ? 'auto' : 'hidden';
+  updateSendButtonMode();
+}
+
+/**
+ * WhatsApp-Verhalten: derselbe runde Button ist entweder 🎤 (Sprachnachricht
+ * aufnehmen, solange nichts zu senden da ist) oder ➤ (Senden, sobald Text
+ * ODER ein Anhang vorliegt) — keine zwei getrennten Buttons. `autoGrow()`
+ * läuft bereits nach JEDER Textänderung (Tippen UND jede programmatische
+ * `textInput.value = ...`-Zuweisung im ganzen Code, s. dessen Aufrufstellen)
+ * und ruft diese Funktion mit an — Anhänge laufen separat über
+ * renderPendingFiles() (deren einziger Änderungs-Ort für `pendingFiles`),
+ * das diese Funktion ebenfalls aufruft. `pendingFilesEl.children.length`
+ * statt der `pendingFiles`-Variable selbst: die lebt erst innerhalb von
+ * main(), diese Funktion bleibt bewusst modulweit aufrufbar (auch vom
+ * top-level `input`-Listener unten, der vor main()s Abschluss schon feuern
+ * kann) und braucht dafür keinen Zugriff auf main()s inneren Zustand.
+ */
+let sendButtonMode = 'mic';
+function updateSendButtonMode() {
+  const hasContent = textInput.value.trim().length > 0 || pendingFilesEl.children.length > 0;
+  const nextMode = hasContent ? 'send' : 'mic';
+  if (nextMode === sendButtonMode) return;
+  sendButtonMode = nextMode;
+  sendBtn.type = nextMode === 'send' ? 'submit' : 'button';
+  sendBtn.title = nextMode === 'send' ? 'Senden' : 'Sprachnachricht aufnehmen';
+  sendBtn.textContent = nextMode === 'send' ? '➤' : '🎤';
 }
 textInput.addEventListener('input', autoGrow);
 // Sofort beim Fokussieren gegen den nativen "Seite scrollt mit hoch"-Effekt
@@ -1557,11 +1588,11 @@ async function main() {
    * voller Pfad wie `<roomId>/reactions/<msgKey>/<fp>`; `msgKey` (das
    * VORLETZTE Segment) ist reine Adressierung (Pfad-Parsing hier bewusst
    * NUR für die Gruppierung, niemals für Vertrauen — `q.writer`, nicht das
-   * LETZTE Pfadsegment, entscheidet, WESSEN Reaktion das ist). Ein
-   * kompletter Neuaufbau der sichtbaren Liste (statt gezieltes DOM-Patching
-   * nur der betroffenen Bubble) — Reaktionen sind selten genug, dass das
-   * nicht spürbar ins Gewicht fällt, matcht renderMessageList()s bereits
-   * etablierten Ansatz für Bearbeitungen.
+   * LETZTE Pfadsegment, entscheidet, WESSEN Reaktion das ist). Patcht NUR
+   * die betroffene Nachrichten-Zeile (updateMessageItem(), s. dessen Doku)
+   * statt die gesamte Liste neu aufzubauen — sonst würde jede Reaktion
+   * IRGENDWO im Raum den Scroll-Zustand jeder gerade lesenden Person
+   * zurücksetzen.
    */
   function handleReactionChange(roomId, q) {
     const msgKey = String(q.id).split('/').at(-2);
@@ -1574,7 +1605,7 @@ async function main() {
       if (!byEmoji[emoji].length) delete byEmoji[emoji];
     }
     if (q.value) (byEmoji[q.value] ??= []).push(q.writer);
-    if (activeRoomId === roomId) renderMessageList(roomId);
+    if (activeRoomId === roomId) updateMessageItem(roomId, `${roomId}/msgs/${msgKey}`);
   }
 
   /**
@@ -1595,7 +1626,7 @@ async function main() {
     }
     if (activeRoomId === roomId) {
       renderPinnedBar(roomId);
-      renderMessageList(roomId);
+      updateMessageItem(roomId, `${roomId}/msgs/${msgKey}`); // s. dessen Doku — patcht nur diese eine Zeile statt die ganze Liste, kein Scroll-Reset
       if (!pinnedListPopupEl.hidden) renderPinnedListPopup(roomId);
     }
   }
@@ -1683,15 +1714,15 @@ async function main() {
     list.sort((a, b) => a.ts - b.ts);
 
     // Eine Bearbeitung (q.value.editOf, s. resolveMessageText()/chat.js's
-    // sendMessage()-Doku) ist KEINE eigene, sichtbare Nachricht — kein
-    // Vorschau-/Ungelesen-/Ton-/Benachrichtigungs-Update dafür, nur ein
-    // Neuaufbau der gerade offenen Liste, falls dieser Raum aktiv ist
+    // sendMessage()-Doku) ist KEINE eigene, sichtbare Nachricht — sie
+    // patcht stattdessen nur DIE EINE Zeile der Originalnachricht
+    // (updateMessageItem(), s. dessen Doku), falls dieser Raum aktiv ist
     // (damit die Bearbeitung sofort sichtbar wird, statt erst beim
     // nächsten Öffnen des Chats). resolveMessageText() prüft beim
     // Rendern selbst, ob der Schreiber wirklich zur Originalnachricht
     // passt — hier also bewusst KEINE solche Prüfung nötig.
     if (q.value?.editOf) {
-      if (activeRoomId === roomId) renderMessageList(roomId);
+      if (activeRoomId === roomId) updateMessageItem(roomId, q.value.editOf);
       // Betrifft die Bearbeitung genau die aktuell letzte ECHTE Nachricht
       // dieses Raums (und stammt wirklich vom selben Schreiber — dieselbe
       // Vertrauensregel wie resolveMessageText()), auch die Vorschau in
@@ -1987,7 +2018,26 @@ async function main() {
    * oder direkt nach dem Einfügen für Audio/Datei-Fallback).
    */
   function stickToBottomIfNeeded() {
-    if (isNearBottom()) messageListEl.scrollTop = messageListEl.scrollHeight;
+    if (isNearBottom()) scrollToVeryBottom();
+  }
+
+  /**
+   * Robustes "ganz ans Ende springen" — statt `scrollTop = scrollHeight`
+   * SOFORT im selben Tick zu setzen (das kann knapp VOR dem tatsächlichen
+   * Ende landen, wenn ein gerade erst eingefügtes `<li>` seine endgültige
+   * Höhe erst nach dem nächsten Layout-/Paint-Zyklus erreicht hat — z. B.
+   * durch Custom Elements wie `<qu-msg-tick>`/`<qu-sync-badge>` oder einen
+   * noch ladenden Anhang; sichtbar als "es fehlt eine halbe Zeile").
+   * Zwei verschachtelte `requestAnimationFrame()`s statt eines: der erste
+   * garantiert nur "nach dem nächsten Paint", der zweite räumt noch einen
+   * zusätzlichen Layout-Nachzügler aus.
+   */
+  function scrollToVeryBottom() {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        messageListEl.scrollTop = messageListEl.scrollHeight;
+      });
+    });
   }
 
   /**
@@ -2411,6 +2461,12 @@ async function main() {
    */
   function buildMessageHeader(q, roomId, showDate, edited, mine) {
     const header = el('div', 'msg-header');
+    // Zwei Zeilen statt einer: oben Autor + 📌-Abzeichen + ⋮-Menü, unten
+    // "bearbeitet"-Marker + Uhrzeit/Datum-Link + Lese-Häkchen — bewusst
+    // GETRENNT (nicht alles in einer Zeile), damit Name/Menü und
+    // Zeit/Status jeweils klar zusammengehören statt in einer langen,
+    // gemischten Zeile zu stehen.
+    const top = el('div', 'msg-header-top');
     // href bleibt ein echter externer Link (Rechtsklick "in neuem Tab
     // öffnen" funktioniert dadurch weiterhin) — ein normaler Klick
     // navigiert stattdessen INNERHALB des Chats zum Profil-View-Screen
@@ -2426,20 +2482,24 @@ async function main() {
       ev.stopPropagation();
       navigate(roomId, 'profile', q.writer);
     });
-    header.appendChild(authorLink);
+    top.appendChild(authorLink);
     if (pinsByRoom.get(roomId)?.has(String(q.id).split('/').pop())) {
-      header.appendChild(el('span', 'msg-pinned-badge', '📌'));
+      top.appendChild(el('span', 'msg-pinned-badge', '📌'));
     }
-    if (edited) header.appendChild(el('span', 'msg-edited', '✏️'));
-    header.appendChild(buildMessageTimeLink(q, roomId, showDate));
+    top.appendChild(buildMessageActionsBtn(q, roomId));
+    header.appendChild(top);
+
+    const bottom = el('div', 'msg-header-bottom');
+    if (edited) bottom.appendChild(el('span', 'msg-edited', '✏️'));
+    bottom.appendChild(buildMessageTimeLink(q, roomId, showDate));
     if (mine) {
       const tick = document.createElement('qu-msg-tick');
       tick.dataset.id = q.id;
       tick.dataset.ts = q.ts;
       tick.dataset.roomId = roomId;
-      header.appendChild(tick);
+      bottom.appendChild(tick);
     }
-    header.appendChild(buildMessageActionsBtn(q, roomId));
+    header.appendChild(bottom);
     return header;
   }
 
@@ -2512,6 +2572,25 @@ async function main() {
    * Verhalten zurück: ans Ende (neueste Nachricht).
    */
   async function renderMessageList(roomId, scrollToId) {
+    // Dieselbe Funktion baut sowohl den ERSTEN Aufbau eines frisch
+    // geöffneten Chats als auch JEDEN späteren Voll-Neuaufbau eines schon
+    // offenen Chats (Reaktion/Pin/Bearbeitung/Datum-Einstellung geändert,
+    // s. die anderen renderMessageList()-Aufrufstellen) — `messageListEl.
+    // textContent = ''` unten wirft dabei den scrollTop IMMER auf 0 zurück.
+    // Ohne das Folgende würde JEDE Reaktion irgendwo im Raum (auch auf eine
+    // längst gelesene, alte Nachricht) die gerade lesende Person ungefragt
+    // ganz ans Ende reißen — deshalb VOR dem Leeren merken, ob man bereits
+    // am Ende war bzw. welche Nachricht gerade oben im sichtbaren Bereich
+    // stand, und danach GENAU dorthin zurückkehren statt pauschal ans Ende.
+    const hadContent = !!messageListEl.firstChild; // leer = frisch geöffneter Chat, s. u.
+    const wasNearBottom = isNearBottom();
+    let anchorId = null;
+    if (hadContent && !wasNearBottom && !scrollToId) {
+      const listTop = messageListEl.getBoundingClientRect().top;
+      for (const child of messageListEl.children) {
+        if (child.dataset?.id && child.getBoundingClientRect().bottom > listTop) { anchorId = child.dataset.id; break; }
+      }
+    }
     messageListEl.textContent = '';
     lastRenderedDay = null;
     const list = messagesByRoom.get(roomId) ?? [];
@@ -2530,13 +2609,18 @@ async function main() {
       // unter der Kopfzeile erscheinen, nicht in der Mitte der Liste.
       scrollTargetLi.scrollIntoView({ block: 'start' });
       scrollTargetLi.querySelector('.msg-bubble')?.classList.add('jump-highlight');
-    } else {
-      // Ein frisch geöffneter Chat ohne (auffindbares) ungelesenes Ziel
-      // startet unten (neueste Nachricht), unabhängig vom bisherigen
-      // Scroll-Zustand — anders als appendLiveMessage() unten, das das
-      // bewusst NUR tut, wenn man schon dort war.
-      messageListEl.scrollTop = messageListEl.scrollHeight;
+      return;
     }
+    // Ein frisch geöffneter Chat (hadContent === false) ohne (auffindbares)
+    // ungelesenes Ziel startet unten (neueste Nachricht) — genau wie einer,
+    // der VOR dem Neuaufbau schon am Ende war (wasNearBottom). Alles
+    // andere versucht, exakt zur zuvor obersten sichtbaren Nachricht
+    // zurückzukehren (anchorId); existiert die nicht mehr (z. B. lokal
+    // gelöscht), bleibt als letzter Ausweg ebenfalls das Ende.
+    if (!hadContent || wasNearBottom) { scrollToVeryBottom(); return; }
+    const anchorLi = anchorId && messageListEl.querySelector(`[data-id="${CSS.escape(anchorId)}"]`);
+    if (anchorLi) anchorLi.scrollIntoView({ block: 'start' });
+    else scrollToVeryBottom();
   }
 
   /** Hängt EINE neu eingetroffene Live-Nachricht an, statt die komplette Liste neu aufzubauen (kein erneutes Laden/Rendern schon vorhandener Anhänge bei jeder neuen Nachricht) — folgt dem Ende nur, wenn man vorher schon dort war (isNearBottom()), reißt also niemanden aus der gerade gelesenen älteren Historie. */
@@ -2544,8 +2628,56 @@ async function main() {
     const stick = isNearBottom();
     const dayLabel = fmtDayLabel(q.ts);
     if (dayLabel !== lastRenderedDay) { messageListEl.appendChild(el('li', 'day-sep', dayLabel)); lastRenderedDay = dayLabel; }
-    messageListEl.appendChild(await buildMessageItem(q, roomId, messagesByRoom.get(roomId) ?? [], await showDateInMessages()));
-    if (stick) messageListEl.scrollTop = messageListEl.scrollHeight;
+    const li = await buildMessageItem(q, roomId, messagesByRoom.get(roomId) ?? [], await showDateInMessages());
+    messageListEl.appendChild(li);
+    // War man schon am Ende, folgt die Ansicht der neuen Nachricht so, dass
+    // sie vollständig VON OBEN lesbar ist — passt sie ganz in den
+    // sichtbaren Bereich, ist das ohnehin identisch mit "ganz ans Ende"
+    // (ihr Anfang UND Ende sind dann beide sichtbar); ist sie länger als
+    // der sichtbare Bereich (z. B. ein langer Text/ein großes Bild), zeigt
+    // "ganz ans Ende" sonst nur ihr unteres Ende — hier bewusst stattdessen
+    // ihr OBERES Ende, damit man von Anfang an lesen kann statt mittendrin
+    // oder am Schluss zu landen. Der "passt"-Fall nutzt bewusst
+    // scrollToVeryBottom() (scrollTop = scrollHeight) statt li.scrollIntoView
+    // ({block:'end'}) — Letzteres richtet sich nur am INHALT aus und lässt
+    // #message-lists eigenes padding-bottom (style.css) unberücksichtigt,
+    // wodurch am echten Ende sichtbar eine knappe Lücke bliebe (genau das
+    // gemeldete "es fehlt eine halbe Zeile").
+    if (stick) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const fits = li.offsetHeight <= messageListEl.clientHeight;
+          if (fits) messageListEl.scrollTop = messageListEl.scrollHeight; // scrollToVeryBottom()s Rechnung, hier inline statt eines weiteren doppelten rAF-Umwegs — Layout ist an dieser Stelle schon sicher fertig
+          else li.scrollIntoView({ block: 'start' });
+        });
+      });
+    }
+  }
+
+  /**
+   * Ersetzt GENAU EIN `<li>` durch seine neu gebaute Fassung — für alles,
+   * das nur EINE bereits angezeigte Nachricht betrifft (Reaktion, Pin,
+   * Bearbeitung), statt wie vorher die GESAMTE Liste neu aufzubauen
+   * (renderMessageList()). Ein Voll-Neuaufbau leert `messageListEl`
+   * komplett (`textContent = ''`), was `scrollTop` auf 0 zurückwirft —
+   * jede Reaktion IRGENDWO im Raum (auch auf eine längst gelesene, alte
+   * Nachricht) hätte sonst die gerade lesende Person ungefragt aus ihrer
+   * Position gerissen. Ein gezielter Ersatz nur der betroffenen Zeile
+   * ändert scrollTop überhaupt nicht — kein Sonderfall/keine Wiederherstell-
+   * Logik nötig, weil nie etwas geleert wird. Kein Treffer (Nachricht
+   * gerade nicht geladen/nicht sichtbar, z. B. eine Bearbeitung eines
+   * gefilterten Elements) ist ein harmloses No-Op, kein Fallback auf einen
+   * Voll-Neuaufbau nötig — dann gibt es schlicht nichts zu ersetzen.
+   */
+  async function updateMessageItem(roomId, messageId) {
+    if (activeRoomId !== roomId) return;
+    const oldLi = messageListEl.querySelector(`[data-id="${CSS.escape(messageId)}"]`);
+    if (!oldLi) return;
+    const list = messagesByRoom.get(roomId) ?? [];
+    const q = list.find((m) => m.id === messageId);
+    if (!q) return;
+    const newLi = await buildMessageItem(q, roomId, list, await showDateInMessages());
+    oldLi.replaceWith(newLi);
   }
 
   /** Öffnet einen bereits bekannten Raum (siehe rooms/ROOMS_KEY) — 1:1 UND Gruppe laufen durch denselben Code, nur roomDisplayName()/roomDisplayAvatar() unterscheiden zwischen beiden. */
@@ -3126,6 +3258,7 @@ async function main() {
       chip.appendChild(rm);
       pendingFilesEl.appendChild(chip);
     });
+    updateSendButtonMode();
   }
   attachBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
@@ -3164,27 +3297,47 @@ async function main() {
     );
   });
 
-  // --- Hunter-Spiel einladen — genau wie "Standort teilen" oben KEIN
-  // eigener Nachrichtentyp, KEINE inline eingebettete Qu-Komponente: ein
-  // Link zu examples/hunt geht als normaler Text raus, die bereits
-  // vorhandene Link-Vorschau übernimmt die Darstellung. examples/hunt legt
-  // ein neues Spiel absichtlich über sein EIGENES Formular an (Jäger-/
-  // Verfolgte-Fingerprints, Ping-Intervall, angenommene Geschwindigkeit —
-  // echte Spielparameter, die eine Chat-Nachricht nicht sinnvoll für die
-  // Empfängerin vorwegnehmen kann); dieser Button öffnet also bewusst nur
-  // die Einstiegsseite (kein `gameId` im Link), das eigentliche Erstellen
-  // bleibt dort. Ein voll eingebettetes, interaktives Hunter-Widget INNERHALB
-  // einer Chat-Nachricht (eigener Sandbox-/Embedding-Mechanismus, Wechsel
-  // zwischen Chat und Spiel ohne Tab-Wechsel) wäre ein eigenständiges,
-  // mehrwöchiges Architekturstück (Sandbox-Strategie, Space-Verschachtelung,
-  // Layout-Management) — hier bewusst NICHT gebaut, um keine verfrühte,
-  // schwer wieder rückgängig zu machende Embedding-Entscheidung zu treffen.
-  huntBtn.addEventListener('click', () => {
+  // --- Hunter-Spiel einladen — legt das Spiel SELBST an (hunt-lib.mjs's
+  // createGame(), dieselbe reine Logik, die examples/hunt/app.mjs auch
+  // selbst aufruft — ein Hunter-Spiel ist einfach ein weiterer
+  // qu.createSpace()-Aufruf, kein hunt-spezifischer Sonderpfad) und
+  // verlinkt DIREKT auf genau dieses konkrete, geteilte Spiel
+  // (`../hunt/index.html#<gameId>`) statt nur auf die leere Einstiegsseite
+  // — ein Klick führt die Empfängerin also direkt hinein, kein zweiter,
+  // separat zu teilender Schritt. Team-Aufteilung: die eigene Identität
+  // gejagt, alle ÜBRIGEN Mitglieder DIESES Chats als Jäger — kein eigenes
+  // Konfigurationsformular hier, das deckt den 1:1-Fall (der weit
+  // häufigere) genau ab; eine andere Aufteilung lässt sich nach dem Öffnen
+  // direkt in examples/hunt (eigener Space, eigene ACL) anpassen. Immer
+  // noch KEIN neuer Nachrichtentyp und KEINE inline eingebettete
+  // Qu-Komponente — der Link geht als normaler Text raus, die bestehende
+  // Link-Vorschau übernimmt die Darstellung. Ein voll eingebettetes,
+  // interaktives Hunter-Widget INNERHALB einer Chat-Nachricht (eigener
+  // Sandbox-/Embedding-Mechanismus, Wechsel zwischen Chat und Spiel ohne
+  // Tab-Wechsel) bliebe ein eigenständiges, mehrwöchiges Architekturstück
+  // (Sandbox-Strategie, Space-Verschachtelung, Layout-Management) — hier
+  // bewusst NICHT gebaut, um keine verfrühte, schwer wieder rückgängig zu
+  // machende Embedding-Entscheidung zu treffen; ein Link direkt ins
+  // konkrete, geteilte Spiel deckt den eigentlichen Bedarf ("gemeinsam
+  // spielen") schon ohne dieses Risiko ab.
+  huntBtn.addEventListener('click', async () => {
     if (!activeRoomId) return;
-    const url = new URL('../hunt/index.html', location.href).href;
-    textInput.value = textInput.value ? `${textInput.value} ${url}` : `Lust auf eine Verfolgungsjagd? ${url}`;
-    autoGrow();
-    composer.requestSubmit();
+    const room = roomById(activeRoomId);
+    if (!room) return;
+    huntBtn.disabled = true;
+    try {
+      const others = room.members.filter((fp) => fp !== qu.fingerprint);
+      const gameId = await createGame(qu, { huntedTeam: [qu.fingerprint], hunterTeam: others, label: roomDisplayName(room) });
+      const url = new URL(`../hunt/index.html${buildHashRoute(gameId)}`, location.href).href;
+      textInput.value = textInput.value ? `${textInput.value} ${url}` : `Lust auf eine Verfolgungsjagd? ${url}`;
+      autoGrow();
+      composer.requestSubmit();
+    } catch (e) {
+      console.error('[chat] Hunter-Spiel anlegen fehlgeschlagen:', e);
+      statusBar.textContent = `Hunter-Spiel konnte nicht angelegt werden: ${e.message}`;
+    } finally {
+      huntBtn.disabled = false;
+    }
   });
 
   // --- Sprachnachricht — Aufnehmen -> Abhören -> Verwerfen ODER Senden.
@@ -3271,8 +3424,18 @@ async function main() {
    * Start (voiceStartBtn unten), damit die ersten Sekunden nach dem Antippen
    * nicht überraschend unaufgenommen bleiben (vorher startete MediaRecorder
    * hier sofort automatisch mit).
+   *
+   * Hängt am send-btn selbst (WhatsApp-Verhalten, s. updateSendButtonMode()
+   * oben) statt an einem eigenen Button — nur AKTIV, solange der Button
+   * gerade im 🎤-Modus ist (`type="button"`, submittet dadurch nicht
+   * versehentlich ein leeres Formular). Sobald Text/ein Anhang vorliegt,
+   * wechselt derselbe Button auf ➤/`type="submit"`, dieser Handler bleibt
+   * dann einfach ungenutzt (Klicks lösen stattdessen ganz normal den
+   * `submit`-Handler unten aus).
    */
-  voiceBtn.addEventListener('click', async () => {
+  sendBtn.addEventListener('click', async (ev) => {
+    if (sendButtonMode !== 'mic') return;
+    ev.preventDefault();
     if (!activeRoomId) return;
     if (typeof MediaRecorder === 'undefined') { statusBar.textContent = 'Sprachnachrichten werden von diesem Browser nicht unterstützt.'; return; }
     let stream;

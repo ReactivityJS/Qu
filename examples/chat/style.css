@@ -301,19 +301,20 @@ button { font-family: inherit; }
 
 .msg { max-width: 78%; align-self: flex-start; display: flex; flex-direction: column; }
 .msg.mine { align-self: flex-end; }
-/* Kopfzeile über der Bubble (buildMessageHeader()) — Absender links (Link
-   ins volle Profil), ⋮-Aktionsmenü rechts. Bei einer eigenen Nachricht
-   rechtsbündig statt links, damit sie zur rechtsbündigen Bubble passt
-   (.msg.mine's align-self: flex-end oben). */
-.msg-header { display: flex; align-items: center; gap: 0.4rem; font-size: 0.74rem; padding: 0 0.2rem 0.15rem; color: var(--muted); }
-.msg.mine .msg-header { flex-direction: row-reverse; }
-/* Autorname darf zur Not schrumpfen (Ellipsis) statt Uhrzeit/Häkchen/⋮ aus
-   der Zeile zu drängen — bei einem langen Alias + Datum + Uhrzeit in einer
-   einzigen Kopfzeile (s. buildMessageHeader()) ist die Uhrzeit die wichtigere
-   Information, wenn beides nicht gleichzeitig passt. */
+/* Kopfzeile über der Bubble (buildMessageHeader()) — ZWEI Zeilen: oben
+   Absender (Link ins volle Profil) + ⋮-Aktionsmenü, unten Uhrzeit/Datum +
+   Lese-Häkchen. Bei einer eigenen Nachricht jeweils rechtsbündig statt
+   links, damit beide Zeilen zur rechtsbündigen Bubble passen (.msg.mine's
+   align-self: flex-end oben). */
+.msg-header { display: flex; flex-direction: column; gap: 0.1rem; font-size: 0.74rem; padding: 0 0.2rem 0.15rem; color: var(--muted); }
+.msg-header-top { display: flex; align-items: center; gap: 0.4rem; }
+.msg.mine .msg-header-top { flex-direction: row-reverse; }
+.msg-header-bottom { display: flex; align-items: center; gap: 0.3rem; }
+.msg.mine .msg-header-bottom { justify-content: flex-end; }
+/* Autorname darf zur Not schrumpfen (Ellipsis) statt das ⋮-Menü aus der
+   oberen Zeile zu drängen. */
 .msg-author { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-decoration: none; font-weight: 600; }
 .msg-author:hover { text-decoration: underline; }
-.msg-time { flex-shrink: 0; }
 .msg-pinned-badge { font-size: 0.72rem; }
 .msg-bubble {
   background: var(--bubble-in);
@@ -456,10 +457,19 @@ button { font-family: inherit; }
   border-radius: 12px;
   padding: 0.5rem;
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  /* minmax(0, 1fr) statt nur 1fr: eine "nackte" 1fr-Spur darf laut Grid-
+     Spec nie kleiner als der eigene Inhalt werden (impliziter min-width:
+     auto) — bei 8 Spuren in 17rem reichte das Emoji+Padding pro Button
+     knapp nicht, das Raster wurde dadurch BREITER als die Box, was einen
+     horizontalen UND (durch den dadurch verkleinerten Restplatz) einen
+     zweiten, vertikalen Scrollbalken gleichzeitig erzwang. minmax(0, 1fr)
+     erlaubt der Spur, tatsächlich zu schrumpfen — Raster passt exakt in
+     die Box, overflow-x bleibt zusätzlich hart auf hidden als Garantie. */
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 0.1rem;
   max-height: 12rem;
   overflow-y: auto;
+  overflow-x: hidden;
   width: 17rem;
   max-width: calc(100vw - 1.4rem);
 }
@@ -538,10 +548,11 @@ button { font-family: inherit; }
   border-radius: 12px;
   padding: 0.5rem;
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(8, minmax(0, 1fr)); /* minmax(0, 1fr): s. .emoji-pickers Doku — verhindert denselben doppelten-Scrollbalken-Bug */
   gap: 0.1rem;
   max-height: 12rem;
   overflow-y: auto;
+  overflow-x: hidden;
   width: 17rem;
   max-width: calc(100vw - 1.4rem);
   box-shadow: 0 4px 16px #00000050;
