@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu, QuStore, MemoryAdapter, NullAdapter, createNetworkPlugin, createSpacesPlugin, createCalendarPlugin } from '../src/index.js';
+import {
+  Qu, QuStore, MemoryAdapter, NullAdapter, createNetworkPlugin, createSpacesPlugin, createCalendarPlugin,
+  createCalendarPushRule, createItemInvitePushRule,
+} from '../src/index.js';
 import { createWebSocketChannel } from '../src/network/transports/websocket-browser.js';
 import { startTestRelayServer, stopTestRelayServer } from './helpers.mjs';
 
@@ -8,17 +11,24 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 /**
  * Same harness as test/relay-push.test.mjs — a FAKE sendPush() so this file
- * asserts relay.mjs's own decision logic (the two new calendar hooks: "an
- * offline calendar-space member gets pushed at when an event lands" and "an
- * outsider invited to one specific event gets pushed at via their own
- * inbox") without any real network call to a push service.
+ * asserts relay.mjs's own decision logic: "an offline calendar-space member
+ * gets pushed at when an event lands" (modules/calendar.js's
+ * createCalendarPushRule()) and "an outsider invited to one specific event
+ * gets pushed at via their own item-invite inbox" (modules/item-invites.js's
+ * createItemInvitePushRule(), generic — not calendar-specific, see that
+ * module's doc comment) — without any real network call to a push service.
+ * relay.mjs itself knows neither rule; both are opted in explicitly below,
+ * exactly as index.js's real deployment does.
  */
 function startTestServer(sendPush) {
   const store = new QuStore([
     { prefix: '', adapter: new MemoryAdapter() },
     { prefix: 'push-subscription/', adapter: new NullAdapter(), replicate: false },
   ]);
-  return startTestRelayServer({ store, allowDynamicSubscribe: true, sendPush, pushSubscriptions: new Map() });
+  return startTestRelayServer({
+    store, allowDynamicSubscribe: true, sendPush, pushSubscriptions: new Map(),
+    pushRules: [createCalendarPushRule(), createItemInvitePushRule()],
+  });
 }
 
 async function closeAll(server, ...channels) {
@@ -152,8 +162,12 @@ test('inviteToEvent(): an outsider who is never a calendar-space member gets not
     assert.equal(pushCalls.length, 1);
     assert.equal(pushCalls[0].subscription.endpoint, fakeSubscription.endpoint);
     assert.equal(pushCalls[0].payload.fp, alice.fingerprint);
+    // Generic item-invite wording (item-invites.js's createItemInvitePushRule()),
+    // NOT calendar-specific — this hook fires for ANY app's inviteToItem(),
+    // so it only ever echoes the generic template + whatever `kind` the
+    // calling app (here: calendar.js's inviteToEvent()) chose to set.
     assert.match(pushCalls[0].payload.body, /Alice/);
-    assert.match(pushCalls[0].payload.body, /eingeladen/);
+    assert.match(pushCalls[0].payload.body, /Termin/);
   } finally {
     await closeAll(server, chCRegister, chA);
   }

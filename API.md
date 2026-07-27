@@ -30,10 +30,11 @@ import { QuRuntime, QuSession, QuIdentity, /* ... */ } from './src/index.js';
 13. [References-Modul](#references-modul) — `obj://`/`key://`/`file://`
 14. [Files-Modul](#files-modul) — Datei-Transfer
 15. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
-16. [Kalender-Modul](#kalender-modul) — Termine, Kalender-/Termin-Einladung, RSVP
-17. [Inkognito-Identitäts-Modul](#inkognito-identitäts-modul) — pseudonyme Zweit-Identitäten
-18. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
-19. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`/`<qu-list>`
+16. [Kalender-Modul](#kalender-modul) — Termine, Kalender-Einladung, RSVP
+17. [Item-Invites-Modul](#item-invites-modul) — App-agnostische Einladung zu einem einzelnen Element ohne Space-Mitgliedschaft
+18. [Inkognito-Identitäts-Modul](#inkognito-identitäts-modul) — pseudonyme Zweit-Identitäten
+19. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
+20. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`/`<qu-list>`
 
 ---
 
@@ -1266,6 +1267,14 @@ await alice.sendMessage(room.id, {
 bob.onMessage(room.id, (msg) => console.log(msg.writer, msg.value.text), { initial: true });
 ```
 
+### `createChatPushRule()` — Push-Regel für `relay.mjs`s `pushRules`
+Ein reines Konfigurationsobjekt, genau wie `createCalendarPushRule()` unten
+— `relay.mjs` selbst kennt `"msgs"`/`"Chat"` nicht, ein Deployment übergibt
+diese Regel explizit (`createRelay({ pushRules: [createChatPushRule()] })`,
+siehe index.js). Empfänger: `spaceWriterRecipients()` (Space-Helfer/
+space-membership.js). Text ist immer generisch (Alias + "hat dir
+geschrieben"), nie der Nachrichteninhalt.
+
 ---
 
 ## Kalender-Modul
@@ -1323,18 +1332,22 @@ Manifest überhaupt anzufassen — die Person wird NIE zu `writers`/`readers`/
 `admins` hinzugefügt (das würde sie sichtbar zum vollen Mitglied machen,
 das Gegenteil einer Termin-Einladung). Erreichbarkeit kommt ausschließlich
 aus einer erweiterten `encryptFor`-Liste auf diesem einen Termin, entdeckt
-über einen Ping in eine eigene Termin-Einladungs-„Inbox"
-(`event-invites/<fp>/...`, siehe `onEventInvites()`). Konsequenz: die
-eingeladene Person kann genau diesen Termin lesen/RSVP geben, aber nichts
-im Kalender-Space schreiben (siehe `setOutsiderRSVP()`), und kennt trivial
-die Kalender-Space-ID (Pfad-Präfix der Termin-ID) — Metadaten (IDs,
+über [`inviteToItem()`](#item-invites-modul) — die generische, NICHT
+kalenderspezifische Mechanik aus dem Item-Invites-Modul (siehe dort). Diese
+Funktion ist nur ein dünner, kalender-eigener Wrapper darüber
+(`inviteToItem(qu, eventId, outsiderFp, { kind: 'Termin' })`). Konsequenz:
+die eingeladene Person kann genau diesen Termin lesen/RSVP geben, aber
+nichts im Kalender-Space schreiben (siehe `setOutsiderRSVP()`), und kennt
+trivial die Kalender-Space-ID (Pfad-Präfix der Termin-ID) — Metadaten (IDs,
 Zeitstempel, Chiffretext) anderer Termine könnten sichtbar sein, deren
 Inhalt aber nicht.
 
 ### `onEventInvites(qu, callback, opts?)` → `() => void`
-Live-Subscription der eigenen Termin-Einladungen (Gegenstück zu
+Dünner Rename von [`onItemInvite()`](#item-invites-modul) — Gegenstück zu
 `onSpaceInvite()` aus dem Space-Membership-Modul, nur pro Termin statt pro
-Space). Jeder gelieferte Wert: `{ fromFp, spaceId, eventId }`.
+Space. Jeder gelieferte Wert: `{ fromFp, itemId, kind: 'Termin' }` — eine UI
+liest `itemId` als Termin-Id (`spaceIdOf(itemId)` liefert die Kalender-
+Space-Id zurück).
 
 ### RSVP: `setRSVP()` / `setOutsiderRSVP()` / `getRSVPs()` / `onRSVPChange()`
 | Funktion | Für wen | Ablageort |
@@ -1357,6 +1370,19 @@ etc. an (siehe oben) und komponiert zusätzlich `createSpaceMembershipPlugin()`
 (also auch `qu.ensureSpace()`/`qu.addSpaceMember()`/etc.) — erfordert
 `createSpacesPlugin()` bereits installiert (für `qu.createSpace()`).
 
+### `createCalendarPushRule()` — Push-Regel für `relay.mjs`s `pushRules`
+Ein reines Konfigurationsobjekt (`{ pattern, resolveRecipients, buildPayload }`),
+**nicht** im Relay selbst fest verdrahtet — siehe
+[relay.mjs's `pushRules`-Doku](#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate)
+für das generische Erweiterungsprinzip. Ein Deployment, das Kalender-Pushes
+will, übergibt `createRelay({ pushRules: [createCalendarPushRule(), ...] })`
+selbst (siehe index.js). Empfänger: `spaceWriterRecipients()`
+([Space-Helfer](#space-helfer)/space-membership.js) — jeder aktuelle
+Kalender-Space-Writer außer Absender:in. Text ist immer generisch ("Ein
+Termin wurde aktualisiert" + Alias), da jeder Termin verschlüsselt ist —
+der Relay kann Anlegen/Ändern/Löschen ohnehin nicht am Chiffretext
+unterscheiden.
+
 ```js
 const alice = (await Qu.create()).use(createSpacesPlugin()).use(createCalendarPlugin());
 const bob = (await Qu.create({ runtime: alice.runtime })).use(createCalendarPlugin());
@@ -1373,6 +1399,53 @@ await carol.publishProfile();
 await inviteToEvent(alice, qubit.id, carol.fingerprint);
 await setOutsiderRSVP(carol, qubit.id, 'maybe');
 ```
+
+---
+
+## Item-Invites-Modul
+
+Das ITEM-Pendant zu `space-membership.js`s Space-Einladung: eine Fingerprint
+zu **genau einem** Element unter einem Space einladen, ohne sie zu
+`writers`/`readers`/`admins` dieses Spaces hinzuzufügen. Bewusst
+App-agnostisch — [Kalender-Modul](#kalender-modul)s `inviteToEvent()` ist nur
+EIN Nutzer davon, dasselbe Muster passt genauso für eine geteilte
+Chat-Nachricht oder eine einer Außenperson zugewiesene ToDo-Aufgabe. Dieses
+Modul verschlüsselt selbst nichts — das aufrufende Inhalts-Modul ist dafür
+verantwortlich, die `encryptFor`-Liste des Elements selbst zu erweitern
+(siehe `calendar.js`s `inviteToEvent()`); dieses Modul kümmert sich nur
+darum, dass die eingeladene Person das Element überhaupt kennenlernt.
+
+### `itemInviteBoxId(fingerprint)` → `string`
+`item-invites/<fingerprint>` — bewusst NICHT `inbox-<fingerprint>` (das
+Format aus `space-membership.js`): core/pattern.js erlaubt `*`/`**` nur als
+GANZES Pfadsegment (nie mittendrin), ein Relay-seitiges Muster, das jede
+Empfänger:in gleichzeitig beobachten will, braucht die Fingerprint deshalb
+als eigenes Segment (`item-invites/*/*` ist gültig, `inbox-*/...` wäre eine
+nie zutreffende Zeichenkette, kein Muster).
+
+### `inviteToItem(qu, itemId, recipientFp, meta?)`
+`meta` ist frei wählbar (z. B. `{ kind: 'Termin' }`) und dient nur als
+Anzeige-Hinweis für eine generische Push-Regel (siehe
+`createItemInvitePushRule()` unten) — der Relay selbst muss nie wissen, was
+ein „Termin" ist, er gibt nur eine vom aufrufenden Modul gewählte
+Zeichenkette weiter.
+
+### `onItemInvite(qu, callback, opts?)` → `() => void`
+Live-Subscription der eigenen Item-Einladungen. Jeder Wert:
+`{ fromFp, itemId, ...meta }`.
+
+### `createItemInvitesPlugin()` — Fassaden-Sugar
+`qu.use(createItemInvitesPlugin())` hängt `qu.inviteToItem()`/
+`qu.onItemInvite()` an — ohne Voraussetzung an `createSpacesPlugin()` (im
+Unterschied zu `createSpaceMembershipPlugin()`), da hier nie
+`qu.createSpace()`/`qu.addToRole()` aufgerufen wird.
+
+### `createItemInvitePushRule()` — generische Push-Regel für `relay.mjs`s `pushRules`
+Funktioniert für JEDES Modul, das `inviteToItem()` nutzt, nicht nur für
+Kalender — Empfänger kommt direkt aus dem zweiten Pfadsegment der Id
+(`item-invites/<fp>/...`), keine Manifest-Abfrage nötig. Text bleibt
+generisch ("… hat dir etwas geteilt"), ergänzt optional `meta.kind` in
+Klammern, falls gesetzt.
 
 ---
 

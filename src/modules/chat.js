@@ -14,6 +14,7 @@
 // working unchanged.
 
 import { createPresencePlugin } from './presence.js';
+import { spaceWriterRecipients } from './space-membership.js';
 
 function randomId() {
   return crypto.randomUUID();
@@ -241,5 +242,30 @@ export function createChatPlugin() {
       qu.getPinnedMessages = (spaceId) => getPinnedMessages(qu.get(spaceId));
       qu.onPinsChange = (spaceId, callback, opts) => onPinsChange(qu.get(spaceId), callback, opts);
     },
+  };
+}
+
+/**
+ * A push-rule descriptor for relay.mjs's `pushRules` extension point (see
+ * that file's doc comment) — a deployment that wants offline chat members
+ * pushed at on a new message passes `createChatPushRule()` in its own
+ * `createRelay({ pushRules: [...] })` call (see index.js). relay.mjs itself
+ * never hard-codes "msgs" or "Chat" anywhere; this is the one place that
+ * knowledge lives, exactly where the message shape (`<roomId>/msgs/
+ * <writerFp>-<ts>`, see sendMessage() above) is already defined. Recipients
+ * are every current Space writer except the sender (space-membership.js's
+ * spaceWriterRecipients() — Space-generic, not chat-specific); the payload
+ * is a generic template + the sender's alias, NEVER message content — a
+ * push service is not a party this app's encryption trusts, exactly like
+ * the relay itself.
+ */
+export function createChatPushRule() {
+  return {
+    pattern: '*/msgs/*',
+    resolveRecipients: spaceWriterRecipients,
+    buildPayload: (q, senderName) => ({
+      title: 'QU Chat',
+      body: senderName ? `${senderName} hat dir geschrieben` : 'Du hast eine neue Nachricht erhalten',
+    }),
   };
 }

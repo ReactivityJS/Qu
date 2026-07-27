@@ -5,7 +5,7 @@ import {
   createCalendarSpace, createEvent, updateEvent, deleteEvent, listEvents, onEventsChange,
   inviteToEvent, removeFromEvent, onEventInvites,
   setRSVP, setOutsiderRSVP, getRSVPs, onRSVPChange,
-  calendarBucketOf,
+  calendarBucketOf, spaceIdOf,
 } from '../src/index.js';
 
 function wait(ms = 20) { return new Promise((r) => setTimeout(r, ms)); }
@@ -119,8 +119,9 @@ test('onEventInvites(): an outsider is notified of a per-event invite via their 
 
   assert.equal(received.length, 1);
   assert.equal(received[0].fromFp, alice.fingerprint);
-  assert.equal(received[0].eventId, qubit.id);
-  assert.equal(received[0].spaceId, room.id);
+  assert.equal(received[0].itemId, qubit.id, 'item-invites.js\'s generic shape — the event id doubles as the generic "itemId"');
+  assert.equal(received[0].kind, 'Termin', 'calendar.js\'s own display hint for the generic item-invite push rule');
+  assert.equal(spaceIdOf(received[0].itemId), room.id, 'the calendar Space id is recoverable from the item id\'s own prefix, no separate field needed');
 });
 
 test('setOutsiderRSVP()/getRSVPs(): an invited outsider RSVPs under their own User-Space, merged correctly with Space-member RSVPs', async () => {

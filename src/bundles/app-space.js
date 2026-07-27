@@ -11,7 +11,11 @@
 export { createSpaceACLResolver, createSpace, createSpaceAt, createSpacesPlugin, addToRole, removeFromRole } from '../modules/spaces.js';
 export {
   inboxId, ensureSpace, notifyMembers, onSpaceInvite, addSpaceMember, removeSpaceMember, createSpaceMembershipPlugin,
+  spaceWriterRecipients,
 } from '../modules/space-membership.js';
+export {
+  itemInviteBoxId, inviteToItem, onItemInvite, createItemInvitesPlugin, createItemInvitePushRule,
+} from '../modules/item-invites.js';
 export {
   setProfileAttr, getProfileAttr, deleteProfileAttr, listProfileAttrs, onProfileAttrsChange,
   DIRECTORY_ID, ensureDirectory, setDirectoryVisible, listDirectory, onDirectoryChange, createProfilesPlugin,
@@ -21,6 +25,7 @@ export {
   sendMessage, listMessages, onMessage, createChatRoom, createChatPlugin,
   setReaction, clearReaction, getReactions, onReactionsChange,
   pinMessage, unpinMessage, getPinnedMessages, onPinsChange,
+  createChatPushRule,
 } from '../modules/chat.js';
 export {
   markRead, getReadReceipts, onReadReceipt,
@@ -33,7 +38,7 @@ export {
   inviteToEvent, removeFromEvent, onEventInvites,
   setRSVP, setOutsiderRSVP, getRSVPs, onRSVPChange,
   ensureCalendarSpace, addCalendarMember, removeCalendarMember, onCalendarInvite, notifyCalendarMembers,
-  createCalendarPlugin,
+  createCalendarPlugin, createCalendarPushRule,
 } from '../modules/calendar.js';
 export {
   createIncognitoIdentity, listIncognitoIdentities, getIncognitoIdentity, deleteIncognitoIdentity, enterIncognito,

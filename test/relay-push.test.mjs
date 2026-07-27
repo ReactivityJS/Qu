@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu, QuStore, MemoryAdapter, NullAdapter, createNetworkPlugin, createSpacesPlugin, createChatPlugin } from '../src/index.js';
+import { Qu, QuStore, MemoryAdapter, NullAdapter, createNetworkPlugin, createSpacesPlugin, createChatPlugin, createChatPushRule } from '../src/index.js';
 import { createWebSocketChannel } from '../src/network/transports/websocket-browser.js';
 import { startTestRelayServer, stopTestRelayServer } from './helpers.mjs';
 
@@ -21,6 +21,12 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * exactly as index.js's real deployment must (see relay.mjs's own doc
  * comment on `sendPush`/`pushSubscriptions`).
  *
+ * `pushRules: [createChatPushRule()]` — relay.mjs itself no longer knows
+ * what a chat message is (see its `pushRules` doc comment); this suite
+ * opts the chat rule in explicitly, exactly as a real deployment
+ * (index.js) does, so it's actually testing the same wiring a production
+ * relay uses, not a special test-only shortcut.
+ *
  * Every test below wraps its assertions in try/finally — an assertion
  * failure part-way through must still close its sockets/server, or the
  * open WebSocket connection keeps the whole `node --test` process alive
@@ -33,7 +39,7 @@ function startTestServer(sendPush) {
     { prefix: '', adapter: new MemoryAdapter() },
     { prefix: 'push-subscription/', adapter: new NullAdapter(), replicate: false },
   ]);
-  return startTestRelayServer({ store, allowDynamicSubscribe: true, sendPush, pushSubscriptions: new Map() });
+  return startTestRelayServer({ store, allowDynamicSubscribe: true, sendPush, pushSubscriptions: new Map(), pushRules: [createChatPushRule()] });
 }
 
 async function closeAll(server, ...channels) {
