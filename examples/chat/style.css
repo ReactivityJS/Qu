@@ -330,6 +330,23 @@ button { font-family: inherit; }
   100% { box-shadow: 0 0 0 2px transparent; }
 }
 .msg-text { white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; }
+/* Blockebene (parseMessageBlocks()/renderMessageText() in app.mjs) —
+   Absätze und Listen innerhalb einer Bubble, ohne die üblichen
+   Browser-Standardabstände von <ul>/<ol>/<p>, die in einer schmalen
+   Sprechblase zu viel Platz fressen würden. */
+.msg-paragraph { margin: 0; }
+.msg-paragraph + .msg-paragraph,
+.msg-paragraph + .msg-list,
+.msg-list + .msg-paragraph,
+.msg-list + .msg-list { margin-top: 0.35rem; }
+.msg-list { margin: 0; padding-left: 1.3rem; }
+.msg-list li { margin: 0.1rem 0; }
+/* Inline-Formatierung (parseFormatting()) — Browser-Standarddarstellung
+   der Tags reicht eigentlich schon, hier nur zur Klarheit explizit. */
+.msg-text strong { font-weight: 700; }
+.msg-text em { font-style: italic; }
+.msg-text u { text-decoration: underline; }
+.msg-text s { text-decoration: line-through; }
 /* Uhrzeit/Datum-Link, "bearbeitet"-Marker und Häkchen leben jetzt ALLE in
    der .msg-header-Kopfzeile selbst (buildMessageHeader()) statt zusätzlich
    noch einmal unten rechts in der Bubble — eine einzige, an fester Position
@@ -849,6 +866,7 @@ button { font-family: inherit; }
 .push-status { margin: 0; }
 .modal-hint { color: var(--muted); font-size: 0.78rem; margin: 0.4rem 0 0; }
 .modal-hint a { color: var(--accent-strong); }
+.modal-hint code { background: var(--panel-2); border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.9em; }
 .toggle-row { display: flex !important; align-items: center; gap: 0.5rem; color: var(--text) !important; font-size: 0.88rem !important; margin: 0.5rem 0 !important; cursor: pointer; }
 .toggle-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent-strong); cursor: pointer; }
 

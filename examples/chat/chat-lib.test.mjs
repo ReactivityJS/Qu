@@ -4,7 +4,7 @@ import {
   isValidFingerprint, normalizeFingerprint, dmRoomId, groupRoomId, shortFp, fmtBytes,
   fmtTime, fmtDayLabel, fmtCallDuration, linkify, mediaKind, sortByActivity,
   buildPath, parsePathSegments, buildLocationUrl, parseLocationFromUrl, staticMapTileUrl,
-  isVoiceMessageFilename,
+  isVoiceMessageFilename, parseFormatting, parseMessageBlocks,
 } from './chat-lib.mjs';
 
 const FP_A = 'a1b2c3d4e5f60718293a4b5c';
@@ -84,6 +84,59 @@ test('linkify() splits text/link segments in order', () => {
 test('linkify() with no links returns a single text segment', () => {
   const segs = linkify('nur text, kein link');
   assert.deepEqual(segs, [{ type: 'text', value: 'nur text, kein link' }]);
+});
+
+test('parseFormatting(): bold/italic/underline/strike, each recognized on its own', () => {
+  assert.deepEqual(parseFormatting('*fett*'), [{ type: 'bold', value: 'fett' }]);
+  assert.deepEqual(parseFormatting('_kursiv_'), [{ type: 'italic', value: 'kursiv' }]);
+  assert.deepEqual(parseFormatting('__unterstrichen__'), [{ type: 'underline', value: 'unterstrichen' }]);
+  assert.deepEqual(parseFormatting('~durch~'), [{ type: 'strike', value: 'durch' }]);
+});
+
+test('parseFormatting(): mixed text and multiple markers in order', () => {
+  const segs = parseFormatting('sag *hallo* zu _allen_');
+  assert.deepEqual(segs, [
+    { type: 'text', value: 'sag ' },
+    { type: 'bold', value: 'hallo' },
+    { type: 'text', value: ' zu ' },
+    { type: 'italic', value: 'allen' },
+  ]);
+});
+
+test('parseFormatting(): a marker touching whitespace on either side is left as plain text (matches WhatsApp: "3 * 4 * 5" stays arithmetic, not bold)', () => {
+  assert.deepEqual(parseFormatting('3 * 4 * 5'), [{ type: 'text', value: '3 * 4 * 5' }]);
+  assert.deepEqual(parseFormatting('* nicht fett *'), [{ type: 'text', value: '* nicht fett *' }]);
+});
+
+test('parseFormatting(): no plain text between markers is not swallowed', () => {
+  const segs = parseFormatting('*a* und *b*');
+  assert.deepEqual(segs, [
+    { type: 'bold', value: 'a' },
+    { type: 'text', value: ' und ' },
+    { type: 'bold', value: 'b' },
+  ]);
+});
+
+test('parseMessageBlocks(): a plain paragraph without any list markers', () => {
+  const blocks = parseMessageBlocks('Zeile eins\nZeile zwei');
+  assert.deepEqual(blocks, [{ type: 'paragraph', lines: ['Zeile eins', 'Zeile zwei'] }]);
+});
+
+test('parseMessageBlocks(): "-" and "*" bullets both count as the same unordered list, a numbered line starts a new ordered one', () => {
+  const blocks = parseMessageBlocks('- eins\n* zwei\n1. drei\n2. vier');
+  assert.deepEqual(blocks, [
+    { type: 'list', ordered: false, items: ['eins', 'zwei'] },
+    { type: 'list', ordered: true, items: ['drei', 'vier'] },
+  ]);
+});
+
+test('parseMessageBlocks(): a paragraph interrupted by a list, then resumed, becomes three separate blocks', () => {
+  const blocks = parseMessageBlocks('Vorher\n- ein Punkt\nNachher');
+  assert.deepEqual(blocks, [
+    { type: 'paragraph', lines: ['Vorher'] },
+    { type: 'list', ordered: false, items: ['ein Punkt'] },
+    { type: 'paragraph', lines: ['Nachher'] },
+  ]);
 });
 
 test('mediaKind()', () => {
