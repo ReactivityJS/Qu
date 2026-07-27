@@ -93,6 +93,34 @@ export async function createRelay({
   // else) — a degraded but harmless fallback, not a crash.
   sendPush = null,
   pushSubscriptions = new Map(),
+  // WHICH writes actually trigger a push, and to whom — a plain, caller-
+  // supplied array of `{ pattern, resolveRecipients(q, runtime), buildPayload(q,
+  // senderAlias) }` descriptors, exactly the same "a new behavior is a
+  // function/object passed in here, not new code in this file" shape
+  // `ingestGate`/`serviceRegistry` already use above. This file deliberately
+  // knows NOTHING about "msgs", "events", "Chat", or "Kalender" — every one
+  // of those decisions lives in the CONTENT module that actually defines
+  // that shape (see modules/chat.js's createChatPushRule(), modules/
+  // calendar.js's createCalendarPushRule(), modules/item-invites.js's
+  // createItemInvitePushRule()) and is opted into explicitly by whoever
+  // deploys this relay (index.js assembles the list for its own bundled
+  // apps). A relay running only ToDo, or a future app nobody's written yet,
+  // simply passes a different (or empty) `pushRules` array — no change to
+  // this file ever required for a new app's own push behavior.
+  //   pattern            — a `runtime.on()` pattern (core/pattern.js rules
+  //                        apply: `*`/`**` only ever match a WHOLE segment).
+  //   resolveRecipients  — `(q, runtime) => Promise<string[]> | string[]`,
+  //                        the fingerprints to consider (still filtered
+  //                        below against sender/online/no-subscription,
+  //                        identically for every rule).
+  //   buildPayload       — `(q, senderAlias) => Promise<{title, body}> |
+  //                        {title, body}` — a rule's own responsibility to
+  //                        stay generic (a template + the sender's alias,
+  //                        NEVER the qubit's own decrypted content — this
+  //                        file has no way to enforce that, it trusts each
+  //                        rule the same way it already trusts `ingestGate`
+  //                        entries).
+  pushRules = [],
   // Fingerprints allowed to administer THIS relay — currently just
   // "write the runtime-maintained service catalog" (relay-services/<id>,
   // see below), server/service-registry.mjs's `attachStore()`. Empty by
@@ -263,119 +291,43 @@ export async function createRelay({
   const recentCallPushes = new Map(); // to-fingerprint -> timestamp of the last call-invite push sent them
   const CALL_PUSH_COOLDOWN_MS = 20_000; // examples/chat/app.mjs's startCall() re-announces 'call-invite' every 6s while ringing — without this, one ring would trigger a push every 6s instead of once
 
-  // Notify an OFFLINE room member by Web Push instead of the live delivery
+  // Notify an OFFLINE recipient by Web Push instead of the live delivery
   // they'd otherwise get through their own connection — this is what lets
-  // a chat reach someone whose tab/app isn't even open. Matches
-  // modules/chat.js's message-id shape exactly (`<roomId>/msgs/<writerFp>-
-  // <ts>`, from Session.append()) rather than a generic pattern, so this
-  // hook — unlike the file-mirror one above — genuinely is chat-specific;
-  // only active at all if a caller opted in via `sendPush` above. No
-  // message CONTENT is ever put in a push payload (only ever a generic
-  // "you have a new message" + the sender's fingerprint, so the client can
-  // deep-link there) — a push service is not a party any of this app's
-  // encryption trusts, exactly like the relay itself.
+  // an app reach someone whose tab/app isn't even open. Entirely driven by
+  // `pushRules` (see this function's own doc comment on that parameter) —
+  // this file has no idea what a "message" or an "event" is, it only ever
+  // runs whatever rules it was handed. No qubit CONTENT is ever put in a
+  // push payload beyond what a rule's own `buildPayload()` returns (by
+  // convention: a generic template + the sender's alias, never decrypted
+  // content) — a push service is not a party any app's encryption trusts,
+  // exactly like the relay itself.
   if (sendPush) {
-    relay.runtime.on('*/msgs/*', async (q) => {
-      if (q.ephemeral || !q.writer) return;
-      const roomId = q.id.slice(0, q.id.indexOf('/msgs/'));
-      if (!roomId) return;
-      const manifestQ = await relay.runtime.get(roomId);
-      const members = manifestQ?.value?.writers ?? [];
-      for (const member of members) {
-        if (member === q.writer || member === '*' || connected.has(member)) continue;
-        const subscription = pushSubscriptions.get(member);
-        if (!subscription) continue;
-        try {
-          const aliasQ = await relay.runtime.get(`~${q.writer}/alias`);
-          const senderName = aliasQ?.value ?? null;
-          await sendPush({
-            subscription,
-            payload: { title: 'QU Chat', body: senderName ? `${senderName} hat dir geschrieben` : 'Du hast eine neue Nachricht erhalten', fp: q.writer },
-          });
-          debug('relay', 'push-sent', { to: member, roomId });
-        } catch (e) {
-          // A 404/410 means the push service considers this subscription
-          // gone (expired/revoked) — drop it so future messages don't keep
-          // retrying a dead endpoint; any other failure (network blip,
-          // 5xx) is left in place for the next message to retry.
-          if (e.status === 404 || e.status === 410) pushSubscriptions.delete(member);
-          debug('relay', 'push-failed', { to: member, roomId, error: e.message, status: e.status });
-          console.error(`[Relay] push to ${member} failed:`, e.message);
+    for (const rule of pushRules) {
+      relay.runtime.on(rule.pattern, async (q) => {
+        if (q.ephemeral || !q.writer) return;
+        const recipients = await rule.resolveRecipients(q, relay.runtime);
+        for (const fp of recipients) {
+          if (fp === q.writer || fp === '*' || connected.has(fp)) continue;
+          const subscription = pushSubscriptions.get(fp);
+          if (!subscription) continue;
+          try {
+            const aliasQ = await relay.runtime.get(`~${q.writer}/alias`);
+            const senderName = aliasQ?.value ?? null;
+            const payload = await rule.buildPayload(q, senderName);
+            await sendPush({ subscription, payload: { ...payload, fp: q.writer } });
+            debug('relay', 'push-sent', { to: fp, pattern: rule.pattern });
+          } catch (e) {
+            // A 404/410 means the push service considers this subscription
+            // gone (expired/revoked) — drop it so future writes don't keep
+            // retrying a dead endpoint; any other failure (network blip,
+            // 5xx) is left in place for the next write to retry.
+            if (e.status === 404 || e.status === 410) pushSubscriptions.delete(fp);
+            debug('relay', 'push-failed', { to: fp, pattern: rule.pattern, error: e.message, status: e.status });
+            console.error(`[Relay] push to ${fp} failed:`, e.message);
+          }
         }
-      }
-    });
-
-    // Same idea as the `*/msgs/*` hook above, for modules/calendar.js's
-    // events instead of chat messages — matches its id shape exactly
-    // (`<calendarSpaceId>/events/<bucket>/<writerFp>-<ts>`, four segments,
-    // hence `*/events/*/*` not `*/events/*`). Every event is ALWAYS
-    // encrypted (calendar.js's own doc comment — a calendar Space keeps
-    // `readers: ['*']`, so nothing here is ever plaintext to the relay),
-    // which means this relay genuinely cannot tell create/update/delete
-    // apart from `q.value` alone (it's ciphertext) — rather than leaking
-    // even a minimal unencrypted "action" marker to make that distinction
-    // possible, this collapses to ONE generic body for all three, same
-    // "never more than a generic template + sender fingerprint" invariant
-    // the chat hook above already holds itself to.
-    relay.runtime.on('*/events/*/*', async (q) => {
-      if (q.ephemeral || !q.writer) return;
-      const calendarSpaceId = q.id.split('/')[0];
-      const manifestQ = await relay.runtime.get(calendarSpaceId);
-      const members = manifestQ?.value?.writers ?? [];
-      for (const member of members) {
-        if (member === q.writer || member === '*' || connected.has(member)) continue;
-        const subscription = pushSubscriptions.get(member);
-        if (!subscription) continue;
-        try {
-          const aliasQ = await relay.runtime.get(`~${q.writer}/alias`);
-          const senderName = aliasQ?.value ?? null;
-          await sendPush({
-            subscription,
-            payload: { title: 'QU Kalender', body: senderName ? `${senderName} hat einen Termin aktualisiert` : 'Ein Termin wurde aktualisiert', fp: q.writer },
-          });
-          debug('relay', 'calendar-push-sent', { to: member, calendarSpaceId });
-        } catch (e) {
-          if (e.status === 404 || e.status === 410) pushSubscriptions.delete(member);
-          debug('relay', 'calendar-push-failed', { to: member, calendarSpaceId, error: e.message, status: e.status });
-          console.error(`[Relay] calendar push to ${member} failed:`, e.message);
-        }
-      }
-    });
-
-    // The per-event invite of an OUTSIDER (modules/calendar.js's
-    // inviteToEvent()) never touches the calendar Space's manifest at all
-    // (see that module's doc comment on why), so it can't be reached by the
-    // hook above — it pings a dedicated per-event invite inbox instead
-    // (`event-invites/<toFp>/<inviterFp>-<ts>`, modules/calendar.js's
-    // eventInviteBoxId()). Deliberately NOT `inbox-<fp>/event-invites/*`
-    // (space-membership.js's own inbox shape): core/pattern.js only ever
-    // treats `*`/`**` as a WHOLE path segment (assertValidPattern()'s own
-    // doc — "never mid-segment, e.g. 'a*b' is rejected"), so a pattern that
-    // needs to observe every recipient's invites at once requires the
-    // fingerprint to be its own segment — `inbox-*/event-invites/*` is not
-    // even a rejected pattern, it's a literal string "inbox-*" that no real
-    // id ever equals, so that hook would silently never fire. Same
-    // generic-body invariant as every other push hook in this file.
-    relay.runtime.on('event-invites/*/*', async (q) => {
-      if (q.ephemeral || !q.writer) return;
-      const toFp = q.id.split('/')[1];
-      if (!toFp || connected.has(toFp)) return;
-      const subscription = pushSubscriptions.get(toFp);
-      if (!subscription) return;
-      try {
-        const aliasQ = await relay.runtime.get(`~${q.writer}/alias`);
-        const senderName = aliasQ?.value ?? null;
-        await sendPush({
-          subscription,
-          payload: { title: 'QU Kalender', body: senderName ? `${senderName} hat dich zu einem Termin eingeladen` : 'Du wurdest zu einem Termin eingeladen', fp: q.writer },
-        });
-        debug('relay', 'calendar-invite-push-sent', { to: toFp });
-      } catch (e) {
-        if (e.status === 404 || e.status === 410) pushSubscriptions.delete(toFp);
-        debug('relay', 'calendar-invite-push-failed', { to: toFp, error: e.message, status: e.status });
-        console.error(`[Relay] calendar invite push to ${toFp} failed:`, e.message);
-      }
-    });
+      });
+    }
 
     // A push subscription is registered through the SAME publish/dispatch
     // path as any other write (`qu.session.publish('push-subscription/'

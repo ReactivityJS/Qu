@@ -21,6 +21,8 @@
 // separate Space-neutral module for the same reason this one is — neither
 // is membership/discovery-specific, so neither belongs here.
 
+import { spaceIdOf } from '../core/space.js';
+
 /**
  * Every member's own "letterbox" — a manifestless Space (see below) that
  * anyone may write to, used so a Space someone else created for you
@@ -121,6 +123,26 @@ export async function removeSpaceMember(qu, id, members, fp) {
   await qu.removeFromRole(id, 'writers', fp);
   await qu.removeFromRole(id, 'admins', fp);
   return members.filter((m) => m !== fp);
+}
+
+/**
+ * Every current writer of the Space `q` was written under (except the
+ * structural `'*'` entry, which is never a real, pushable fingerprint) —
+ * the recipient set almost every "notify Space members on a new write"
+ * push rule needs, regardless of content shape (a chat message, a calendar
+ * event, a future app's own collection). Pulled out here, rather than
+ * duplicated inside each content module's own push-rule descriptor (see
+ * modules/chat.js's createChatPushRule()/modules/calendar.js's
+ * createCalendarPushRule()), because it's genuinely Space-generic, not
+ * content-specific — the same "membership" concept this whole file is
+ * already about, just read for a different purpose (push routing instead
+ * of ACL). Takes `runtime` directly (not a `qu`/`Qu` instance) because
+ * relay.mjs's push-rule loop only ever has a raw `QuRuntime` to call this
+ * with — see that file's `pushRules` doc comment.
+ */
+export async function spaceWriterRecipients(q, runtime) {
+  const manifestQ = await runtime.get(spaceIdOf(q.id));
+  return (manifestQ?.value?.writers ?? []).filter((fp) => fp !== '*');
 }
 
 /**

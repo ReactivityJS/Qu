@@ -780,12 +780,21 @@ src/
                           hängt qu.sendMessage(spaceId, opts)-Sugar (etc.) an
     calendar.js               Termine (create/update/delete, monatsweise
                           gebuckett), Kalender-Space-Einladung (reine
-                          Wiederverwendung von space-membership.js) UND,
-                          neu, Termin-Einladung an Einzelpersonen OHNE
-                          Kalender-Mitgliedschaft (encryptFor-Erweiterung +
-                          eigene Termin-Einladungs-Inbox statt Manifest-
-                          Änderung) — siehe Datei-Doku für die ACL-
-                          Begründung. RSVP als LWW-Slot wie Chats Reaktionen.
+                          Wiederverwendung von space-membership.js), Termin-
+                          Einladung an Einzelpersonen OHNE Kalender-
+                          Mitgliedschaft (dünner Wrapper über
+                          item-invites.js's generische Item-Einladung, nicht
+                          selbst implementiert), RSVP als LWW-Slot wie Chats
+                          Reaktionen. createCalendarPushRule() ist eine
+                          opt-in Push-Regel für relay.mjs's pushRules — der
+                          Relay selbst kennt "Kalender"/"events" nicht.
+    item-invites.js           Das ITEM-Pendant zu space-membership.js: eine
+                          Fingerprint zu genau EINEM Element einladen, ohne
+                          Space-Mitgliedschaft — App-agnostisch, nicht nur
+                          von calendar.js genutzt (ein Chat-Nachricht-Share,
+                          eine zugewiesene ToDo-Aufgabe passen genauso).
+                          createItemInvitePushRule() ist die dazugehörige,
+                          ebenfalls generische Push-Regel.
     incognito-identity.js     Zusätzliche, nie mit der Haupt-Identität
                           verknüpfte Zweit-Identitäten (eigene FP/Keypair)
                           für pseudonyme Space-Nutzung — reine Komposition
@@ -845,6 +854,7 @@ test/
   space-handle.test.mjs         Tests für QuSpace (qu.own/qu.get()/createSpace()) und Qu.create({ mounts, plugins })
   chat.test.mjs               Tests für das Chat-Modul (inkl. Kollisionssicherheit, Presence, Lesebestätigungen)
   calendar.test.mjs            Tests für das Kalender-Modul (ACL-Grenzen, Shared-Edit-Semantik, Verschlüsselung, Termin-Einladung ohne Space-Mitgliedschaft, RSVP)
+  item-invites.test.mjs         Tests für das App-agnostische Item-Invites-Modul (Adressierung, Kollisionssicherheit, Push-Regel)
   incognito-identity.test.mjs  Tests für Zweit-Identitäten (Erzeugung, Trennung, Storage-Roundtrip, enterIncognito())
   relay.test.mjs               End-to-End gegen den echten WebSocket-Relay (native WebSocket-Clients, kein Loopback)
   references.test.mjs            obj://, key://, file://, Tiefenlimit, Zyklenschutz
@@ -1174,6 +1184,25 @@ diesen Relay. Details, inklusive warum das kein Core-Default ist (bricht
 legitime Mesh-/Gossip-Weiterleitung) und wie eine eigene `ingestGate`-Regel
 aussieht, stehen in
 [API.md](./API.md#relay-schutz-die-ingest-gate-pipeline-requiredirectwriter-ratelimiter-ingestgate).
+
+**Push-Benachrichtigungen sind genauso App-agnostisch verdrahtet:** Web Push
+(`sendPush`/`pushSubscriptions`) ist optional, aber WELCHE Schreibvorgänge
+überhaupt einen Push auslösen, entscheidet ausschließlich eine von außen
+übergebene `pushRules`-Liste (dieselbe "eine neue Regel ist eine Funktion,
+kein neuer Sonderfall in dieser Datei"-Form wie `ingestGate` oben) —
+`relay.mjs` selbst kennt weder `"msgs"` noch `"events"`, weder Chat noch
+Kalender. Jedes Inhalts-Modul bringt seine eigene Regel mit
+(`createChatPushRule()` in `modules/chat.js`, `createCalendarPushRule()` in
+`modules/calendar.js`, das generische, App-unabhängige
+`createItemInvitePushRule()` in `modules/item-invites.js` — letzteres für
+"lade eine Fingerprint zu genau EINEM Element ein, ohne Space-Mitgliedschaft",
+ein Muster, das ebenso gut für eine geteilte Chat-Nachricht oder eine
+zugewiesene ToDo-Aufgabe gilt, nicht nur für einen Kalender-Termin).
+`index.js` stellt für sein eigenes, gebündeltes Deployment die passende
+Liste zusammen (`pushRules: [createChatPushRule(), createCalendarPushRule(),
+createItemInvitePushRule()]`) — ein Relay, das nur eine dieser Apps bedient,
+übergibt einfach eine kürzere Liste, ohne dass sich an `relay.mjs` je etwas
+ändern müsste.
 
 ### Relay-Admin einrichten (`QU_RELAY_ADMINS`)
 

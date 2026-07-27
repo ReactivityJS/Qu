@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   Qu, createSpacesPlugin, createSpaceMembershipPlugin, inboxId,
   ensureSpace, notifyMembers, onSpaceInvite, addSpaceMember, removeSpaceMember,
+  spaceWriterRecipients,
 } from '../src/index.js';
 
 function wait(ms = 20) { return new Promise((r) => setTimeout(r, ms)); }
@@ -113,4 +114,27 @@ test('qu.ensureSpace()/qu.addSpaceMember()/etc.: the qu-bound convenience wrappe
   const carol = await Qu.create({ runtime: alice.runtime });
   const members = await alice.addSpaceMember(spaceId, [bob.fingerprint], carol.fingerprint);
   assert.deepEqual(members.sort(), [bob.fingerprint, carol.fingerprint].sort());
+});
+
+test('spaceWriterRecipients(): every current writer of the Space a qubit was written under, minus the structural \'*\' entry', async () => {
+  const alice = await makePeer();
+  const bob = await Qu.create({ runtime: alice.runtime });
+  const spaceId = 'push-recipients-space';
+  await ensureSpace(alice, spaceId, [bob.fingerprint]);
+
+  const q = { id: `${spaceId}/msgs/${alice.fingerprint}-1` };
+  const recipients = await spaceWriterRecipients(q, alice.runtime);
+  assert.deepEqual(recipients.sort(), [alice.fingerprint, bob.fingerprint].sort());
+});
+
+test('spaceWriterRecipients(): a Space whose writers list includes the literal \'*\' entry never treats it as a pushable recipient', async () => {
+  const alice = (await Qu.create()).use(createSpacesPlugin());
+  // Mixed manifest: `'*'` (anyone may write) alongside a real, named writer —
+  // the filter must drop only the structural '*' entry, not every entry.
+  const room = alice.createSpace({ writers: [alice.fingerprint, '*'], readers: ['*'] });
+  await room.ready;
+
+  const q = { id: `${room.id}/msgs/${alice.fingerprint}-1` };
+  const recipients = await spaceWriterRecipients(q, alice.runtime);
+  assert.deepEqual(recipients, [alice.fingerprint]);
 });

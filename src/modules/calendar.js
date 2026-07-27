@@ -1,11 +1,13 @@
 // A "calendar" is a plain Space (§8, same as a Chat room/ToDo list/Forum
 // board) — every function below takes a `qu` bound to it and is a short
-// get/put/set/map recipe on top, same house style as modules/chat.js. This
-// module contributes exactly ONE new mechanism the rest of the codebase
-// doesn't already have: inviting someone to a SINGLE event without making
-// them a member of the calendar Space at all (see inviteToEvent() below) —
-// everything else (calendar-space-level membership, encryption, edit
-// semantics) is a direct reuse of existing primitives.
+// get/put/set/map recipe on top, same house style as modules/chat.js.
+// Calendar-space-level membership reuses space-membership.js unmodified;
+// inviting someone to a SINGLE event without making them a calendar member
+// reuses modules/item-invites.js's generic per-item invite mechanism (see
+// that module's doc comment — it is deliberately app-agnostic, not
+// calendar-specific, so a chat/todo/forum app could equally use it for
+// their own single-item invites). This file's own contribution is purely
+// the event/RSVP data shape on top of both.
 //
 // Confidentiality (requirement: "ALLE Inhalte sollen verschlüsselt sein")
 // needs one important, easy-to-miss detail: a calendar Space keeps
@@ -27,45 +29,27 @@
 // added to the calendar's `writers`/`readers`/`admins` (that would make them
 // visibly a full member — exactly what a per-event invite is supposed to
 // avoid). Reachability instead comes purely from `encryptFor` addressing on
-// that one event QuBit, discovered via a ping into a per-event "invite
-// inbox" (eventInviteBoxId() below — same IDEA as space-membership.js's
-// inboxId(), a well-known, manifestless, anyone-may-write Space per
-// recipient, but its OWN id shape: `event-invites/<fp>`, not `inbox-<fp>`.
-// This is deliberate, not a style choice: core/pattern.js only ever treats
-// `*`/`**` as a WHOLE path segment (`assertValidPattern`'s own doc —
-// "never mid-segment, e.g. 'a*b' is rejected"), so a relay-side listener
-// that needs to observe every recipient's invites at once (relay.mjs) MUST
-// have the fingerprint as its own segment (`event-invites/*/*` — a valid
-// pattern) — `inbox-<fp>` bakes the fingerprint into the SAME segment as
-// the `inbox-` prefix, which no wildcard can isolate
-// (`inbox-*/event-invites/*` silently never matches anything; it is not
-// even a rejected pattern, just a literal string "inbox-*" no real id
-// equals). Consequence, stated plainly: an outsider who has an event's id
-// in hand also trivially knows the calendar Space's id (a literal path
-// prefix) and — since `readers: ['*']` — could subscribe to
-// `${spaceId}/events/**` and see METADATA (ids, timestamps, verified writer
-// fingerprints, opaque ciphertext) of every other event in that calendar,
-// even though they can decrypt none of them. Same "readers:['*'], real
-// confidentiality only at the content layer" trade-off Chat/ToDo/Forum
-// already accept — not something this module can hide without losing
-// default relay-forwarding entirely (see space-membership.js's doc comment).
+// that one event QuBit, discovered via item-invites.js's generic invite
+// inbox. Consequence, stated plainly: an outsider who has an event's id in
+// hand also trivially knows the calendar Space's id (a literal path prefix)
+// and — since `readers: ['*']` — could subscribe to `${spaceId}/events/**`
+// and see METADATA (ids, timestamps, verified writer fingerprints, opaque
+// ciphertext) of every other event in that calendar, even though they can
+// decrypt none of them. Same "readers:['*'], real confidentiality only at
+// the content layer" trade-off Chat/ToDo/Forum already accept — not
+// something this module can hide without losing default relay-forwarding
+// entirely (see space-membership.js's doc comment).
+//
+// Push notifications (relay.mjs's `pushRules` extension point) are NOT
+// hard-coded into the relay — this module exports its own
+// createCalendarPushRule() (see bottom of file), which a deployment opts
+// into explicitly (index.js). relay.mjs itself contains no calendar-
+// specific knowledge at all, same as it contains no chat-specific
+// knowledge — see that file's own doc comment on `pushRules`.
 
 import { spaceIdOf } from '../core/space.js';
-import { ensureSpace, notifyMembers, onSpaceInvite, addSpaceMember, removeSpaceMember, createSpaceMembershipPlugin } from './space-membership.js';
-
-/**
- * A per-recipient, manifestless "invite inbox" for exactly ONE event at a
- * time (contrast with space-membership.js's `inbox-<fp>`, which is one
- * shared inbox for every kind of whole-Space invite) — see file doc above
- * for why this needs its own id shape rather than reusing `inboxId()`
- * directly: the fingerprint must be its own path SEGMENT
- * (`event-invites/<fp>`, not `event-invites-<fp>`), so relay.mjs's
- * server-side listener can use a valid whole-segment wildcard
- * (`event-invites/*\/*`) to observe every recipient's invites at once.
- */
-function eventInviteBoxId(fingerprint) {
-  return `event-invites/${fingerprint}`;
-}
+import { ensureSpace, notifyMembers, onSpaceInvite, addSpaceMember, removeSpaceMember, createSpaceMembershipPlugin, spaceWriterRecipients } from './space-membership.js';
+import { inviteToItem, onItemInvite } from './item-invites.js';
 
 /**
  * "YYYY-MM" of the event's own START, not of `new Date()` (contrast with
@@ -149,11 +133,11 @@ export function createCalendarSpace(qu, memberFingerprints = [], { readers = ['*
  * `<calendarSpaceId>/events/<bucket>/series/<seriesId>/<occurrenceTs>` —
  * because core/pattern.js's `*`/`**` only ever match a WHOLE segment
  * (`assertValidPattern()`'s own doc: "never mid-segment, e.g. 'a*b' is
- * rejected"; relay.mjs's `event-invites/*\/*` hook vs. the rejected-in-
- * practice `inbox-*` + `/event-invites/*` shape is the concrete lesson
- * this module already learned the hard way, see eventInviteBoxId()'s doc
- * comment) — only that segmented shape lets `series/<seriesId>/**` become
- * a valid, useful pattern for "every occurrence of this one series" later.
+ * rejected"; modules/item-invites.js's file doc describes the exact same
+ * lesson learned the hard way while designing THIS module's own per-event
+ * invite mechanism) — only a segmented shape lets `series/<seriesId>/**`
+ * become a valid, useful pattern for "every occurrence of this one series"
+ * later.
  */
 export async function createEvent(qu, calendarSpaceId, {
   title, description = null, location = null, start, end, allDay = false, attendees,
@@ -234,14 +218,17 @@ export function onEventsChange(qu, calendarSpaceId, callback, { bucket = bucketO
  * opposite of what a per-event invite is for). Two things happen:
  *   1. The event's own `attendees`/`encryptFor` is widened to include
  *      `outsiderFp` (a normal updateEvent() patch).
- *   2. A ping into their per-event invite inbox (eventInviteBoxId() above —
- *      same IDEA as space-membership.js's notifyMembers()/inboxId(), just a
- *      distinct id shape, see file doc on why) tells their client which
- *      `spaceId`/`eventId` to fetch — the ONLY way an outsider ever learns
- *      these ids, since they're never a Space member and so never see
- *      anything via onSpaceInvite(). A `set()` (collision-safe), not a
- *      `put()` keyed by `eventId` — an id is a full path, and using it as a
- *      single key would misread its own "/" characters as nesting.
+ *   2. A ping into their generic item-invite inbox (modules/item-invites.js's
+ *      inviteToItem() — the same mechanism ANY content module can use for
+ *      "invite one fingerprint to one item without Space membership", not
+ *      something calendar.js implements itself) tells their client which
+ *      `itemId` (here: this event's own id — `spaceIdOf(itemId)` recovers
+ *      the calendar Space id, no separate field needed) to fetch — the
+ *      ONLY way an outsider ever learns it, since they're never a Space
+ *      member and so never see anything via onSpaceInvite(). `kind:
+ *      'Termin'` is purely a display hint for a generic push rule (see
+ *      item-invites.js's createItemInvitePushRule()) — relay.mjs never
+ *      needs to know what a "Termin" is, it only ever echoes this string.
  * The outsider can afterwards read/decrypt exactly this event and set an
  * RSVP (via setOutsiderRSVP() below, since they have no write access to the
  * calendar Space itself) but cannot edit or delete it — no ACL exception
@@ -252,8 +239,7 @@ export async function inviteToEvent(qu, eventId, outsiderFp) {
   if (!q?.value) throw new Error(`[Calendar] Event "${eventId}" not found or not readable.`);
   const attendees = [...new Set([...(q.value.attendees ?? []), outsiderFp])];
   await updateEvent(qu, eventId, { attendees });
-  const spaceId = spaceIdOf(eventId);
-  return qu.get(eventInviteBoxId(outsiderFp)).set({ fromFp: qu.fingerprint, spaceId, eventId });
+  return inviteToItem(qu, eventId, outsiderFp, { kind: 'Termin' });
 }
 
 /** The inverse of inviteToEvent() (also usable to drop a Space member from just this one event while leaving them on the calendar) — narrows `attendees`/`encryptFor` going forward; does NOT retroactively re-encrypt past writes of this event (same "history doesn't change" stance as space-membership.js's removeSpaceMember()). */
@@ -264,9 +250,17 @@ export async function removeFromEvent(qu, eventId, fp) {
   return updateEvent(qu, eventId, { attendees });
 }
 
-/** Live subscription to the caller's OWN per-event invites (past and future) — the outsider-side counterpart of onSpaceInvite(), for the inviteToEvent() mechanism above instead of whole-Space invites. Each delivered value is `{ fromFp, spaceId, eventId }`. */
+/**
+ * Live subscription to the caller's OWN per-event invites (past and
+ * future) — a thin, calendar-flavored rename of item-invites.js's generic
+ * onItemInvite(), the outsider-side counterpart of onSpaceInvite() for the
+ * inviteToEvent() mechanism above instead of whole-Space invites. Each
+ * delivered value is `{ fromFp, itemId, kind: 'Termin' }` — a UI reads
+ * `itemId` as the event id (`spaceIdOf(itemId)` recovers the calendar
+ * Space id, see file doc's inviteToEvent() comment).
+ */
 export function onEventInvites(qu, callback, opts) {
-  return qu.get(eventInviteBoxId(qu.fingerprint)).map(callback, opts);
+  return onItemInvite(qu, callback, opts);
 }
 
 /**
@@ -379,3 +373,38 @@ export function createCalendarPlugin() {
 // space-membership.js exists — same convenience re-export chat.js/todo-lib.mjs
 // give their own membership helpers. Behavior is entirely unmodified.
 export { ensureSpace as ensureCalendarSpace, addSpaceMember as addCalendarMember, removeSpaceMember as removeCalendarMember, onSpaceInvite as onCalendarInvite, notifyMembers as notifyCalendarMembers };
+
+/**
+ * A push-rule descriptor for relay.mjs's `pushRules` extension point (see
+ * that file's doc comment) — a deployment that wants offline calendar
+ * members pushed at on a new/changed event passes `createCalendarPushRule()`
+ * in its own `createRelay({ pushRules: [...] })` call (see index.js).
+ * relay.mjs itself never hard-codes "events" or "Kalender" anywhere; this
+ * is the one place that knowledge lives, exactly where the event id shape
+ * (`<calendarSpaceId>/events/<bucket>/<writerFp>-<ts>`, see createEvent()
+ * above) is already defined. Recipients are every current calendar-space
+ * writer except the sender (space-membership.js's spaceWriterRecipients()
+ * — Space-generic, shared verbatim with modules/chat.js's own push rule).
+ *
+ * Every event is ALWAYS encrypted (this file's own doc comment — a
+ * calendar Space keeps `readers: ['*']`), so a push rule genuinely cannot
+ * tell create/update/delete apart from `q.value` alone (it's ciphertext) —
+ * rather than leaking even a minimal unencrypted "action" marker to make
+ * that distinction possible, this collapses to ONE generic body for all
+ * three, same "never more than a generic template + sender fingerprint"
+ * invariant modules/chat.js's own push rule already holds itself to. The
+ * per-event invite-to-an-outsider case is NOT handled here at all — that
+ * fires through item-invites.js's own, separately-registered
+ * createItemInvitePushRule() instead, since it's a generic mechanism, not
+ * a calendar one (see inviteToEvent()'s doc comment).
+ */
+export function createCalendarPushRule() {
+  return {
+    pattern: '*/events/*/*',
+    resolveRecipients: spaceWriterRecipients,
+    buildPayload: (q, senderName) => ({
+      title: 'QU Kalender',
+      body: senderName ? `${senderName} hat einen Termin aktualisiert` : 'Ein Termin wurde aktualisiert',
+    }),
+  };
+}

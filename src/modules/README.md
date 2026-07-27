@@ -15,17 +15,34 @@ They layer on top of each other:
 spaces.js            ACL plugin: manifest-aware Spaces (createSpace/createSpaceAt)
    |
 space-membership.js  Discovery + membership: ensureSpace(), inbox pings,
-   |                 onSpaceInvite() — "how do members find out a Space exists"
+   |                 onSpaceInvite() — "how do members find out a Space exists".
+   |                 Also exports spaceWriterRecipients() — Space-generic
+   |                 "who to notify on a new write", shared by chat.js's and
+   |                 calendar.js's own push-rule descriptors (see relay.mjs).
    |
    +-- presence.js    "who's here" + read receipts, Space-neutral
    |
-   +-- chat.js        Message send/receive + attachments, composes presence.js
+   +-- chat.js        Message send/receive + attachments, composes presence.js.
+   |                 Also exports createChatPushRule() — an opt-in descriptor
+   |                 for relay.mjs's pushRules extension point, see that
+   |                 file's own doc comment; relay.mjs itself never hard-
+   |                 codes "msgs" or "Chat".
    |
    +-- calendar.js    Events (create/update/delete, month-bucketed), Space-level
-                      AND per-event invites, RSVP — composes space-membership.js
-                      for calendar-space membership; the per-event invite is its
-                      own new mechanism (an outsider is never added to the
-                      calendar Space itself, see the file's own doc comment).
+                      invites (reuses space-membership.js unmodified) AND
+                      per-event invites/RSVP (reuses item-invites.js below —
+                      NOT its own mechanism). Also exports
+                      createCalendarPushRule(), same reasoning as chat.js's.
+
+item-invites.js       The ITEM-level sibling of space-membership.js: invite one
+                      fingerprint to exactly one item under a Space, without
+                      Space membership at all (own inbox, own relay push-rule
+                      descriptor — createItemInvitePushRule()). App-agnostic on
+                      purpose: calendar.js's per-event invite uses it, but so
+                      could a chat message shared with an outsider, or a ToDo
+                      item handed to an external collaborator — this module has
+                      no opinion on what "the item" is, same stance
+                      space-membership.js takes on "the Space".
 
 profiles.js           Identity-centric, independent of the Space layer above:
                       custom profile attributes + an opt-in global directory.

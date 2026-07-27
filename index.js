@@ -27,7 +27,10 @@ import { createFail2banService } from './relay/services/fail2ban.mjs';
 import { bridgeWebSocketServer } from './relay/node-ws-bridge.mjs';
 import { createPersistedMap } from './relay/persisted-map.mjs';
 import { sendWebPush, generateVapidKeys } from './relay/webpush.mjs';
-import { QuIdentity, QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter, isValidFingerprint } from './src/index.js';
+import {
+  QuIdentity, QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter, isValidFingerprint,
+  createChatPushRule, createCalendarPushRule, createItemInvitePushRule,
+} from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
 
@@ -316,7 +319,14 @@ const requireDirectWriter = process.env.QU_REQUIRE_DIRECT_WRITER === '1';
 // "Bob" step and examples/relay-space-demo-lib.mjs's runtime-created App-Spaces
 // rely on. Still fully ACL-gated per push, never a wider grant than the
 // static case (README "Sync, Mirror, Relay").
-const relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions, relayAdmins, serviceRegistry: registry });
+//
+// Which apps' writes actually trigger a push is entirely THIS deployment's
+// choice (relay.mjs's `pushRules` doc comment) — relay.mjs itself has no
+// idea Chat/Calendar/item-invites exist. This bundled deployment happens to
+// serve all three example apps, so it opts all three in; a deployment
+// serving only one of them would list only that one's rule.
+const pushRules = [createChatPushRule(), createCalendarPushRule(), createItemInvitePushRule()];
+const relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, sendPush, pushSubscriptions, pushRules, relayAdmins, serviceRegistry: registry });
 await relayApi.relay.publishProfile(); // makes ~<fingerprint>/epub discoverable — the one thing anything encrypting TO this relay needs to look up (also directly served at /relay/info above, no sync required)
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
 console.log(`[Relay] Identity: ${relayIdentity.fingerprint}${persistent ? ' (stable across restarts)' : ' (ephemeral — QU_STORE=memory, a fresh fingerprint every restart)'}`);
