@@ -13,6 +13,7 @@ export {
   inboxId, ensureSpace, notifyMembers, onSpaceInvite, addSpaceMember, removeSpaceMember, createSpaceMembershipPlugin,
   spaceWriterRecipients,
 } from '../modules/space-membership.js';
+export { notifyUser, onNotification, createNotificationsPlugin } from '../modules/notifications.js';
 export {
   itemInviteBoxId, inviteToItem, onItemInvite, createItemInvitesPlugin, createItemInvitePushRule,
 } from '../modules/item-invites.js';

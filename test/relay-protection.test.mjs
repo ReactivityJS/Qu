@@ -161,3 +161,15 @@ test('requireDirectWriterGate()/rateLimitGate() are directly composable via inge
 
   serverRepl.close();
 });
+
+test('createRateLimiter: configure() live-changes the threshold without resetting already-tracked hits', async () => {
+  const limiter = createRateLimiter({ maxPerWindow: 1, windowMs: 5000 });
+  assert.equal(limiter.allow('alice'), true);
+  assert.equal(limiter.allow('alice'), false, 'already over the original budget of 1');
+
+  limiter.configure({ maxPerWindow: 3 });
+  assert.deepEqual(limiter.getConfig(), { maxPerWindow: 3, windowMs: 5000 }, 'windowMs is left untouched by a partial configure()');
+  assert.equal(limiter.allow('alice'), true, 'the raised budget applies immediately, on top of the hit already tracked before configure()');
+  assert.equal(limiter.allow('alice'), true);
+  assert.equal(limiter.allow('alice'), false, 'now over the NEW budget of 3 (1 pre-existing + 2 new)');
+});

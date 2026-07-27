@@ -33,6 +33,31 @@
       </div>
       <ul id="service-list" class="service-list"></ul>
     </section>
+
+    <section class="panel">
+      <h2>Rate-Limit</h2>
+      <p class="hint">Schreibvorgänge pro Fingerprint, innerhalb eines Zeitfensters. Ohne konfiguriertes Rate-Limit
+        (<code>QU_RATE_LIMIT=0</code>) zeigt dieses Panel keine Werte an.</p>
+      <div id="rate-limit-form" class="config-form" hidden>
+        <label>Max. Schreibvorgänge <input id="rate-limit-max" type="number" min="1" /></label>
+        <label>Zeitfenster (ms) <input id="rate-limit-window" type="number" min="1" /></label>
+        <button id="rate-limit-save" type="button">Speichern</button>
+      </div>
+      <p id="rate-limit-off" class="hint" hidden>Kein Rate-Limit auf diesem Relay konfiguriert.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Verbindungslimit</h2>
+      <p class="hint">Maximale Anzahl gleichzeitig verbundener Fingerprints, optional zusätzlich auf eine feste
+        Fingerprint-Liste beschränkt. Leeres Limit-Feld = kein Limit; leere Liste = keine Einschränkung.</p>
+      <div id="connection-limit-form" class="config-form">
+        <label>Max. Verbindungen <input id="connection-limit-max" type="number" min="0" placeholder="unbegrenzt" /></label>
+        <label>Erlaubte Fingerprints (kommagetrennt, leer = alle)
+          <textarea id="connection-limit-fps" rows="2" placeholder="fp1, fp2, …"></textarea>
+        </label>
+        <button id="connection-limit-save" type="button">Speichern</button>
+      </div>
+    </section>
   </main>
   <script type="module" src="./app.mjs"></script>
 </body>

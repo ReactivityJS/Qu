@@ -77,7 +77,19 @@ export async function startTestRelayServer(relayOpts = {}) {
   const port = server.address().port;
   const relayApi = await createRelay(relayOpts);
   bridgeWebSocketServer(server, relayApi, { path: '/relay' });
-  return { server, port, url: `ws://127.0.0.1:${port}/relay`, ...relayApi };
+  // NOT a plain `{ ...relayApi }` spread: relayApi.connectedCount (relay.mjs)
+  // is a live getter, and a spread evaluates every getter ONCE, baking in
+  // whatever it returned at spread time (here: always 0, read before any
+  // connection exists) as a frozen plain value forever after — a caller
+  // checking `result.connectedCount` later would silently get a stale
+  // snapshot instead of the actual current count. Copying the property
+  // DESCRIPTORS instead (not the values) re-installs the same getter
+  // function on the merged object, which still closes over relay.mjs's own
+  // `connected` Map, so it stays genuinely live.
+  return Object.defineProperties(
+    { server, port, url: `ws://127.0.0.1:${port}/relay` },
+    Object.getOwnPropertyDescriptors(relayApi),
+  );
 }
 
 /**

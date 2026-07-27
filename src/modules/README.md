@@ -20,7 +20,7 @@ space-membership.js  Discovery + membership: ensureSpace(), inbox pings,
    |                 "who to notify on a new write", shared by chat.js's and
    |                 calendar.js's own push-rule descriptors (see relay.mjs).
    |
-   +-- presence.js    "who's here" + read receipts, Space-neutral
+   +-- presence.js        "who's here" + read receipts, Space-neutral
    |
    +-- chat.js        Message send/receive + attachments, composes presence.js.
    |                 Also exports createChatPushRule() — an opt-in descriptor
@@ -29,10 +29,14 @@ space-membership.js  Discovery + membership: ensureSpace(), inbox pings,
    |                 codes "msgs" or "Chat".
    |
    +-- calendar.js    Events (create/update/delete, month-bucketed), Space-level
-                      invites (reuses space-membership.js unmodified) AND
-                      per-event invites/RSVP (reuses item-invites.js below —
-                      NOT its own mechanism). Also exports
-                      createCalendarPushRule(), same reasoning as chat.js's.
+   |                 invites (reuses space-membership.js unmodified) AND
+   |                 per-event invites/RSVP (reuses item-invites.js below —
+   |                 NOT its own mechanism). Also exports
+   |                 createCalendarPushRule(), same reasoning as chat.js's.
+   |
+   +-- notifications.js    Generic cross-app notification feed, same per-identity
+                           inbox as onSpaceInvite() but a separate subtree —
+                           "a Forum/Chat/ToDo app tells you something happened"
 
 item-invites.js       The ITEM-level sibling of space-membership.js: invite one
                       fingerprint to exactly one item under a Space, without
@@ -67,6 +71,11 @@ A new shared-Space app typically needs, bottom-up:
 3. **`presence.js`** (optional) — `markRead()`/`getReadReceipts()` and
    `setPresence()`/`onPresence()` if the app wants "who's here" / "seen"
    UI, without needing chat's message-sending machinery at all.
+3b. **`notifications.js`** (optional) — `notifyUser(qu, fp, notification)`/
+   `onNotification(qu, cb)` if the app wants to tell a user something
+   happened (a reply, a mention, a like) beyond "a Space now exists for
+   you" (that's `onSpaceInvite()`'s job, above) — a welcome page/ecosystem
+   shell merges both feeds, since they share the same per-identity inbox.
 4. Its own content module (own file, own shape) for whatever it actually
    stores — messages (`chat.js` is exactly this for chat), events
    (`calendar.js`, for a calendar), todos, posts, pages — following the

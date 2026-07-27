@@ -22,6 +22,14 @@ const connStatusEl = $('conn-status');
 const statusEl = $('status');
 const listEl = $('service-list');
 const refreshBtn = $('refresh-btn');
+const rateLimitFormEl = $('rate-limit-form');
+const rateLimitOffEl = $('rate-limit-off');
+const rateLimitMaxEl = $('rate-limit-max');
+const rateLimitWindowEl = $('rate-limit-window');
+const rateLimitSaveBtn = $('rate-limit-save');
+const connectionLimitMaxEl = $('connection-limit-max');
+const connectionLimitFpsEl = $('connection-limit-fps');
+const connectionLimitSaveBtn = $('connection-limit-save');
 
 function showStatus(message, kind) {
   statusEl.textContent = message;
@@ -74,12 +82,44 @@ async function refreshCatalog() {
   return services;
 }
 
+/**
+ * Populates both config-form panels from `/relay/info`'s `adminConfig`
+ * (relay/relay.mjs's getAdminConfig(), see server/relay-info-routes.mjs) —
+ * called once at startup and again after every save, so the form always
+ * shows what the relay ACTUALLY has configured, not just what was last
+ * submitted (the same "re-read to confirm" principle toggleService() below
+ * already uses for services). `rateLimit` is `null` when this relay wasn't
+ * given a rateLimiter at all (`QU_RATE_LIMIT=0`) — the panel then shows an
+ * explanatory hint instead of inputs with no real values behind them.
+ */
+function renderAdminConfig({ rateLimit, connectionLimit }) {
+  if (rateLimit) {
+    rateLimitFormEl.hidden = false;
+    rateLimitOffEl.hidden = true;
+    rateLimitMaxEl.value = rateLimit.maxPerWindow;
+    rateLimitWindowEl.value = rateLimit.windowMs;
+  } else {
+    rateLimitFormEl.hidden = true;
+    rateLimitOffEl.hidden = false;
+  }
+  connectionLimitMaxEl.value = connectionLimit?.maxConnections ?? '';
+  connectionLimitFpsEl.value = (connectionLimit?.allowedFingerprints ?? []).join(', ');
+}
+
+async function refreshAdminConfig() {
+  const info = await fetchJSON('/relay/info');
+  const adminConfig = info.adminConfig ?? { rateLimit: null, connectionLimit: null };
+  renderAdminConfig(adminConfig);
+  return adminConfig;
+}
+
 async function main() {
   const qu = await loadOrCreateIdentity(IDENTITY_KEY);
   myFpEl.textContent = qu.fingerprint;
 
   const info = await fetchJSON('/relay/info');
   relayFpEl.textContent = info.fingerprint;
+  renderAdminConfig(info.adminConfig ?? { rateLimit: null, connectionLimit: null });
 
   // createSpacesPlugin() is needed here for a subtle reason unrelated to
   // Spaces themselves: WITHOUT it, this Qu instance's LOCAL ingest() still
@@ -137,6 +177,55 @@ async function main() {
       btn.disabled = false;
     }
   };
+
+  /**
+   * Same fire-and-forget-then-reread confirmation as toggleService() above
+   * — `admin/config/*` commands never ack, so success is only ever proven
+   * by re-fetching `/relay/info` afterward and checking it reflects the
+   * new values, not by the absence of a thrown error.
+   */
+  rateLimitSaveBtn.addEventListener('click', async () => {
+    rateLimitSaveBtn.disabled = true;
+    try {
+      const maxPerWindow = Number(rateLimitMaxEl.value);
+      const windowMs = Number(rateLimitWindowEl.value);
+      await qu.session.publish('admin/config/rate-limit', { maxPerWindow, windowMs }, { encryptFor: [info.fingerprint] });
+      await wait(200); // dem Relay Zeit geben, das Kommando zu verarbeiten, bevor der aktuelle Stand neu gelesen wird
+      const { rateLimit } = await refreshAdminConfig();
+      if (rateLimit && rateLimit.maxPerWindow === maxPerWindow && rateLimit.windowMs === windowMs) {
+        showStatus('Rate-Limit gespeichert.', 'ok');
+      } else {
+        showStatus(`Rate-Limit unverändert — keine Bestätigung vom Relay erhalten. Ist deine Identität (${qu.fingerprint}) als QU_RELAY_ADMINS-Fingerprint hinterlegt?`, 'err');
+      }
+    } catch (e) {
+      showStatus(`Rate-Limit speichern fehlgeschlagen: ${e.message}`, 'err');
+    } finally {
+      rateLimitSaveBtn.disabled = false;
+    }
+  });
+
+  connectionLimitSaveBtn.addEventListener('click', async () => {
+    connectionLimitSaveBtn.disabled = true;
+    try {
+      const maxConnections = connectionLimitMaxEl.value === '' ? null : Number(connectionLimitMaxEl.value);
+      const allowedFingerprints = connectionLimitFpsEl.value.trim()
+        ? connectionLimitFpsEl.value.split(',').map((s) => s.trim()).filter(Boolean)
+        : null;
+      await qu.session.publish('admin/config/connection-limit', { maxConnections, allowedFingerprints }, { encryptFor: [info.fingerprint] });
+      await wait(200);
+      const { connectionLimit } = await refreshAdminConfig();
+      const fpsMatch = JSON.stringify(connectionLimit?.allowedFingerprints ?? null) === JSON.stringify(allowedFingerprints);
+      if (connectionLimit && connectionLimit.maxConnections === maxConnections && fpsMatch) {
+        showStatus('Verbindungslimit gespeichert.', 'ok');
+      } else {
+        showStatus(`Verbindungslimit unverändert — keine Bestätigung vom Relay erhalten. Ist deine Identität (${qu.fingerprint}) als QU_RELAY_ADMINS-Fingerprint hinterlegt?`, 'err');
+      }
+    } catch (e) {
+      showStatus(`Verbindungslimit speichern fehlgeschlagen: ${e.message}`, 'err');
+    } finally {
+      connectionLimitSaveBtn.disabled = false;
+    }
+  });
 
   async function connectToRelay() {
     const channel = createWebSocketChannel(relayUrl());

@@ -15,3 +15,4 @@ export { assertReplicationProvider } from '../network/replication/provider.js';
 export { createNetworkPlugin } from '../network/index.js';
 export { createRateLimiter } from '../network/rate-limiter.js';
 export { requireDirectWriterGate, rateLimitGate } from '../network/ingest-gate.js';
+export { createConnectionGate } from '../network/connection-gate.js';

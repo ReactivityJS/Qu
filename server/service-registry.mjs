@@ -41,6 +41,24 @@
  *     ingestGates?: [(ctx, next) => Promise<void>],     // optional — exact src/network/ingest-gate.js shape
  *     onAdminEvent?: (action, payload) => any,          // optional — see relay/relay.mjs's admin/service/<id>/<action> dispatch
  *     enabledByDefault?: boolean, // default true
+ *
+ *     // QUniverse App Manifest fields — all optional, purely descriptive
+ *     // metadata read by an ecosystem shell (nav dropdown, router, ACL
+ *     // defaults). None of these are enforced by THIS file — enforcement,
+ *     // where it exists at all, stays where it already lives (a Space's
+ *     // own manifest for writers/readers, core/acl.js for the actual
+ *     // check). Adding one of these to an existing definition is
+ *     // non-breaking: an app/consumer that doesn't know about a field
+ *     // simply never reads it.
+ *     icon?: string,              // nav dropdown rendering, e.g. an emoji or icon-font class
+ *     navOrder?: number,          // sort hint for a nav dropdown/catalog listing
+ *     spaceMode?: 'fixed' | 'perUser' | 'perInstance', // which App-Space pattern this app uses (APP-GUIDE.md Schritt 3) — 'fixed': one well-known App-Space id for the whole app; 'perUser': one space per user (e.g. a personal ToDo list); 'perInstance': many independently-created spaces (e.g. forum boards), see examples/space-index-lib.mjs
+ *     fixedSpaceId?: string,      // only meaningful when spaceMode === 'fixed' — the app's hardcoded App-Space id (a UUID, not a readable name, see APP-GUIDE.md's warning on shared infrastructure)
+ *     requiredPlugins?: string[], // qu.use() plugin names this app needs beyond an ecosystem shell's own Runtime-level defaults — usually empty, since Spaces/Membership/Profiles/Network are typically already installed once by the shell
+ *     aclDefaults?: { readers?: string[], encryptByDefault?: boolean }, // documented default manifest choice for a NEW space this app creates — informational only, an app still calls createSpace()/createSpaceAt() itself
+ *     notificationTopics?: string[], // which inbox-<fp>/notifications/<kind> subtrees (src/modules/notifications.js) this app writes to, for a welcome-page feed to label them
+ *     mount?: string,             // an embeddable module entry point, for a shell that mounts an app in-place instead of redirecting to `entry` — additive, `entry` remains the primary/default mechanism
+ *     usesCms?: boolean,          // opts into src/modules/cms.js for user-authored templates/content
  *   }
  *
  * THE CUSTOM-SERVICE EXTENSION CONTRACT (category: 'custom'): a third
@@ -177,9 +195,17 @@ export function createServiceRegistry(definitions = []) {
       return out;
     },
 
-    /** Metadata only (never route/gate functions) — what a portal UI or admin UI fetches to render the current catalog + state. */
+    /** Metadata only (never route/gate functions) — what a portal UI or admin UI fetches to render the current catalog + state. A QUniverse App Manifest field (see file doc above) is included only when the definition actually carries it — an app that never set e.g. `icon` gets no `icon: undefined` key at all, keeping the shape identical to before these fields existed for every plain service definition. */
     toJSON() {
-      return this.list().map(({ id, category, label, description, entry, enabled }) => ({ id, category, label, description, entry, enabled }));
+      const manifestFields = ['icon', 'navOrder', 'spaceMode', 'fixedSpaceId', 'requiredPlugins', 'aclDefaults', 'notificationTopics', 'mount', 'usesCms'];
+      return this.list().map((def) => {
+        const { id, category, label, description, entry, enabled } = def;
+        const out = { id, category, label, description, entry, enabled };
+        for (const key of manifestFields) {
+          if (def[key] !== undefined) out[key] = def[key];
+        }
+        return out;
+      });
     },
   };
 }
