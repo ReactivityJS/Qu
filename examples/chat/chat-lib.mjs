@@ -130,6 +130,86 @@ export function linkify(text) {
   return segments;
 }
 
+// WhatsApp-Konvention statt eigens erfundener Zeichen — den meisten
+// Nutzer:innen bereits vertraut, kein neues Erlernen nötig: `*fett*`,
+// `_kursiv_`, `~durchgestrichen~`. Unterstreichen hat dort kein eigenes
+// Zeichen (keine Markdown-typische Konvention dafür), hier zusätzlich als
+// `__unterstrichen__` (doppelter Unterstrich, siehe Reihenfolge unten)
+// angeboten. Alle vier Male dieselbe Regel: das Zeichen direkt NEBEN Text
+// (kein Leerzeichen unmittelbar danach beim Öffnen bzw. davor beim
+// Schließen) — "3 * 4 * 5" bleibt dadurch Rechenzeichen statt fälschlich
+// als fett interpretiert zu werden, genau wie in echtem WhatsApp/Markdown.
+// Reihenfolge der Alternativen ist bewusst: `__…__` VOR `_…_` — eine
+// (nicht-possessive) Regex-Alternation nimmt die ERSTE passende
+// Alternative, nicht die längste; stünde `_…_` zuerst, würde es einen
+// öffnenden Doppel-Unterstrich fälschlich schon nach dem ERSTEN Zeichen
+// "schließen".
+const FORMAT_RE = /\*(?!\s)([^*\n]+?)(?<!\s)\*|__(?!\s)([^_\n]+?)(?<!\s)__|_(?!\s)([^_\n]+?)(?<!\s)_|~(?!\s)([^~\n]+?)(?<!\s)~/g;
+
+/**
+ * Zerlegt EINEN Text-Abschnitt (schon linkify()-getrennt — läuft nie über
+ * einen Link selbst, s. renderMessageText() in app.mjs) in Formatierungs-
+ * Segmente: `[{ type: 'text'|'bold'|'italic'|'underline'|'strike', value }]`.
+ * Nicht verschachtelt (kein "fett UND kursiv gleichzeitig") — für eine
+ * Chat-Nachricht bewusst so einfach wie möglich gehalten, kein vollständiger
+ * Markdown-Parser.
+ */
+export function parseFormatting(text) {
+  const segments = [];
+  let lastIndex = 0;
+  for (const match of String(text ?? '').matchAll(FORMAT_RE)) {
+    const index = match.index;
+    if (index > lastIndex) segments.push({ type: 'text', value: text.slice(lastIndex, index) });
+    if (match[1] !== undefined) segments.push({ type: 'bold', value: match[1] });
+    else if (match[2] !== undefined) segments.push({ type: 'underline', value: match[2] });
+    else if (match[3] !== undefined) segments.push({ type: 'italic', value: match[3] });
+    else segments.push({ type: 'strike', value: match[4] });
+    lastIndex = index + match[0].length;
+  }
+  if (lastIndex < text.length) segments.push({ type: 'text', value: text.slice(lastIndex) });
+  return segments;
+}
+
+const LIST_ITEM_RE = /^(?:[-*]|\d+\.)\s+(.+)$/;
+
+/**
+ * Zerlegt eine Nachricht in Block-Elemente — `{ type: 'paragraph', lines }`
+ * (zusammenhängende Zeilen ohne Listenmarkierung) oder `{ type: 'list',
+ * ordered, items }` (aufeinanderfolgende Zeilen, die mit `- `/`* ` bzw.
+ * `<Zahl>. ` beginnen — `-` und `*` zählen als DIESELBE Listenart, ein
+ * Wechsel zwischen ihnen reißt die Liste nicht auseinander, ein Wechsel
+ * zwischen unnummeriert und nummeriert dagegen schon). `<ol>` nummeriert
+ * beim Rendern immer bei 1 neu durch (die tatsächlich getippte Zahl wird
+ * nur als Listenmarker erkannt, nicht als Startwert übernommen) — für eine
+ * Chat-Nachricht eine bewusst einfache, alltagstaugliche Vereinfachung,
+ * kein Markdown-vollständiger Parser.
+ */
+export function parseMessageBlocks(text) {
+  const blocks = [];
+  let currentList = null;
+  let currentParagraph = null;
+  for (const line of String(text ?? '').split('\n')) {
+    const m = line.match(LIST_ITEM_RE);
+    if (m) {
+      currentParagraph = null;
+      const ordered = /^\d/.test(line.trimStart());
+      if (!currentList || currentList.ordered !== ordered) {
+        currentList = { type: 'list', ordered, items: [] };
+        blocks.push(currentList);
+      }
+      currentList.items.push(m[1]);
+    } else {
+      currentList = null;
+      if (!currentParagraph) {
+        currentParagraph = { type: 'paragraph', lines: [] };
+        blocks.push(currentParagraph);
+      }
+      currentParagraph.lines.push(line);
+    }
+  }
+  return blocks;
+}
+
 /**
  * Baut einen teilbaren Karten-Link aus Koordinaten — welcher Anbieter
  * (OpenStreetMap/Google/Apple/eigene URL) kommt aus den App-Einstellungen

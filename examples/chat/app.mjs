@@ -17,6 +17,7 @@ import {
   dmRoomId, groupRoomId, normalizeFingerprint, shortFp, fmtBytes, fmtTime, fmtDayLabel,
   linkify, mediaKind, sortByActivity, buildPath, parsePathSegments, fmtCallDuration,
   buildLocationUrl, parseLocationFromUrl, staticMapTileUrl, isVoiceMessageFilename,
+  parseFormatting, parseMessageBlocks,
 } from './chat-lib.mjs';
 import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert <qu-profile-card> (renderRoomHeader()/renderGroupMemberList()) UND <qu-people-search> (Neuer-Chat-Formular)
 
@@ -2322,17 +2323,65 @@ async function main() {
     else showLoadPlaceholder();
   }
 
-  function renderMessageText(container, text) {
-    for (const seg of linkify(text)) {
-      if (seg.type === 'text') {
-        container.appendChild(document.createTextNode(seg.value));
-      } else {
+  const FORMAT_TAGS = { bold: 'strong', italic: 'em', underline: 'u', strike: 's' };
+
+  /**
+   * Rendert EINE Zeile (schon block-getrennt, s. renderMessageText() unten)
+   * — Links zuerst (linkify()), da eine URL selbst nie als `*fett*` o. Ä.
+   * interpretiert werden soll (`https://a*b*c` bliebe ein Link, nicht
+   * teilweise fett); innerhalb jedes reinen Text-Abschnitts dann
+   * parseFormatting() (chat-lib.mjs) für `*fett*`/`_kursiv_`/
+   * `__unterstrichen__`/`~durchgestrichen~`.
+   */
+  function renderInlineText(container, line) {
+    for (const seg of linkify(line)) {
+      if (seg.type === 'link') {
         const a = document.createElement('a');
         a.href = seg.value;
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
         a.textContent = seg.value;
         container.appendChild(a);
+        continue;
+      }
+      for (const fseg of parseFormatting(seg.value)) {
+        if (fseg.type === 'text') {
+          container.appendChild(document.createTextNode(fseg.value));
+        } else {
+          const el2 = document.createElement(FORMAT_TAGS[fseg.type]);
+          el2.textContent = fseg.value;
+          container.appendChild(el2);
+        }
+      }
+    }
+  }
+
+  /**
+   * Block-Ebene (parseMessageBlocks(), chat-lib.mjs): ein Absatz aus
+   * mehreren Zeilen (durch `<br>` getrennt, NICHT per CSS `white-space:
+   * pre-wrap` — die Blockzerlegung hat die Zeilenumbrüche bereits selbst
+   * konsumiert, ein zusätzliches CSS-`pre-wrap` würde sie sonst doppelt
+   * darstellen) oder eine Liste (`- `/`* `/`1. ` am Zeilenanfang, als
+   * echtes `<ul>`/`<ol>`).
+   */
+  function renderMessageText(container, text) {
+    for (const block of parseMessageBlocks(text)) {
+      if (block.type === 'list') {
+        const listEl = document.createElement(block.ordered ? 'ol' : 'ul');
+        listEl.className = 'msg-list';
+        for (const itemText of block.items) {
+          const li = document.createElement('li');
+          renderInlineText(li, itemText);
+          listEl.appendChild(li);
+        }
+        container.appendChild(listEl);
+      } else {
+        const p = el('div', 'msg-paragraph');
+        block.lines.forEach((line, i) => {
+          if (i > 0) p.appendChild(document.createElement('br'));
+          renderInlineText(p, line);
+        });
+        container.appendChild(p);
       }
     }
   }
