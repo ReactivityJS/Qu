@@ -2002,17 +2002,37 @@ async function main() {
   }
 
   /**
+   * Ob die Liste GERADE am Ende verfolgt werden soll — laufend über den
+   * `scroll`-Listener unten aktuell gehalten, NICHT bei jedem Bedarf frisch
+   * aus isNearBottom() neu berechnet. Der Unterschied ist wichtig für den
+   * ResizeObserver weiter unten: wächst die Fußzeile (Composer/Antwort-
+   * Bearbeiten-Weiterleiten-Vorschau/Datei-Chips/Sprachrekorder, z. B. weil
+   * eine mehrzeilige Nachricht getippt/eingefügt wird), schrumpft
+   * #message-lists eigene Höhe per Flexbox SOFORT, OHNE dass irgendwer
+   * gescrollt hätte. Ein an DIESEM Punkt frisch berechnetes isNearBottom()
+   * sähe fälschlich einen großen Abstand zum Ende (clientHeight kleiner,
+   * scrollTop unverändert) und würde nicht mehr nachscrollen — genau dann,
+   * wenn die zuletzt sichtbare Nachricht sonst hinter der jetzt größeren
+   * Fußzeile verschwindet. Diese Markierung bleibt dagegen `true`, bis
+   * tatsächlich weggescrollt wird, unabhängig von einer zwischenzeitlichen
+   * Größenänderung der Liste selbst.
+   */
+  let stickingToBottom = true;
+  messageListEl.addEventListener('scroll', () => { stickingToBottom = isNearBottom(); });
+
+  /**
    * Nur dann ans Ende scrollen, wenn man SCHON dort war — sonst reißt
    * jede neue Nachricht (oder ein nachträglich ladendes Bild/Video, das
    * die Liste erst jetzt sichtbar wachsen lässt) jemanden aus der
-   * gerade gelesenen älteren Historie. Wird an zwei Stellen aufgerufen:
-   * beim Anhängen einer neuen Live-Nachricht (appendLiveMessage()) und
-   * innerhalb von renderAttachment(), sobald ein Anhang tatsächlich
-   * seine endgültige Höhe erreicht (Bild `load`, Video `loadedmetadata`,
-   * oder direkt nach dem Einfügen für Audio/Datei-Fallback).
+   * gerade gelesenen älteren Historie. Wird an mehreren Stellen aufgerufen:
+   * beim Anhängen einer neuen Live-Nachricht (appendLiveMessage()),
+   * innerhalb von renderAttachment(), sobald ein Anhang tatsächlich seine
+   * endgültige Höhe erreicht (Bild `load`, Video `loadedmetadata`, oder
+   * direkt nach dem Einfügen für Audio/Datei-Fallback), UND vom
+   * ResizeObserver unten, sobald sich #message-lists eigene Höhe ändert.
    */
   function stickToBottomIfNeeded() {
-    if (isNearBottom()) scrollToVeryBottom();
+    if (stickingToBottom) scrollToVeryBottom();
   }
 
   /**
@@ -2033,6 +2053,22 @@ async function main() {
       });
     });
   }
+
+  // Die Fußzeile (Composer selbst, Antwort-/Bearbeiten-/Weiterleiten-
+  // Vorschau, Datei-Chips, Sprachrekorder) kann jederzeit wachsen oder
+  // schrumpfen — mehrzeiliger Text, ein angehängtes Bild, ein geöffneter
+  // Sprachrekorder — und nimmt #message-list dabei per Flexbox sofort
+  // denselben Platz weg, ohne dass irgendwer gescrollt hätte. EIN
+  // ResizeObserver auf #message-list selbst fängt JEDE solche
+  // Größenänderung ab, egal wodurch ausgelöst, statt jede einzelne Stelle
+  // im Code einzeln patchen zu müssen, die die Fußzeile beeinflusst —
+  // hält die zuletzt sichtbare Nachricht dabei am unteren Rand sichtbar,
+  // sofern man ohnehin schon dort war (stickingToBottom oben), sonst
+  // verschwindet sie sichtbar HINTER der größer werdenden Fußzeile.
+  // Ungefährlich für einen Beobachtungs-Regelkreis: der Callback ändert
+  // nur `scrollTop` (Scroll-Position), nie die beobachtete Box-Größe
+  // selbst — kein erneutes ResizeObserver-Feuern durch die eigene Wirkung.
+  new ResizeObserver(() => stickToBottomIfNeeded()).observe(messageListEl);
 
   /**
    * Baut sofort/synchron nur den Platzhalter (`wrap`) und gibt ihn direkt
