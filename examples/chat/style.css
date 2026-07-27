@@ -307,23 +307,16 @@ button { font-family: inherit; }
 
 .msg { max-width: 78%; align-self: flex-start; display: flex; flex-direction: column; }
 .msg.mine { align-self: flex-end; }
-/* Schmale Kopfzeile ÜBER der Bubble (buildMessageHeader()) — NUR Absender
-   (Link ins volle Profil) + optionales 📌 + ⋮-Aktionsmenü, sonst nichts
-   (Zeit/Häkchen/Reaktionen leben INNERHALB der Bubble, s. u.). Bei einer
-   eigenen Nachricht rechtsbündig statt links, damit sie zur
-   rechtsbündigen Bubble passt (.msg.mine's align-self: flex-end oben). */
-.msg-header { display: flex; align-items: center; gap: 0.4rem; font-size: 0.74rem; padding: 0 0.2rem 0.15rem; color: var(--muted); }
-.msg.mine .msg-header { flex-direction: row-reverse; }
-/* Autorname darf zur Not schrumpfen (Ellipsis) statt das ⋮-Menü aus der
-   Zeile zu drängen. */
-.msg-author { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-decoration: none; font-weight: 600; }
-.msg-author:hover { text-decoration: underline; }
-.msg-pinned-badge { font-size: 0.72rem; }
+/* ÄUSSERE Bubble (buildMessageItem()) — umschließt ALLES: Kopfzeile,
+   innere Text-Bubble, Zeit/Datum-Zeile, Reaktionen. Eigener Hintergrund +
+   abgerundete Sprechblasenform (Schwanz unten links/rechts je nach
+   Richtung), damit eine ganze Nachricht auf einen Blick als EIN Block
+   erkennbar ist. */
 .msg-bubble {
   background: var(--bubble-in);
   border-radius: 16px;
   border-bottom-left-radius: 4px;
-  padding: 0.5rem 0.7rem;
+  padding: 0.4rem 0.6rem 0.5rem;
 }
 .msg.mine .msg-bubble { background: var(--bubble-out); border-bottom-left-radius: 16px; border-bottom-right-radius: 4px; }
 /* Kurzes Aufblitzen fürs Ansprung-Ziel aus der Suche (scrollToMessage() in app.mjs) — sonst ist in einer langen Historie nicht klar, WELCHE Nachricht gemeint war. */
@@ -331,6 +324,28 @@ button { font-family: inherit; }
 @keyframes msg-jump-flash {
   0%, 15% { box-shadow: 0 0 0 2px var(--accent-strong); }
   100% { box-shadow: 0 0 0 2px transparent; }
+}
+/* Kopfzeile OBERHALB der inneren Bubble, aber noch INNERHALB der äußeren
+   (buildMessageHeader()) — NUR Absender (Link ins volle Profil) +
+   optionales 📌 + ⋮-Aktionsmenü. Autorname immer links, ⋮-Menü per
+   margin-left: auto (s. u.) immer ganz rechts — bewusst UNABHÄNGIG davon,
+   ob es die eigene oder eine fremde Nachricht ist (kein Seitenwechsel bei
+   "Du"), damit das Menü an einer vorhersehbaren Stelle bleibt. */
+.msg-header { display: flex; align-items: center; gap: 0.4rem; font-size: 0.74rem; padding: 0.1rem 0.1rem 0.3rem; color: var(--muted); }
+/* Autorname darf zur Not schrumpfen (Ellipsis) statt das ⋮-Menü aus der
+   Zeile zu drängen. */
+.msg-author { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-decoration: none; font-weight: 600; }
+.msg-author:hover { text-decoration: underline; }
+.msg-pinned-badge { font-size: 0.72rem; }
+/* INNERE Bubble (buildMessageItem()) — Zitat, Text/Liste, Anhänge: eigener,
+   dezent abgesetzter Hintergrund (Overlay auf der äußeren Bubblefarbe,
+   funktioniert dadurch über beiden Richtungen/Themes gleich), damit
+   "Nachrichteninhalt" optisch klar von "Chrome drumherum" (Kopfzeile,
+   Zeit) unterscheidbar bleibt — eine Bubble IN der Bubble. */
+.msg-bubble-inner {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border-radius: 12px;
+  padding: 0.45rem 0.6rem;
 }
 .msg-text { white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; }
 /* Blockebene (parseMessageBlocks()/renderMessageText() in app.mjs) —
@@ -350,17 +365,13 @@ button { font-family: inherit; }
 .msg-text em { font-style: italic; }
 .msg-text u { text-decoration: underline; }
 .msg-text s { text-decoration: line-through; }
-/* Uhrzeit/Datum+Häkchen INNERHALB des Textflusses (renderMessageText()s
-   `trailingInline`, als letztes Kind des letzten Absatzes) — float lässt
-   den davorstehenden Text darum herumbrechen, landet dadurch unten rechts
-   IN der Bubble statt in einer eigenen Zeile außerhalb (WhatsApp/Telegram-
-   Konvention). .msg-meta-row ist der Fallback OHNE Text zum Umbrechen
-   (reiner Anhang/Standort-Link, oder eine Nachricht, die auf einer Liste
-   endet) — dieselbe Optik, nur als eigene rechtsbündige Zeile statt
-   geflossen. */
-.msg-time-row { float: right; margin: 0.15rem 0 0 0.6rem; display: flex; align-items: center; gap: 0.3rem; font-size: 0.68rem; color: var(--muted); white-space: nowrap; }
+/* Uhrzeit/Datum + "bearbeitet"-Marker + Häkchen UNTERHALB der inneren
+   Bubble, aber noch INNERHALB der äußeren (buildMessageMetaInline()) —
+   immer als eigene, rechtsbündige Zeile, unabhängig vom Inhalt (Text,
+   Liste, reiner Anhang), NICHT mehr in den Textfluss geflossen (früherer
+   float-Trick) — einfacher und an jeder Nachricht an derselben Stelle. */
 .msg-meta-row { display: flex; justify-content: flex-end; margin-top: 0.3rem; }
-.msg-meta-row .msg-time-row { float: none; margin: 0; }
+.msg-time-row { display: flex; align-items: center; gap: 0.3rem; font-size: 0.68rem; color: var(--muted); white-space: nowrap; }
 .msg-time { color: inherit; text-decoration: none; }
 .msg-time:hover { text-decoration: underline; }
 .tick { color: var(--muted); }
@@ -722,10 +733,10 @@ button { font-family: inherit; }
 
 /* Immer sichtbar (nicht nur bei Hover) — Touch-Geräte haben kein Hover,
    siehe die übrige Composer-/Popup-Gestaltung dieser App. In der
-   .msg-header-Kopfzeile (Autor links, dieser Button rechts, s.
-   .msg-header's justify-content: space-between); margin-left: auto lässt
-   ihn zusätzlich ganz nach rechts wandern, auch wenn der Autorname mal
-   sehr kurz ist. */
+   .msg-header-Kopfzeile (Autor links, dieser Button rechts) sorgt
+   margin-left: auto dafür, dass er ganz nach rechts wandert, auch wenn
+   der Autorname mal sehr kurz ist (oder es "Du" bei einer eigenen
+   Nachricht ist). */
 .msg-actions-btn {
   all: unset;
   cursor: pointer;
