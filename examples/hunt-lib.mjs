@@ -1,38 +1,42 @@
 // Beispiel: "Verfolgungsjagd" — ein gejagtes Team meldet in einem festen
-// Intervall (Default 5 Minuten) seinen Standort, ein Fänger-Team sieht die
-// Punkte (und damit den nachgezeichneten Weg) auf einer Karte und versucht,
-// das gejagte Team zu finden. Reine Logik hier, ohne Browser/Karte — die
-// Oberfläche (Leaflet-Karte, Geolocation) liegt in examples/hunt/app.mjs.
+// Intervall (Default 5 Minuten) seinen Standort, ein oder mehrere
+// Fänger-Teams sehen die Punkte (und damit den nachgezeichneten Weg) auf
+// einer Karte und versuchen, das gejagte Team zu finden und in Reichweite
+// zu fangen. Reine Logik hier, ohne Browser/Karte — die Oberfläche
+// (Leaflet-Karte, Geolocation) liegt in examples/hunt/app.mjs.
 //
 // Modell: EIN Space pro Spiel (Whitepaper §8), genau wie jede andere
-// Space-App in diesem Repo (siehe space-app-lib.mjs). Beide Teams stehen in
-// `writers` — nicht weil beide dieselben Rechte im Sinne der App-Logik
+// Space-App in diesem Repo (siehe space-app-lib.mjs). Alle Teams stehen in
+// `writers` — nicht weil alle dieselben Rechte im Sinne der App-Logik
 // hätten, sondern weil ein Space genau EINE Writer-Liste kennt (§8.3) und
 // "wer darf WAS schreiben" App-Konvention ist, keine ACL-Grenze: das
-// gejagte Team schreibt unter `pings/`, das Fänger-Team unter `catchClaims/`
-// (bzw. beide unter `status`, um das Spiel zu beenden). Genau das Muster,
-// das presence.js's Moduldoku für `reads/${fp}` beschreibt — der Pfad ist
+// gejagte Team schreibt unter `pings/`, Fänger-Teams (optional) unter
+// `hunterPings/`, alle gemeinsam unter `status`. Genau das Muster, das
+// presence.js's Moduldoku für `reads/${fp}` beschreibt — der Pfad ist
 // Adressierung, das verifizierte `writer`-Feld ist die Wahrheit, und jede
-// Leseseite hier filtert danach (siehe listPings()/watchPings()), nicht
-// nach dem Pfad allein.
+// Leseseite hier filtert danach (siehe listPings()/watchPings()/
+// watchHunterPings()), nicht nach dem Pfad allein — insbesondere
+// `hunterTeamOf()`/`isHunter()` bestimmen die Team-Zugehörigkeit IMMER aus
+// dem Konfig-Manifest, nie aus einem selbst behaupteten Feld im Ping.
 //
 // Zeit-Sharding (README §7) ist hier bewusst NICHT nötig: ein Ping-Intervall
-// von Minuten statt Millisekunden hält `pings/` strukturell klein (ein
-// mehrstündiges Spiel mit 5-Minuten-Takt sind < 100 Einträge), anders als
-// eine für immer wachsende Forum-Collection.
+// von Minuten statt Millisekunden hält `pings/`/`hunterPings/` strukturell
+// klein (ein mehrstündiges Spiel mit 5-Minuten-Takt sind < 100 Einträge je
+// Collection), anders als eine für immer wachsende Forum-Collection.
 //
-// Live-Ansichten (watchStatus()/watchPings() unten) bauen bewusst auf
-// `viewKey()`/`viewObject()` (src/ui/bindings.js, hier über den Barrel
-// `src/index.js` importiert, DOM-frei und genauso in Node testbar wie der
-// Rest dieser Datei) statt auf einem handgestrickten `.on()`/`.map()` samt
-// eigenem "einmal lesen, dann separat abonnieren"-Vorlauf — exakt das
-// Muster, das docs/lab/labs/05-references-practice.mjs für seine
-// Live-Bibliothek zeigt: KEIN "Neu laden"-Aufruf irgendwo, eine einzige
-// Subscription liefert bereits Vorhandenes UND künftige Änderungen.
+// Live-Ansichten (watchStatus()/watchPings()/watchHunterPings() unten)
+// bauen bewusst auf `viewKey()`/`viewObject()` (src/ui/bindings.js, hier
+// über den Barrel `src/index.js` importiert, DOM-frei und genauso in Node
+// testbar wie der Rest dieser Datei) statt auf einem handgestrickten
+// `.on()`/`.map()` samt eigenem "einmal lesen, dann separat abonnieren"-
+// Vorlauf — exakt das Muster, das docs/lab/labs/05-references-practice.mjs
+// für seine Live-Bibliothek zeigt: KEIN "Neu laden"-Aufruf irgendwo, eine
+// einzige Subscription liefert bereits Vorhandenes UND künftige Änderungen.
 import { viewKey, viewObject } from '../src/index.js';
 
 const DEFAULT_PING_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_ASSUMED_SPEED_MPS = 1.4; // ruhiges Gehtempo, als Fallback ohne Bewegungshistorie
+const DEFAULT_CATCH_RADIUS_M = 50; // wie nah ein Fänger dem gejagten Team sein muss, um "gefangen" erklären zu dürfen
 
 const EARTH_RADIUS_M = 6_371_000;
 const toRad = (deg) => (deg * Math.PI) / 180;
@@ -48,29 +52,49 @@ export function haversineMeters(a, b) {
 }
 
 /**
- * Legt ein neues Spiel an: ein Space, dessen Writer beide Teams sind
- * (s.o.), `readers: ['*']` per Default (Link = Zugang, wie beim
- * offenen Forum-Board) — für ein privates Spiel eine konkrete Liste
- * übergeben. Rückgabe: die Space-Id (für den Einladungslink an beide Teams).
+ * Legt ein neues Spiel an: ein Space, dessen Writer das gejagte Team UND
+ * alle Fänger-Teams sind (s.o.), `readers: ['*']` per Default (Link =
+ * Zugang, wie beim offenen Forum-Board) — für ein privates Spiel eine
+ * konkrete Liste übergeben. `hunterTeams`: `[{ label, members: [fp,...] }]`
+ * — jedes Team bekommt eine eigene, generierte `id` (für hunterTeamOf()/die
+ * Team-Anzeige), unabhängig davon, ob `id` schon mitgegeben wurde.
+ * Rückgabe: die Space-Id (für den Einladungslink an alle Teams).
  */
 export async function createGame(qu, {
   huntedTeam = [qu.fingerprint],
-  hunterTeam = [],
+  hunterTeams = [],
   readers = ['*'],
   pingIntervalMs = DEFAULT_PING_INTERVAL_MS,
   assumedSpeedMps = DEFAULT_ASSUMED_SPEED_MPS,
+  // Feature "Fänger auf der Karte": aus (null/0) per Default — ein Spiel,
+  // bei dem auch die Fänger ihre eigene Position preisgeben, ist eine
+  // bewusste Zusatzregel, keine Voreinstellung.
+  hunterPingIntervalMs = null,
+  // Nur sinnvoll (und in der UI nur sichtbar), wenn hunterPingIntervalMs
+  // gesetzt ist — dem gejagten Team den Abstand zum nächsten Fänger zeigen.
+  showDistanceToHunted = false,
+  catchRadiusMeters = DEFAULT_CATCH_RADIUS_M,
   label = null,
 } = {}) {
+  const normalizedTeams = hunterTeams.map((t) => ({
+    id: t.id ?? crypto.randomUUID(),
+    label: t.label || 'Fänger-Team',
+    members: t.members ?? [],
+  }));
+  const allHunterFps = normalizedTeams.flatMap((t) => t.members);
   // Der/die Erzeuger:in (Admin, s.u.) braucht selbst Schreibrecht für
-  // `config`/`status`, auch falls sie/er keinem der beiden Teams angehört
-  // (z. B. eine Spielleitung, die das Spiel nur aufsetzt) — anders als beim
+  // `config`/`status`, auch falls sie/er keinem der Teams angehört (z. B.
+  // eine Spielleitung, die das Spiel nur aufsetzt) — anders als beim
   // User-Space (~fingerprint) trägt ein generischer Space (hier: das Spiel)
   // seinen Ersteller nicht automatisch in `writers` ein (nur in `admins`,
   // siehe modules/spaces.js's createSpaceACLResolver()).
-  const writers = [...new Set([qu.fingerprint, ...huntedTeam, ...hunterTeam])];
+  const writers = [...new Set([qu.fingerprint, ...huntedTeam, ...allHunterFps])];
   const space = qu.createSpace({ writers, readers });
   await space.ready;
-  await space.get('config').put({ huntedTeam, hunterTeam, pingIntervalMs, assumedSpeedMps, label });
+  await space.get('config').put({
+    huntedTeam, hunterTeams: normalizedTeams, pingIntervalMs, assumedSpeedMps,
+    hunterPingIntervalMs, showDistanceToHunted, catchRadiusMeters, label,
+  });
   // Ein einzelner String, kein `{ state, by }`-Objekt: WER den Status
   // gesetzt hat, steht bereits verifiziert im Qubit selbst (`.writer`,
   // siehe Session/Verify) — ein zusätzliches `by`-Feld wäre nur eine
@@ -80,7 +104,7 @@ export async function createGame(qu, {
   return space.id;
 }
 
-/** `{ huntedTeam, hunterTeam, pingIntervalMs, assumedSpeedMps, label }` — `null`, falls (noch) nicht sichtbar. */
+/** `{ huntedTeam, hunterTeams, pingIntervalMs, assumedSpeedMps, hunterPingIntervalMs, showDistanceToHunted, catchRadiusMeters, label }` — `null`, falls (noch) nicht sichtbar. */
 export async function getConfig(qu, gameId) {
   const q = await qu.get(`${gameId}/config`);
   return q?.value ?? null;
@@ -110,10 +134,21 @@ export async function isHunted(qu, gameId) {
   return config?.huntedTeam?.includes(qu.fingerprint) ?? false;
 }
 
-/** Ist `qu` Mitglied des Fänger-Teams in diesem Spiel? */
+/** Reine Funktion auf einer bereits geladenen `config` — welches Fänger-Team (falls überhaupt eins) `fingerprint` angehört, oder `null`. Team-Zugehörigkeit kommt IMMER hieraus, nie aus einem selbst behaupteten Feld in einem Ping (siehe Moduldoku oben). */
+export function hunterTeamOf(config, fingerprint) {
+  return config?.hunterTeams?.find((t) => t.members.includes(fingerprint)) ?? null;
+}
+
+/** Ist `qu` Mitglied irgendeines Fänger-Teams in diesem Spiel? */
 export async function isHunter(qu, gameId) {
   const config = await getConfig(qu, gameId);
-  return config?.hunterTeam?.includes(qu.fingerprint) ?? false;
+  return hunterTeamOf(config, qu.fingerprint) !== null;
+}
+
+/** Alle Fänger-Teams (`[{ id, label, members }]`) — für eine Team-Übersicht in der UI. Leer, falls `config` (noch) nicht sichtbar. */
+export async function listHunterTeams(qu, gameId) {
+  const config = await getConfig(qu, gameId);
+  return config?.hunterTeams ?? [];
 }
 
 /**
@@ -173,12 +208,92 @@ export async function lastPing(qu, gameId) {
   return pings.length ? pings[pings.length - 1] : null;
 }
 
-/** Das Fänger-Team hat das gejagte Team gefunden — beendet das Spiel. */
-export async function declareCaught(qu, gameId) {
+/**
+ * Ein Standort-Ping eines Fänger-Teams — nur relevant, wenn das Spiel
+ * `hunterPingIntervalMs` gesetzt hat (Feature "Fänger auf der Karte"), aber
+ * strukturell unabhängig davon erzwungen: jedes Mitglied EINES der
+ * `hunterTeams` darf pingen, unabhängig davon, ob die UI das Feature
+ * anbietet. Wie bei pingLocation() set(), aus demselben Grund (§7.2).
+ */
+export async function pingHunterLocation(qu, gameId, { lat, lon, accuracy = null, speedMps = null }) {
+  if (!(await isHunter(qu, gameId))) throw new Error('Nur ein Mitglied eines Fänger-Teams darf seinen Standort melden');
+  return qu.get(`${gameId}/hunterPings`).set({ lat, lon, accuracy, speedMps });
+}
+
+/**
+ * Live-Ansicht auf die Pings ALLER Fänger-Teams zusammen — dieselbe Form
+ * wie watchPings(), nur mit dem Fremdschreiber-Filter "Mitglied irgendeines
+ * `hunterTeams`-Eintrags" statt "Mitglied des gejagten Teams". Welchem
+ * konkreten Team ein einzelner Ping zuzuordnen ist, kann ein Aufrufer selbst
+ * über `hunterTeamOf(config, q.writer)` in `render()` bestimmen — diese
+ * Funktion trifft dazu bewusst keine Vorauswahl, damit ein und dieselbe
+ * Ansicht sowohl "alle Fänger einzeln" als auch "alle Fänger nach Team
+ * eingefärbt" bedienen kann. Sichtbar für jede:n, der/die den Space lesen
+ * darf (typischerweise ALLE Teilnehmenden inkl. gejagtem Team) — dieses
+ * Beispiel unterscheidet bewusst nicht "nur das eigene Fänger-Team sieht
+ * sich selbst" vs. "auch rivalisierende Teams sehen sich gegenseitig", um
+ * den Umfang überschaubar zu halten.
+ *
+ * `key` wird unverändert an `viewObject()` durchgereicht (Default dort:
+ * `(q) => q.id`, ein Item pro Ping) — ein Aufrufer, der lieber EINEN
+ * beweglichen Marker pro Fänger statt eines Marker-Pfads will, übergibt
+ * `key: (q) => q.writer`: derselbe Fänger bekommt dann bei jedem neuen Ping
+ * ein `render()` auf sein bereits bestehendes Item, statt ein neues.
+ */
+export function watchHunterPings(qu, gameId, config, { createItem, render, key }) {
+  const hunterFps = new Set((config?.hunterTeams ?? []).flatMap((t) => t.members));
+  return viewObject(qu.get(`${gameId}/hunterPings`), {
+    createItem: (q) => (hunterFps.has(q.writer) ? createItem(q) : null),
+    render(item, value, q) {
+      if (item !== null) render(item, value, q);
+    },
+    ...(key ? { key } : {}),
+  });
+}
+
+/**
+ * Reine Geometrie: kürzeste Distanz von `position` zu irgendeinem Eintrag
+ * in `hunterPings` (Qubits wie von watchHunterPings()/listPings() geliefert)
+ * — die Grundlage für die "Abstand zu den Fängern"-Anzeige beim gejagten
+ * Team (Feature `showDistanceToHunted`). `null`, wenn `position` fehlt oder
+ * noch kein Fänger-Ping vorliegt.
+ */
+export function nearestHunterDistance(position, hunterPings) {
+  if (!position || !hunterPings?.length) return null;
+  let nearest = Infinity;
+  for (const q of hunterPings) {
+    const d = haversineMeters(position, { lat: q.value.lat, lon: q.value.lon });
+    if (d < nearest) nearest = d;
+  }
+  return nearest;
+}
+
+/**
+ * Das Fänger-Team hat das gejagte Team gefunden — beendet das Spiel, aber
+ * NUR, wenn `hunterPosition` (der eigene, aktuelle Standort der/des
+ * aufrufenden Fängers/in, z. B. aus einem laufenden `watchPosition()`) sich
+ * innerhalb `config.catchRadiusMeters` des letzten bekannten Pings des
+ * gejagten Teams befindet (Feature "Fangradius") — diese Prüfung sitzt
+ * bewusst HIER, nicht nur als deaktivierter Button in der UI, damit die
+ * Regel unabhängig von der jeweiligen Oberfläche gilt (siehe Moduldoku
+ * "immer API-basiert"). Echte GPS-Fälschung lässt sich clientseitig nicht
+ * ausschließen (kein kryptographischer Ortsbeweis) — für ein
+ * Freizeit-Spiel unter sich vertrauenden Teams ist die Prüfung selbst
+ * trotzdem der Punkt, kein Sicherheitsversprechen gegen Betrug.
+ */
+export async function declareCaught(qu, gameId, hunterPosition) {
+  if (!(await isHunter(qu, gameId))) throw new Error('Nur ein Mitglied eines Fänger-Teams darf das Spiel für gefangen erklären');
+  const last = await lastPing(qu, gameId);
+  if (!last) throw new Error('Noch kein Standort des gejagten Teams bekannt');
+  if (!hunterPosition) throw new Error('Eigener Standort nicht verfügbar — Reichweite kann nicht geprüft werden');
+  const config = await getConfig(qu, gameId);
+  const radius = config?.catchRadiusMeters ?? DEFAULT_CATCH_RADIUS_M;
+  const distance = haversineMeters(hunterPosition, { lat: last.value.lat, lon: last.value.lon });
+  if (distance > radius) throw new Error(`Zu weit entfernt vom gejagten Team (${Math.round(distance)} m, erlaubt: ${Math.round(radius)} m)`);
   return qu.get(`${gameId}/status`).put('caught');
 }
 
-/** Spiel regulär beenden (z. B. Zeitlimit erreicht), ohne dass jemand gefangen wurde. */
+/** Spiel regulär beenden/abbrechen (z. B. durch das gejagte Team, oder weil ein Zeitlimit erreicht ist), ohne dass jemand gefangen wurde. */
 export async function endGame(qu, gameId) {
   return qu.get(`${gameId}/status`).put('ended');
 }
