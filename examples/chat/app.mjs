@@ -107,6 +107,13 @@ const AUTO_LOAD_MEDIA_KEY = 'qu-chat-auto-load-media';
 // Default AUS — der Tages-Trenner in der Liste zeigt das Datum bereits
 // einmal pro Tag, an jeder einzelnen Nachricht wäre es meist redundant.
 const SHOW_DATE_KEY = 'qu-chat-show-date';
+// Default AN (bisheriges Verhalten unverändert: Enter sendet, Umschalt+Enter
+// bricht die Zeile um) — AUS lässt Enter IMMER nur umbrechen, senden geht
+// dann ausschließlich per ➤-Button/Antippen. Auf dem Handy ist "Enter
+// sendet" ohnehin gefühlt seltener das Erwartbare (virtuelle Tastaturen
+// haben kein bequemes Umschalt+Enter), aber eine feste Geräteerkennung wäre
+// nur geraten — eine explizite Einstellung trifft für beide Fälle zu.
+const ENTER_TO_SEND_KEY = 'qu-chat-enter-to-send';
 // Kartenanbieter für den 📍-Button (Standort teilen) — 'osm' (Default,
 // braucht keinen eigenen API-Key/Account) | 'google' | 'apple' | 'custom'
 // (MAP_CUSTOM_URL_KEY liefert dann das URL-Template mit {lat}/{lng},
@@ -251,6 +258,7 @@ const soundMessagesToggle = $('sound-messages-toggle');
 const soundCallsToggle = $('sound-calls-toggle');
 const autoLoadMediaToggle = $('auto-load-media-toggle');
 const showDateToggle = $('show-date-toggle');
+const enterToSendToggle = $('enter-to-send-toggle');
 const mapProviderSelect = $('map-provider-select');
 const mapCustomUrlRow = $('map-custom-url-row');
 const mapCustomUrlInput = $('map-custom-url-input');
@@ -533,6 +541,8 @@ async function autoLoadMedia() { return (await storage.get(AUTO_LOAD_MEDIA_KEY))
 async function setAutoLoadMedia(enabled) { await storage.put(AUTO_LOAD_MEDIA_KEY, enabled ? '1' : '0'); }
 async function showDateInMessages() { return (await storage.get(SHOW_DATE_KEY)) === '1'; }
 async function setShowDateInMessages(enabled) { await storage.put(SHOW_DATE_KEY, enabled ? '1' : '0'); }
+async function sendOnEnter() { return (await storage.get(ENTER_TO_SEND_KEY)) !== '0'; }
+async function setSendOnEnter(enabled) { await storage.put(ENTER_TO_SEND_KEY, enabled ? '1' : '0'); }
 
 // --- Standort teilen: welcher Kartenanbieter (App-Einstellungen) ---
 async function mapProvider() { return (await storage.get(MAP_PROVIDER_KEY)) || 'osm'; }
@@ -784,6 +794,11 @@ async function main() {
   setAvatar(meAvatarBtn, savedAlias || qu.fingerprint);
   let myAlias = savedAlias || `Ich-${qu.fingerprint.slice(0, 4)}`;
   let myAvatar = null;
+  // Synchron im Zugriff gehalten (nicht bei jedem Tastendruck neu aus dem
+  // Storage gelesen) — der keydown-Handler unten muss INNERHALB desselben
+  // Events sofort entscheiden, kein await pro Taste. Der App-Einstellungen-
+  // Toggle unten hält diese Variable bei einer Änderung aktuell.
+  let sendOnEnterEnabled = await sendOnEnter();
   meNameEl.textContent = myAlias;
   setAvatar(meAvatarBtn, myAlias);
 
@@ -3642,7 +3657,7 @@ async function main() {
     }
   });
   textInput.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); composer.requestSubmit(); }
+    if (ev.key === 'Enter' && !ev.shiftKey && sendOnEnterEnabled) { ev.preventDefault(); composer.requestSubmit(); }
   });
 
   // --- Eigenes Profil — `/profile` (Router) ---
@@ -3796,6 +3811,7 @@ async function main() {
     soundCallsToggle.checked = await soundEnabled(SOUND_CALLS_KEY);
     autoLoadMediaToggle.checked = await autoLoadMedia();
     showDateToggle.checked = await showDateInMessages();
+    enterToSendToggle.checked = sendOnEnterEnabled;
     mapProviderSelect.value = await mapProvider();
     mapCustomUrlInput.value = await mapCustomUrlTemplate();
     mapCustomUrlRow.hidden = mapProviderSelect.value !== 'custom';
@@ -3814,6 +3830,10 @@ async function main() {
   showDateToggle.addEventListener('change', async () => {
     await setShowDateInMessages(showDateToggle.checked);
     if (activeRoomId) renderMessageList(activeRoomId);
+  });
+  enterToSendToggle.addEventListener('change', async () => {
+    sendOnEnterEnabled = enterToSendToggle.checked; // sofort wirksam — der keydown-Handler liest ausschließlich diese Variable, kein Reload/erneutes Öffnen nötig
+    await setSendOnEnter(sendOnEnterEnabled);
   });
   mapProviderSelect.addEventListener('change', () => {
     setMapProvider(mapProviderSelect.value);
