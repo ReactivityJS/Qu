@@ -778,6 +778,22 @@ src/
                           Space-Node entgegen und ist intern nur eine kurze
                           get/put/set/map-Kombination; createChatPlugin
                           hängt qu.sendMessage(spaceId, opts)-Sugar (etc.) an
+    calendar.js               Termine (create/update/delete, monatsweise
+                          gebuckett), Kalender-Space-Einladung (reine
+                          Wiederverwendung von space-membership.js) UND,
+                          neu, Termin-Einladung an Einzelpersonen OHNE
+                          Kalender-Mitgliedschaft (encryptFor-Erweiterung +
+                          eigene Termin-Einladungs-Inbox statt Manifest-
+                          Änderung) — siehe Datei-Doku für die ACL-
+                          Begründung. RSVP als LWW-Slot wie Chats Reaktionen.
+    incognito-identity.js     Zusätzliche, nie mit der Haupt-Identität
+                          verknüpfte Zweit-Identitäten (eigene FP/Keypair)
+                          für pseudonyme Space-Nutzung — reine Komposition
+                          aus QuIdentity.generate() + Qu.create({ identity,
+                          runtime }); verbirgt die echte FP vor Mit-
+                          Mitgliedern, NICHT vor einem Relay-Betreiber, der
+                          Verbindungs-Metadaten korreliert (zwei Identitäten
+                          = zwei WebSocket-Verbindungen)
   ui/
     bindings.js               viewKey/viewObject (one-way) + bindKey/bindObject
                           (two-way) — die reaktiven UI-Primitive, auf denen
@@ -828,6 +844,8 @@ test/
   qu.test.mjs               Tests für die Qu-Fassade
   space-handle.test.mjs         Tests für QuSpace (qu.own/qu.get()/createSpace()) und Qu.create({ mounts, plugins })
   chat.test.mjs               Tests für das Chat-Modul (inkl. Kollisionssicherheit, Presence, Lesebestätigungen)
+  calendar.test.mjs            Tests für das Kalender-Modul (ACL-Grenzen, Shared-Edit-Semantik, Verschlüsselung, Termin-Einladung ohne Space-Mitgliedschaft, RSVP)
+  incognito-identity.test.mjs  Tests für Zweit-Identitäten (Erzeugung, Trennung, Storage-Roundtrip, enterIncognito())
   relay.test.mjs               End-to-End gegen den echten WebSocket-Relay (native WebSocket-Clients, kein Loopback)
   references.test.mjs            obj://, key://, file://, Tiefenlimit, Zyklenschutz
   *.test.mjs                node:test — je Datei ein weiterer Themenbereich

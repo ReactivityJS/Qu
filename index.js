@@ -79,6 +79,7 @@ const registry = createServiceRegistry([
   { id: 'chat', category: 'service', label: '💬 Messenger', description: 'Verschlüsselter 1:1- und Gruppen-Chat, Anrufe, Dateiübertragung — installierbar als PWA.', entry: '/examples/chat/index.html' },
   { id: 'people', category: 'service', label: '👥 People', description: 'Globales, opt-in Identitäten-Verzeichnis — ein Profil (Alias, Avatar, Zusatz-Attribute), wiederverwendbar über jede Qu-App hinweg.', entry: '/examples/people/index.html' },
   { id: 'forum', category: 'service', label: '🗂️ Forum', description: 'Themen mit Titel + Antworten auf einem geteilten Space.', entry: '/examples/forum/index.html' },
+  { id: 'calendar', category: 'service', label: '📅 Kalender', description: 'Verschlüsselter, gemeinsam genutzter Kalender — Monats-/Wochen-/Tagesansicht, Einladung zum Kalender UND zu einzelnen Terminen, RSVP, Push-Benachrichtigungen.', entry: '/examples/calendar/index.html' },
   { id: 'cms', category: 'service', label: '📄 CMS', description: 'Seiten/Templates auf einem geteilten Space, mehrere Autoren.', entry: '/examples/cms/index.html' },
   { id: 'hunt', category: 'service', label: '🗺️ Hunt', description: 'Standort-basiertes Fang-Spiel auf einem geteilten Space.', entry: '/examples/hunt/index.html' },
   { id: 'example-modules', category: 'example', label: 'Beispiel-Module', description: 'Sechs kurze, fokussierte Module (ToDo-Liste, Forum, App-Space, Sub-Space-Index, Space-App-Basis, CMS-Erweiterung) — Logik getrennt von jeder Oberfläche, mit node --test nachvollziehbar.', entry: '/docs/examples.html' },

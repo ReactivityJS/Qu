@@ -30,8 +30,10 @@ import { QuRuntime, QuSession, QuIdentity, /* ... */ } from './src/index.js';
 13. [References-Modul](#references-modul) — `obj://`/`key://`/`file://`
 14. [Files-Modul](#files-modul) — Datei-Transfer
 15. [Chat-Modul](#chat-modul) — Räume, Nachrichten, Anhänge
-16. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
-17. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`/`<qu-list>`
+16. [Kalender-Modul](#kalender-modul) — Termine, Kalender-/Termin-Einladung, RSVP
+17. [Inkognito-Identitäts-Modul](#inkognito-identitäts-modul) — pseudonyme Zweit-Identitäten
+18. [UI-Bindings-Modul](#ui-bindings-modul) — viewKey/viewObject/bindKey/bindObject
+19. [UI-Components-Modul](#ui-components-modul) — `<qu-view>`/`<qu-bind>`/`<qu-list>`
 
 ---
 
@@ -1263,6 +1265,158 @@ await alice.sendMessage(room.id, {
 // Historie + live weiterhören in einem Aufruf, statt map() von Hand zu bemühen:
 bob.onMessage(room.id, (msg) => console.log(msg.writer, msg.value.text), { initial: true });
 ```
+
+---
+
+## Kalender-Modul
+
+Ein Kalender ist — wie ein Chat-Raum — ein gewöhnlicher Space (siehe
+[Spaces-Modul](#spaces-modul)); ein Termin ist ein Eintrag darin,
+`<calendarSpaceId>/events/<YYYY-MM>/<writerFp>-<ts>` (nach Start-Datum
+monatsweise gebuckett, wie das Forum-Beispiel es für Themen zeigt). Jede
+Funktion außer `createCalendarSpace()` nimmt `(qu, ...)` entgegen, nicht
+einen bereits navigierten Space-Node — das Berechnen von `encryptFor` (siehe
+unten) braucht ohnehin einen frischen Manifest-Read pro Aufruf.
+
+**Wichtig:** Ein Kalender-Space behält `readers: ['*']` (strukturell, für
+Relay-Weiterleitung — siehe `space-membership.js`s Doku) — `session.publish()`s
+automatische Default-Verschlüsselung (siehe
+[`session.publish()`](#sessionpublishid-value-opts)) greift dadurch **nicht**.
+Jede Funktion unten berechnet und übergibt `encryptFor` deshalb immer
+**explizit**; Termin, Ort, Beschreibung und Teilnehmerliste sind dadurch
+für jeden Aufruf verschlüsselt, nicht nur für Räume mit eingeschränkten
+`readers`.
+
+### `createCalendarSpace(qu, memberFingerprints?, { readers? })` → `QuSpace`
+**Synchron** (wie `createChatRoom()`, das dieselbe `qu.createSpace()`-Rezeptur
+nutzt). `readers` defaultet auf `['*']` (siehe oben).
+
+### `createEvent(qu, calendarSpaceId, { title, description?, location?, start, end, allDay?, attendees? })`
+`start`/`end` sind Epoch-ms, `end` ist auch bei `allDay` Pflichtfeld (Aufrufer
+übergibt das Tagesende) — `listEvents()`s Bereichsfilter muss so nie
+sonderbehandeln. `attendees` weggelassen: der Termin ist für den ganzen
+Kalender sichtbar (`attendees` defaultet auf die aktuellen Space-Writer,
+ebenso als `encryptFor`-Liste). `attendees` gesetzt: engere Sichtbarkeit —
+nur diese Fingerprints (plus Ersteller:in) können den Termin entschlüsseln,
+selbst ein Kalender-Mitglied außerhalb dieser Liste sieht nur Chiffretext.
+
+### `updateEvent(qu, eventId, patch)` / `deleteEvent(qu, eventId)`
+`updateEvent()` ist ein `put()` auf die **bestehende** Termin-ID — ToDo-
+Semantik (jede:r aktuelle Space-Writer darf einen fremden Termin bearbeiten),
+nicht Chats `editOf`-Log. `deleteEvent()` ist ein Tombstone
+(`{ deleted: true }`-Patch), keine physische Löschung. `encryptFor` wird bei
+jedem `updateEvent()` aus der (ggf. gepatchten) `attendees`-Liste neu
+berechnet.
+
+### `listEvents(qu, calendarSpaceId, { from?, to? })` → `Promise<QuBit[]>`
+Alle nicht gelöschten Termine, die `[from, to)` überschneiden, früheste
+zuerst — überspannt genau die dafür nötigen Monats-Buckets (meist einer,
+an einer Monatsgrenze zwei), nie den ganzen Kalender.
+
+### `onEventsChange(qu, calendarSpaceId, callback, { bucket? })` → `() => void`
+Live-Subscription auf GENAU einen Monats-Bucket (Default: der aktuelle) —
+eine Wochenansicht an einer Monatsgrenze abonniert zwei Buckets separat.
+
+### `inviteToEvent(qu, eventId, outsiderFp)` / `removeFromEvent(qu, eventId, fp)`
+Lädt eine Person zu **genau einem** Termin ein, ohne das Kalender-Space-
+Manifest überhaupt anzufassen — die Person wird NIE zu `writers`/`readers`/
+`admins` hinzugefügt (das würde sie sichtbar zum vollen Mitglied machen,
+das Gegenteil einer Termin-Einladung). Erreichbarkeit kommt ausschließlich
+aus einer erweiterten `encryptFor`-Liste auf diesem einen Termin, entdeckt
+über einen Ping in eine eigene Termin-Einladungs-„Inbox"
+(`event-invites/<fp>/...`, siehe `onEventInvites()`). Konsequenz: die
+eingeladene Person kann genau diesen Termin lesen/RSVP geben, aber nichts
+im Kalender-Space schreiben (siehe `setOutsiderRSVP()`), und kennt trivial
+die Kalender-Space-ID (Pfad-Präfix der Termin-ID) — Metadaten (IDs,
+Zeitstempel, Chiffretext) anderer Termine könnten sichtbar sein, deren
+Inhalt aber nicht.
+
+### `onEventInvites(qu, callback, opts?)` → `() => void`
+Live-Subscription der eigenen Termin-Einladungen (Gegenstück zu
+`onSpaceInvite()` aus dem Space-Membership-Modul, nur pro Termin statt pro
+Space). Jeder gelieferte Wert: `{ fromFp, spaceId, eventId }`.
+
+### RSVP: `setRSVP()` / `setOutsiderRSVP()` / `getRSVPs()` / `onRSVPChange()`
+| Funktion | Für wen | Ablageort |
+|---|---|---|
+| `setRSVP(qu, eventId, status)` | Kalender-Space-Mitglieder | `<calendarSpaceId>/rsvp/<eventKey>/<fp>` — ein LWW-Slot pro (Termin, Person), wie Chats Reaktionen |
+| `setOutsiderRSVP(qu, eventId, status)` | Per `inviteToEvent()` Eingeladene | `~<fp>/event-rsvp/<url-kodierte eventId>` — Mitglieder können hier nicht schreiben (keine Space-Mitgliedschaft), also im eigenen User-Space |
+| `getRSVPs(qu, eventId)` → `Promise<{[fp]: status}>` | — | Führt beide Quellen zusammen (Outsider werden aus dem Termin's `attendees`-Feld ermittelt) |
+| `onRSVPChange(qu, eventId, callback, opts?)` | — | Nur Space-interne RSVPs live (Outsider-RSVPs sind ohne bekannte Fingerprints nicht generisch abonnierbar) |
+
+### Kalender-Space-Mitgliedschaft: `ensureCalendarSpace`/`addCalendarMember`/`removeCalendarMember`/`onCalendarInvite`/`notifyCalendarMembers`
+Dünne, unveränderte Re-Exports der Space-Membership-Funktionen
+(`ensureSpace`/`addSpaceMember`/`removeSpaceMember`/`onSpaceInvite`/
+`notifyMembers`) unter kalenderspezifischem Namen — Einladung zum ganzen
+Kalender ist bewusst dieselbe Mechanik wie bei Chat/ToDo/Forum, komplett
+getrennt von der neuen `inviteToEvent()`-Mechanik oben.
+
+### `createCalendarPlugin()` — Fassaden-Sugar
+`qu.use(createCalendarPlugin())` hängt `qu.createEvent()`/`qu.updateEvent()`/
+etc. an (siehe oben) und komponiert zusätzlich `createSpaceMembershipPlugin()`
+(also auch `qu.ensureSpace()`/`qu.addSpaceMember()`/etc.) — erfordert
+`createSpacesPlugin()` bereits installiert (für `qu.createSpace()`).
+
+```js
+const alice = (await Qu.create()).use(createSpacesPlugin()).use(createCalendarPlugin());
+const bob = (await Qu.create({ runtime: alice.runtime })).use(createCalendarPlugin());
+await Promise.all([alice, bob].map((qu) => qu.publishProfile()));
+
+const cal = createCalendarSpace(alice, [bob.fingerprint]);
+await cal.ready;
+const { qubit } = await createEvent(alice, cal.id, { title: 'Team-Sync', start: Date.now(), end: Date.now() + 3600000 });
+await setRSVP(bob, qubit.id, 'going');
+
+// Carol ist NIE Mitglied des Kalenders, aber zu genau diesem einen Termin eingeladen:
+const carol = await Qu.create({ runtime: alice.runtime });
+await carol.publishProfile();
+await inviteToEvent(alice, qubit.id, carol.fingerprint);
+await setOutsiderRSVP(carol, qubit.id, 'maybe');
+```
+
+---
+
+## Inkognito-Identitäts-Modul
+
+Nicht das Übertragen einer Identität auf ein zweites Gerät (das ist
+`identity-transfer.js`), sondern das Erzeugen **zusätzlicher, unabhängiger**
+Identitäten (eigener Fingerprint, eigenes ECDSA+ECDH-Schlüsselpaar), die
+eine Person statt ihrer Haupt-Identität für einen bestimmten Space (z. B.
+einen Kalender) nutzen kann — Mit-Mitglieder sehen dann nur die
+Inkognito-FP, nie die echte. Baut zu 100 % auf bereits vorhandenen Bausteinen
+auf (`QuIdentity.generate()`, `Qu.create({ identity, runtime })`) — kein
+neues Krypto-Primitiv.
+
+### `createIncognitoIdentity(alias)` → `Promise<{ alias, fingerprint, keys, createdAt }>`
+Erzeugt eine neue Identität. `alias` ist ein rein lokales, nie
+veröffentlichtes Label für die eigene Geräte-UI (anders als
+`qu.publishProfile({ alias })`s öffentlicher Anzeigename). `keys` hat exakt
+die Form von `identity.exportKeys()`/`Qu.create({ identity })`.
+
+### `listIncognitoIdentities(store)` / `getIncognitoIdentity(store, alias)` / `deleteIncognitoIdentity(store, alias)`
+Reine Funktionen über ein selbst verwaltetes Objekt (`{ [alias]: { fingerprint,
+keys, createdAt } }`, z. B. in `localStorage` persistiert) — kein eigenes
+I/O, dieselbe "bring your own persistence"-Haltung wie
+`identity-transfer.js`. `listIncognitoIdentities()` liefert bewusst nie
+`keys` mit (nur `alias`/`fingerprint`/`createdAt`, für eine Auswahl-UI);
+`getIncognitoIdentity()` liefert sie, da `enterIncognito()` genau das
+braucht. `deleteIncognitoIdentity()` mutiert `store` nicht, sondern gibt ein
+neues Objekt zurück.
+
+### `enterIncognito(mainQu, storedKeys, { plugins? })` → `Promise<Qu>`
+Baut eine ZWEITE, unabhängige `Qu`-Instanz auf **demselben** `mainQu.runtime`
+(`Qu.create({ runtime, identity: storedKeys.keys })`) — gleicher lokaler
+Cache, automatisch dieselben Plugins wie die zuerst erzeugende Instanz
+(`qu.js`s `defaultPlugins`-Mechanismus). Öffnet **keine** Netzwerkverbindung
+von selbst — wer die Inkognito-Identität tatsächlich live nutzen will, ruft
+`.connect(channel)` auf der zurückgegebenen Instanz selbst auf.
+
+> **Grenzen, ehrlich benannt:** Verbirgt die echte FP vor Mit-Mitgliedern und
+> vor reiner Space-Inhalts-Inspektion. Verbirgt **nichts** vor einem
+> Relay-Betreiber, der Verbindungs-Metadaten korreliert — zwei gleichzeitig
+> genutzte Identitäten brauchen zwei WebSocket-Verbindungen
+> (`authenticateChannel()` bindet eine Identität an einen Kanal), die über
+> Timing/IP trivial korrelierbar sind.
 
 ---
 

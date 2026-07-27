@@ -305,6 +305,78 @@ export async function createRelay({
       }
     });
 
+    // Same idea as the `*/msgs/*` hook above, for modules/calendar.js's
+    // events instead of chat messages — matches its id shape exactly
+    // (`<calendarSpaceId>/events/<bucket>/<writerFp>-<ts>`, four segments,
+    // hence `*/events/*/*` not `*/events/*`). Every event is ALWAYS
+    // encrypted (calendar.js's own doc comment — a calendar Space keeps
+    // `readers: ['*']`, so nothing here is ever plaintext to the relay),
+    // which means this relay genuinely cannot tell create/update/delete
+    // apart from `q.value` alone (it's ciphertext) — rather than leaking
+    // even a minimal unencrypted "action" marker to make that distinction
+    // possible, this collapses to ONE generic body for all three, same
+    // "never more than a generic template + sender fingerprint" invariant
+    // the chat hook above already holds itself to.
+    relay.runtime.on('*/events/*/*', async (q) => {
+      if (q.ephemeral || !q.writer) return;
+      const calendarSpaceId = q.id.split('/')[0];
+      const manifestQ = await relay.runtime.get(calendarSpaceId);
+      const members = manifestQ?.value?.writers ?? [];
+      for (const member of members) {
+        if (member === q.writer || member === '*' || connected.has(member)) continue;
+        const subscription = pushSubscriptions.get(member);
+        if (!subscription) continue;
+        try {
+          const aliasQ = await relay.runtime.get(`~${q.writer}/alias`);
+          const senderName = aliasQ?.value ?? null;
+          await sendPush({
+            subscription,
+            payload: { title: 'QU Kalender', body: senderName ? `${senderName} hat einen Termin aktualisiert` : 'Ein Termin wurde aktualisiert', fp: q.writer },
+          });
+          debug('relay', 'calendar-push-sent', { to: member, calendarSpaceId });
+        } catch (e) {
+          if (e.status === 404 || e.status === 410) pushSubscriptions.delete(member);
+          debug('relay', 'calendar-push-failed', { to: member, calendarSpaceId, error: e.message, status: e.status });
+          console.error(`[Relay] calendar push to ${member} failed:`, e.message);
+        }
+      }
+    });
+
+    // The per-event invite of an OUTSIDER (modules/calendar.js's
+    // inviteToEvent()) never touches the calendar Space's manifest at all
+    // (see that module's doc comment on why), so it can't be reached by the
+    // hook above — it pings a dedicated per-event invite inbox instead
+    // (`event-invites/<toFp>/<inviterFp>-<ts>`, modules/calendar.js's
+    // eventInviteBoxId()). Deliberately NOT `inbox-<fp>/event-invites/*`
+    // (space-membership.js's own inbox shape): core/pattern.js only ever
+    // treats `*`/`**` as a WHOLE path segment (assertValidPattern()'s own
+    // doc — "never mid-segment, e.g. 'a*b' is rejected"), so a pattern that
+    // needs to observe every recipient's invites at once requires the
+    // fingerprint to be its own segment — `inbox-*/event-invites/*` is not
+    // even a rejected pattern, it's a literal string "inbox-*" that no real
+    // id ever equals, so that hook would silently never fire. Same
+    // generic-body invariant as every other push hook in this file.
+    relay.runtime.on('event-invites/*/*', async (q) => {
+      if (q.ephemeral || !q.writer) return;
+      const toFp = q.id.split('/')[1];
+      if (!toFp || connected.has(toFp)) return;
+      const subscription = pushSubscriptions.get(toFp);
+      if (!subscription) return;
+      try {
+        const aliasQ = await relay.runtime.get(`~${q.writer}/alias`);
+        const senderName = aliasQ?.value ?? null;
+        await sendPush({
+          subscription,
+          payload: { title: 'QU Kalender', body: senderName ? `${senderName} hat dich zu einem Termin eingeladen` : 'Du wurdest zu einem Termin eingeladen', fp: q.writer },
+        });
+        debug('relay', 'calendar-invite-push-sent', { to: toFp });
+      } catch (e) {
+        if (e.status === 404 || e.status === 410) pushSubscriptions.delete(toFp);
+        debug('relay', 'calendar-invite-push-failed', { to: toFp, error: e.message, status: e.status });
+        console.error(`[Relay] calendar invite push to ${toFp} failed:`, e.message);
+      }
+    });
+
     // A push subscription is registered through the SAME publish/dispatch
     // path as any other write (`qu.session.publish('push-subscription/'
     // + fp, subscription)`, see examples/chat/app.mjs) — no bespoke
