@@ -130,13 +130,14 @@ export function linkify(text) {
   return segments;
 }
 
-// WhatsApp-Konvention statt eigens erfundener Zeichen — den meisten
-// Nutzer:innen bereits vertraut, kein neues Erlernen nötig: `*fett*`,
-// `_kursiv_`, `~durchgestrichen~`. Unterstreichen hat dort kein eigenes
-// Zeichen (keine Markdown-typische Konvention dafür), hier zusätzlich als
-// `__unterstrichen__` (doppelter Unterstrich, siehe Reihenfolge unten)
-// angeboten. Alle vier Male dieselbe Regel: das Zeichen direkt NEBEN Text
-// (kein Leerzeichen unmittelbar danach beim Öffnen bzw. davor beim
+// `*fett*` (WhatsApp-Konvention) und `~durchgestrichen~` (dito). Für
+// unterstrichen/kursiv bewusst NICHT WhatsApp/Markdown gefolgt (dort gibt
+// es kein eigenes Unterstreichen-Zeichen, `_…_` bedeutet dort "kursiv") —
+// hier stattdessen `_unterstrichen_` (einfacher Unterstrich, sieht selbst
+// schon wie eine Unterstreichung aus) und `__kursiv__` (doppelter
+// Unterstrich), da Unterstreichen im Alltag häufiger gebraucht wird als
+// Kursivschrift. Alle vier Male dieselbe Regel: das Zeichen direkt NEBEN
+// Text (kein Leerzeichen unmittelbar danach beim Öffnen bzw. davor beim
 // Schließen) — "3 * 4 * 5" bleibt dadurch Rechenzeichen statt fälschlich
 // als fett interpretiert zu werden, genau wie in echtem WhatsApp/Markdown.
 // Reihenfolge der Alternativen ist bewusst: `__…__` VOR `_…_` — eine
@@ -161,8 +162,8 @@ export function parseFormatting(text) {
     const index = match.index;
     if (index > lastIndex) segments.push({ type: 'text', value: text.slice(lastIndex, index) });
     if (match[1] !== undefined) segments.push({ type: 'bold', value: match[1] });
-    else if (match[2] !== undefined) segments.push({ type: 'underline', value: match[2] });
-    else if (match[3] !== undefined) segments.push({ type: 'italic', value: match[3] });
+    else if (match[2] !== undefined) segments.push({ type: 'italic', value: match[2] });
+    else if (match[3] !== undefined) segments.push({ type: 'underline', value: match[3] });
     else segments.push({ type: 'strike', value: match[4] });
     lastIndex = index + match[0].length;
   }

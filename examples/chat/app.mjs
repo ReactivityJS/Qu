@@ -108,12 +108,13 @@ const AUTO_LOAD_MEDIA_KEY = 'qu-chat-auto-load-media';
 // Default AUS — der Tages-Trenner in der Liste zeigt das Datum bereits
 // einmal pro Tag, an jeder einzelnen Nachricht wäre es meist redundant.
 const SHOW_DATE_KEY = 'qu-chat-show-date';
-// Default AN (bisheriges Verhalten unverändert: Enter sendet, Umschalt+Enter
-// bricht die Zeile um) — AUS lässt Enter IMMER nur umbrechen, senden geht
-// dann ausschließlich per ➤-Button/Antippen. Auf dem Handy ist "Enter
-// sendet" ohnehin gefühlt seltener das Erwartbare (virtuelle Tastaturen
-// haben kein bequemes Umschalt+Enter), aber eine feste Geräteerkennung wäre
-// nur geraten — eine explizite Einstellung trifft für beide Fälle zu.
+// Default AUS: Enter bricht IMMER nur um, gesendet wird ausschließlich per
+// ➤-Button/Antippen — auf dem Handy ist "Enter sendet" ohne bequemes
+// Umschalt+Enter (virtuelle Tastatur) selten das Erwartbare, und auch auf
+// dem Desktop ist ein reiner Button-Versand die unüberraschendere Wahl.
+// AN schaltet Enter zusätzlich als Versand-Taste frei; Umschalt+Enter
+// bricht dabei WEITERHIN immer nur um (s. keydown-Handler unten) — bleibt
+// so in jedem Fall die verlässliche, geräteunabhängige Zeilenumbruch-Taste.
 const ENTER_TO_SEND_KEY = 'qu-chat-enter-to-send';
 // Kartenanbieter für den 📍-Button (Standort teilen) — 'osm' (Default,
 // braucht keinen eigenen API-Key/Account) | 'google' | 'apple' | 'custom'
@@ -542,7 +543,7 @@ async function autoLoadMedia() { return (await storage.get(AUTO_LOAD_MEDIA_KEY))
 async function setAutoLoadMedia(enabled) { await storage.put(AUTO_LOAD_MEDIA_KEY, enabled ? '1' : '0'); }
 async function showDateInMessages() { return (await storage.get(SHOW_DATE_KEY)) === '1'; }
 async function setShowDateInMessages(enabled) { await storage.put(SHOW_DATE_KEY, enabled ? '1' : '0'); }
-async function sendOnEnter() { return (await storage.get(ENTER_TO_SEND_KEY)) !== '0'; }
+async function sendOnEnter() { return (await storage.get(ENTER_TO_SEND_KEY)) === '1'; }
 async function setSendOnEnter(enabled) { await storage.put(ENTER_TO_SEND_KEY, enabled ? '1' : '0'); }
 
 // --- Standort teilen: welcher Kartenanbieter (App-Einstellungen) ---

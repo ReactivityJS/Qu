@@ -2,7 +2,18 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <!-- interactive-widget=resizes-content (neuer, wachsend unterstützter Teil
+       der Viewport-Meta-Spezifikation, v. a. Chrome/Android): weist den
+       Browser an, die Bildschirmtastatur wie eine ECHTE Verkleinerung des
+       sichtbaren Bereichs zu behandeln (layout- UND visual viewport
+       gemeinsam), statt sie nur optisch "über" den Inhalt zu legen, ohne
+       dass sich `100vh`/`100dvh`/`window.innerHeight` mitändern. Genau das
+       ist die Wurzel des sonst bekannten Symptoms "Fußzeile bleibt an
+       ihrem alten Platz, darunter lässt sich in leeren Raum scrollen" —
+       app.mjs's syncViewportHeight()/`--app-height` (window.visualViewport-
+       basiert) bleibt zusätzlich als Fallback aktiv für Browser, die dieses
+       Meta-Attribut (noch) ignorieren. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#0b0d12" />
   <meta name="description" content="Verschlüsselter Chat (1:1 und Gruppen) auf Basis von QU — Identität und Nachrichten bleiben auf dem Gerät." />
   <title>QU — Chat</title>
@@ -225,8 +236,16 @@
       <p class="modal-hint">Standardmäßig aus (nur Uhrzeit) — der Tages-Trenner in der Nachrichtenliste zeigt das Datum ohnehin schon einmal pro Tag.</p>
       <label>Eingabe</label>
       <label class="toggle-row"><input type="checkbox" id="enter-to-send-toggle" /> Eingabetaste sendet die Nachricht</label>
-      <p class="modal-hint">An (Standard): Eingabetaste sendet, Umschalt+Eingabetaste bricht die Zeile um. Aus: Eingabetaste bricht immer nur um, gesendet wird ausschließlich per ➤-Button — praktisch für längere, mehrzeilige Nachrichten.</p>
-      <p class="modal-hint">Formatierung beim Tippen: <code>*fett*</code>, <code>_kursiv_</code>, <code>__unterstrichen__</code>, <code>~durchgestrichen~</code>. Zeilen, die mit <code>- </code>/<code>* </code> oder <code>1. </code> beginnen, werden als Liste angezeigt.</p>
+      <p class="modal-hint">Standardmäßig aus: Eingabetaste bricht immer nur die Zeile um, gesendet wird ausschließlich per ➤-Button. An: Eingabetaste sendet zusätzlich.</p>
+      <label>Formatierung</label>
+      <ul class="format-legend">
+        <li><code>*fett*</code> → <strong>fett</strong></li>
+        <li><code>_unterstrichen_</code> → <u>unterstrichen</u></li>
+        <li><code>__kursiv__</code> → <em>kursiv</em></li>
+        <li><code>~durchgestrichen~</code> → <s>durchgestrichen</s></li>
+        <li><code>- </code>, <code>* </code> oder <code>1. </code> am Zeilenanfang → Liste</li>
+        <li>Umschalt+Eingabetaste → Zeilenumbruch (funktioniert immer, unabhängig von der Einstellung oben, auf Mobile wie Desktop)</li>
+      </ul>
       <label>Medien</label>
       <label class="toggle-row"><input type="checkbox" id="auto-load-media-toggle" /> Bilder, Videos und Dateien automatisch laden</label>
       <p class="modal-hint">Aus: neue Anhänge zeigen erst Name/Größe, geladen wird nur nach einem Tipp darauf — schont mobiles Datenvolumen. Schon vorhandene/eigene Anhänge sind davon unberührt.</p>

@@ -86,10 +86,10 @@ test('linkify() with no links returns a single text segment', () => {
   assert.deepEqual(segs, [{ type: 'text', value: 'nur text, kein link' }]);
 });
 
-test('parseFormatting(): bold/italic/underline/strike, each recognized on its own', () => {
+test('parseFormatting(): bold/underline/italic/strike, each recognized on its own', () => {
   assert.deepEqual(parseFormatting('*fett*'), [{ type: 'bold', value: 'fett' }]);
-  assert.deepEqual(parseFormatting('_kursiv_'), [{ type: 'italic', value: 'kursiv' }]);
-  assert.deepEqual(parseFormatting('__unterstrichen__'), [{ type: 'underline', value: 'unterstrichen' }]);
+  assert.deepEqual(parseFormatting('_unterstrichen_'), [{ type: 'underline', value: 'unterstrichen' }]);
+  assert.deepEqual(parseFormatting('__kursiv__'), [{ type: 'italic', value: 'kursiv' }]);
   assert.deepEqual(parseFormatting('~durch~'), [{ type: 'strike', value: 'durch' }]);
 });
 
@@ -99,7 +99,7 @@ test('parseFormatting(): mixed text and multiple markers in order', () => {
     { type: 'text', value: 'sag ' },
     { type: 'bold', value: 'hallo' },
     { type: 'text', value: ' zu ' },
-    { type: 'italic', value: 'allen' },
+    { type: 'underline', value: 'allen' },
   ]);
 });
 
