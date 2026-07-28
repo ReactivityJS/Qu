@@ -195,6 +195,14 @@ export async function createRelay({
     const m = /^push-subscription\/([0-9a-f]{24})$/i.exec(id);
     if (m) return { writers: [m[1]], readers: ['*'] };
     if (id.startsWith('relay-services/')) return { writers: relayAdmins, readers: ['*'] };
+    // `relay-config/<key>` — deployment-wide, non-secret configuration data
+    // a shell reads (e.g. `relay-config/theme`, see src/ui/theme.js) — same
+    // "public content, admin-only writes" shape as relay-services/ above,
+    // NOT the ephemeral encrypted admin/ channel below: this is ordinary,
+    // persisted, replicated Space content (a plain signed write, no
+    // encryptFor needed — a theme color is not confidential), not a
+    // live-only command that reconfigures an in-memory object.
+    if (id.startsWith('relay-config/')) return { writers: relayAdmins, readers: ['*'] };
     if (id.startsWith('admin/')) return { writers: relayAdmins, readers: relayAdmins };
     return spacesACL(id);
   });

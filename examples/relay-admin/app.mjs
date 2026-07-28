@@ -13,6 +13,7 @@
 import { createNetworkPlugin, createSpacesPlugin, createWebSocketChannel } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import { PLATFORM_MODULES } from '../../server/platform-registry.mjs'; // labels only (id -> label) — the actual enabled state always comes live from /relay/info, never from this static list
+import { getTheme, setTheme } from '../../src/ui/theme.js';
 
 const IDENTITY_KEY = 'qu-identity'; // siehe examples/chat/app.mjs's IDENTITY_KEY-Doku — bewusst DERSELBE Wert wie chat/people: EIN Fingerprint fürs gesamte Ökosystem, kein pro-App-Konto. Ein früherer eigener Key hier ('qu-relay-admin-identity') war ein Fehler — QU_RELAY_ADMINS wird typischerweise mit dem Fingerprint gepinnt, den man schon aus Chat/People kennt; ein zweiter, abweichender Key hätte hier still eine ANDERE Identität angelegt, die nie zu QU_RELAY_ADMINS passt, egal was dort eingetragen ist.
 
@@ -33,6 +34,11 @@ const connectionLimitFpsEl = $('connection-limit-fps');
 const connectionLimitSaveBtn = $('connection-limit-save');
 const platformModulesListEl = $('platform-modules-list');
 const platformModulesOffEl = $('platform-modules-off');
+const themeAccentEl = $('theme-accent');
+const themeBgEl = $('theme-bg');
+const themeTextEl = $('theme-text');
+const themeSaveBtn = $('theme-save');
+const themeClearBtn = $('theme-clear');
 
 function showStatus(message, kind) {
   statusEl.textContent = message;
@@ -274,6 +280,61 @@ async function main() {
       btn.disabled = false;
     }
   };
+
+  /**
+   * `relay-config/theme` is ordinary, ACL-gated Space content (relay/
+   * relay.mjs's `relay-config/` branch — writers: relayAdmins, readers:
+   * '*'), NOT the encrypted `admin/` command channel — a plain
+   * `qu.session.publish()`/`setTheme()`, no `encryptFor` needed (see
+   * src/ui/theme.js's own file doc). Reading it back afterward to confirm
+   * still matters just as much: a rejected write here doesn't throw either
+   * (the LOCAL write succeeds unconditionally, same createSpacesPlugin()
+   * reasoning as every other write in this file).
+   */
+  async function refreshThemeForm() {
+    const theme = await getTheme(qu);
+    themeAccentEl.value = theme?.accent ?? '';
+    themeBgEl.value = theme?.bg ?? '';
+    themeTextEl.value = theme?.text ?? '';
+    return theme;
+  }
+  await refreshThemeForm();
+
+  themeSaveBtn.addEventListener('click', async () => {
+    themeSaveBtn.disabled = true;
+    try {
+      const theme = {};
+      if (themeAccentEl.value.trim()) theme.accent = themeAccentEl.value.trim();
+      if (themeBgEl.value.trim()) theme.bg = themeBgEl.value.trim();
+      if (themeTextEl.value.trim()) theme.text = themeTextEl.value.trim();
+      await setTheme(qu, theme);
+      await wait(200);
+      const confirmed = await refreshThemeForm();
+      if (confirmed && JSON.stringify(confirmed) === JSON.stringify(theme)) {
+        showStatus('Theme gespeichert.', 'ok');
+      } else {
+        showStatus(`Theme unverändert — keine Bestätigung vom Relay erhalten. Ist deine Identität (${qu.fingerprint}) als QU_RELAY_ADMINS-Fingerprint hinterlegt?`, 'err');
+      }
+    } catch (e) {
+      showStatus(`Theme speichern fehlgeschlagen: ${e.message}`, 'err');
+    } finally {
+      themeSaveBtn.disabled = false;
+    }
+  });
+
+  themeClearBtn.addEventListener('click', async () => {
+    themeClearBtn.disabled = true;
+    try {
+      await setTheme(qu, null);
+      await wait(200);
+      const confirmed = await refreshThemeForm();
+      showStatus(confirmed === null ? 'Theme zurückgesetzt.' : 'Theme unverändert — keine Bestätigung vom Relay erhalten.', confirmed === null ? 'ok' : 'err');
+    } catch (e) {
+      showStatus(`Theme zurücksetzen fehlgeschlagen: ${e.message}`, 'err');
+    } finally {
+      themeClearBtn.disabled = false;
+    }
+  });
 
   connectionLimitSaveBtn.addEventListener('click', async () => {
     connectionLimitSaveBtn.disabled = true;
