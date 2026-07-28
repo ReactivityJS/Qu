@@ -1,0 +1,16 @@
+{
+  "name": "QUniverse",
+  "short_name": "QUniverse",
+  "description": "Ein Qu-basiertes Ökosystem — Router, Shell, Identität und Apps in einem Fenster.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "lang": "de",
+  "icons": [
+    { "src": "./icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

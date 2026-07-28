@@ -1,0 +1,157 @@
+/*
+ * `--bg`/`--accent`/`--text` fall back to their own hardcoded defaults via
+ * `var(--qu-<name>, <default>)` — the `--qu-*` custom properties are what
+ * qu-core/src/ui/theme.js's applyTheme() actually sets on this same
+ * element, live, from this deployment's relay-config/theme (see qu-core's
+ * relay-admin Theme panel). A deployment that never configured one simply
+ * never gets a `--qu-*` value at all, so every var() falls through to the
+ * default listed here unchanged — this file's own look is never lost,
+ * only ever overridden.
+ */
+:root {
+  --bg: var(--qu-bg, #0f1115);
+  --panel: #161922;
+  --text: var(--qu-text, #e6e8ee);
+  --muted: #9aa2b1;
+  --accent: var(--qu-accent, #7dd3fc);
+  --err: #f87171;
+  --border: #262b38;
+  font-size: 16px;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+  margin: 0;
+  line-height: 1.6;
+}
+a { color: var(--accent); }
+code { background: rgba(255,255,255,0.06); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.85em; }
+
+qu-app-shell { display: block; min-height: 100vh; }
+
+.qu-shell-loading, .qu-shell-error { padding: 2rem; }
+.qu-shell-error { color: var(--err); }
+
+.qu-shell-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.qu-shell-brand { font-weight: 600; font-size: 1.1rem; margin-right: auto; }
+
+.qu-shell-screen { max-width: 720px; margin: 0 auto; padding: 2rem 1.5rem; }
+.qu-shell-welcome { color: var(--muted); }
+
+/* qu-nav-dropdown */
+qu-nav-dropdown { position: relative; display: inline-block; }
+.qu-nav-dropdown-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+}
+.qu-nav-dropdown-toggle:disabled { opacity: 0.5; cursor: default; }
+.qu-nav-dropdown-empty-hint { color: var(--muted); font-size: 0.85em; margin: 0.4rem 0 0; }
+.qu-nav-dropdown-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem 0;
+  min-width: 12rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 10;
+}
+.qu-nav-dropdown-category {
+  color: var(--muted);
+  font-size: 0.75em;
+  text-transform: uppercase;
+  padding: 0.3rem 0.9rem;
+}
+.qu-nav-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+.qu-nav-dropdown-item:hover { background: rgba(255,255,255,0.06); }
+
+/* qu-notification-badge */
+qu-notification-badge { position: relative; display: inline-block; }
+.qu-notification-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+}
+.qu-notification-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem 0;
+  min-width: 16rem;
+  max-width: 22rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 10;
+}
+.qu-notification-empty { color: var(--muted); font-size: 0.85em; padding: 0.4rem 0.9rem; }
+.qu-notification-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-decoration: none;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+a.qu-notification-item:hover { background: rgba(255,255,255,0.06); }
+span.qu-notification-item { color: var(--muted); cursor: default; }
+
+/* identity screen */
+.qu-identity-fp { color: var(--muted); }
+.qu-identity-share-wrap { display: flex; align-items: center; gap: 0.6rem; }
+.qu-identity-share {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+}
+.qu-identity-share:disabled { opacity: 0.5; cursor: default; }
+.qu-identity-share-status { color: var(--muted); font-size: 0.85em; }
+.qu-identity-visibility { display: block; margin: 1rem 0; }
+.qu-identity-push { display: block; margin: 1rem 0; }
+.qu-identity-push-hint { color: var(--muted); font-size: 0.85em; }
+.qu-identity-apps { list-style: none; padding: 0; }
+.qu-identity-apps-empty { color: var(--muted); }
+.qu-shell-unknown { color: var(--err); }
+
+/* qu-profile-card (unstyled by default, see src/ui/profile-components.js) */
+.qu-profile-card { display: inline-flex; align-items: center; gap: 0.5rem; text-decoration: none; color: inherit; }
+.qu-profile-avatar { width: 1.6rem; height: 1.6rem; border-radius: 50%; object-fit: cover; }
