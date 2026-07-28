@@ -10,6 +10,8 @@
 // main barrel) — this bundle is never meant to run in Node.
 export { viewKey, viewObject, bindKey, bindObject } from '../ui/bindings.js';
 export { buildPath, parsePathSegments } from '../ui/hash-router.js';
+export { decideRoute, createRouter } from '../ui/router.js';
+export { createWindowHashSource } from '../ui/router-browser.js';
 export { findQu, QuViewElement, QuBindElement, QuListElement } from '../ui/components.js';
 export { QuProfileCardElement } from '../ui/profile-components.js';
 export { QuPeopleSearchElement } from '../ui/people-search-components.js';

@@ -34,13 +34,13 @@ test('core-plugins.js is exactly the union of core.js + plugins-storage.js + plu
   assert.deepEqual(new Set(Object.keys(combined)), expected);
 });
 
-test('index.js is exactly core-plugins.js + app-space.js + the Node-safe UI bindings (viewKey/viewObject/bindKey/bindObject/buildPath/parsePathSegments)', async () => {
+test('index.js is exactly core-plugins.js + app-space.js + the Node-safe UI bindings (viewKey/viewObject/bindKey/bindObject/buildPath/parsePathSegments/decideRoute/createRouter)', async () => {
   const [coreplugins, appSpace, index] = await Promise.all([
     import('../src/bundles/core-plugins.js'),
     import('../src/bundles/app-space.js'),
     import('../src/index.js'),
   ]);
-  const nodeSafeUiKeys = ['viewKey', 'viewObject', 'bindKey', 'bindObject', 'buildPath', 'parsePathSegments'];
+  const nodeSafeUiKeys = ['viewKey', 'viewObject', 'bindKey', 'bindObject', 'buildPath', 'parsePathSegments', 'decideRoute', 'createRouter'];
   const expected = new Set([...Object.keys(coreplugins), ...Object.keys(appSpace), ...nodeSafeUiKeys]);
   assert.deepEqual(new Set(Object.keys(index)), expected);
 });

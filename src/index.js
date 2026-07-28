@@ -25,11 +25,14 @@
 export * from './bundles/core-plugins.js';
 export * from './bundles/app-space.js';
 
-// ui/bindings.js and ui/hash-router.js (unlike ui/components.js and its
-// Custom Element siblings, see the doc block above) only *reference*
-// browser globals inside function bodies — safe to import in Node too, so
-// they stay directly in this barrel same as before, even though
-// src/bundles/ui.js also includes them (that bundle is "everything UI",
-// this barrel is "everything except the actual Custom Elements").
+// ui/bindings.js, ui/hash-router.js, and ui/router.js (unlike
+// ui/components.js and its Custom Element siblings, see the doc block
+// above) never touch `window`/`document` at module-evaluation time — safe
+// to import in Node too (router.js in particular takes its hash source as
+// an injected parameter, see ui/router-browser.js for the real-window
+// default), so they stay directly in this barrel same as before, even
+// though src/bundles/ui.js also includes them (that bundle is "everything
+// UI", this barrel is "everything except the actual Custom Elements").
 export { viewKey, viewObject, bindKey, bindObject } from './ui/bindings.js';
 export { buildPath, parsePathSegments } from './ui/hash-router.js';
+export { decideRoute, createRouter } from './ui/router.js';
