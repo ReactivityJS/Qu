@@ -47,3 +47,12 @@ export {
   createIncognitoIdentity, listIncognitoIdentities, getIncognitoIdentity, deleteIncognitoIdentity, enterIncognito,
   saveIncognitoIdentity, removeIncognitoIdentity, loadIncognitoStore, onIncognitoIdentitiesChange, createIncognitoPlugin,
 } from '../modules/incognito-identity.js';
+export {
+  createSite, getConfig, onConfig, updateConfig, setNavigationMode,
+  setTemplate, getTemplate, onTemplate,
+  setPage, getPage, onPage,
+  addNavItem, removeNavItem, listNav, onNav,
+  presentRoute, onPresentedRoute,
+  setHomepageSite, getHomepageSite, onHomepageSiteChange,
+  createCmsPlugin,
+} from '../modules/cms.js';

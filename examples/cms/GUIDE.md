@@ -1,6 +1,6 @@
 # QuCMS als universelle Space-App-Basis
 
-Diese Datei beantwortet die Fragen, die beim Bauen von `examples/cms-lib.mjs`
+Diese Datei beantwortet die Fragen, die beim Bauen von `src/modules/cms.js`
 aufkamen: wie groß eine universelle Inhaltsverwaltung für QU tatsächlich sein
 muss, wie man eine Site von komplett leer aus befüllt, ob es sinnvoll ist,
 Doku/Beispiele selbst darüber auszuliefern, wie man reaktives JavaScript in
@@ -9,47 +9,57 @@ Referenzen sind exakte Pfade in diesem Repo, keine Pseudocode-Skizzen.
 
 ## 1. Die Bausteine — und wie groß sie wirklich sind
 
-Drei Schichten, nicht eine — die unterste davon inzwischen Teil des
-Frameworks SELBST, nicht mehr nur eines Beispiels:
+Drei Schichten, nicht eine — die untersten ZWEI davon inzwischen Teil des
+Frameworks SELBST, nicht mehr nur eines Beispiels (`cms.js` startete als
+`examples/cms-lib.mjs`, wurde aber — sobald andere App-Ideen dieselbe
+Config/Templates/Seiten/Menü-Logik brauchten, etwa QUniverses eigene
+Startseiten-Funktion — genau wie `spaces.js` selbst ins Framework gehoben,
+siehe `src/modules/README.md`):
 
 ```
 src/modules/spaces.js            ~60 Zeilen  addToRole()/removeFromRole() — EIN generischer Wrapper für
                                               writers/readers/admins, Teil von createSpacesPlugin() (Core!)
-examples/space-app-lib.mjs      121 Zeilen  benannte Wrapper darüber (grantWriteAccess, setPublic, …) +
-                                              Navigations-Parsing — pure, node-testbar
+src/modules/cms.js              ~230 Zeilen  Config/Templates/Seiten/Menü/Präsentationsmodus + Homepage-
+                                              Discovery — pure, node-testbar, Teil des Frameworks (Core!)
+examples/space-app-lib.mjs      121 Zeilen  benannte Wrapper (grantWriteAccess, setPublic, …) +
+                                              Navigations-Parsing — pure, node-testbar, noch Beispiel-Code
 examples/space-app-browser.js    62 Zeilen  Identity-Bootstrap, Relay-URL, Hash-Watching — browser-only
-examples/cms-lib.mjs            173 Zeilen  Config/Templates/Seiten/Menü/Präsentationsmodus — pure, node-testbar
 examples/cms-router.js          103 Zeilen  lokal- vs. präsentations-Routing — browser-only
 ```
 
-Das sind zusammen **~520 Zeilen**, davon ein erheblicher Teil Kommentare
-(Repo-Konvention: das WARUM dokumentieren, nicht nur das WAS) — der
-tatsächliche Code ist eher die Hälfte. Zum Vergleich: `examples/todo-lib.mjs`
-hat 72 Zeilen, `examples/forum-lib.mjs` 62. Ein "CMS-Plugin" für QU ist also
-keine neue Kategorie von Komplexität, sondern derselbe Maßstab wie jede
-andere Space-App — nur mit fünf statt einer Sorte Inhalt unter einem Space.
+Der tatsächliche Code (abzüglich Kommentare — Repo-Konvention: das WARUM
+dokumentieren, nicht nur das WAS) ist eher die Hälfte der Zeilenzahlen oben.
+Zum Vergleich: `examples/todo-lib.mjs` hat 72 Zeilen, `examples/forum-lib.mjs`
+62. Ein "CMS-Plugin" für QU ist also keine neue Kategorie von Komplexität,
+sondern derselbe Maßstab wie jede andere Space-App — nur mit fünf statt einer
+Sorte Inhalt unter einem Space.
 
 **Warum drei Schichten, kein Monolith:**
 
 - `src/modules/spaces.js`s `addToRole()`/`removeFromRole()` sind der Teil,
   der wirklich in JEDER App auf `createSpacesPlugin()` gleich aussieht —
   "füge diesen Fingerprint zu dieser Rolle hinzu/entferne ihn" — deshalb
-  jetzt im FRAMEWORK selbst (`qu.addToRole(spaceId, role, fingerprint)`),
-  nicht in einem Beispiel: jeder Entwickler, der `createSpacesPlugin()`
-  nutzt, bekommt das automatisch, ganz ohne `examples/` zu importieren.
-- `space-app-lib.mjs`/`-browser.js` bleiben die BENANNTEN, bequemen Wrapper
-  darüber (`grantWriteAccess()` == `addToRole(id, 'writers', fp)`,
+  im FRAMEWORK selbst (`qu.addToRole(spaceId, role, fingerprint)`), nicht in
+  einem Beispiel: jeder Entwickler, der `createSpacesPlugin()` nutzt, bekommt
+  das automatisch, ganz ohne `examples/` zu importieren.
+- `src/modules/cms.js` ist CMS-SPEZIFISCH (Config/Templates/Seiten/
+  Präsentationsmodus/Homepage-Discovery), aber ebenfalls Framework-Code —
+  jede App, die "editierbare Seite + Template" braucht (eine Forum-"Über
+  uns"-Seite, eine Admin-Ankündigung, QUniverses eigener Homepage-Bereich),
+  importiert es direkt, ohne `examples/` zu berühren. Es ersetzt bewusst
+  NICHT `todo-lib.mjs`/`forum-lib.mjs` — ein gemeinsames "Content"-Schema
+  für alle drei würde ihre bewusst unterschiedlichen Schreibmuster verwässern
+  (ToDo: `set()` + Tombstone-Delete; Forum: `set()` + Zeit-Sharding gegen
+  unbegrenztes Wachstum; CMS-Seiten: `put()` pro Slug, ganze Seite auf einmal
+  von einer Person editiert).
+- `space-app-lib.mjs`/`-browser.js`/`cms-router.js` bleiben die BENANNTEN,
+  bequemen Wrapper (`grantWriteAccess()` == `addToRole(id, 'writers', fp)`,
   `setPublic(true)` == `addToRole(id, 'readers', '*')`, …) plus das
-  einheitliche `#spaceId/pfad`-Adressformat — für ToDo-Liste, Forum-Board
-  und CMS-Site identisch, aber (bewusst) noch Beispiel-Code, kein Core.
-- `cms-lib.mjs`/`cms-router.js` sind CMS-SPEZIFISCH (Config/Templates/
-  Seiten/Präsentationsmodus) — bauen auf der Shell auf, ersetzen aber NICHT
-  `todo-lib.mjs`/`forum-lib.mjs`. Ein gemeinsames "Content"-Schema für alle
-  drei würde ihre bewusst unterschiedlichen Schreibmuster verwässern (ToDo:
-  `set()` + Tombstone-Delete; Forum: `set()` + Zeit-Sharding gegen
-  unbegrenztes Wachstum; CMS-Seiten: `put()` pro Slug, ganze Seite auf
-  einmal von einer Person editiert) — siehe den Moduldoku-Kommentar in
-  `space-app-lib.mjs` für die ausführliche Begründung.
+  einheitliche `#spaceId/pfad`-Adressformat und das Hash-/Präsentations-
+  Routing — für ToDo-Liste, Forum-Board und CMS-Site identisch, aber
+  (bewusst) noch Beispiel-Code, kein Core: `#spaceId/pfad` (ohne führenden
+  Slash) ist ein älteres, eigenständiges Format, nicht dasselbe wie
+  `src/ui/hash-router.js`s `#/a/b/c`, siehe deren jeweilige Moduldoku.
 
 Die Shell ist der Beweis, dass sich der gemeinsame Teil sauber herauslösen
 lässt, ohne diesen Unterschied zu verlieren: `examples/forum/app.mjs` und
@@ -73,7 +83,7 @@ wie konfiguriert. Siehe `test/spaces.test.mjs` für die Regressionstests.
 
 `createSite()` legt einen Space mit Manifest UND einer Basis-Konfiguration
 an (`cms/config`, `cms/state/route`) — bewusst NICHT völlig leer, aus
-demselben Grund wie in `cms-lib.mjs`s Doku zu `createSite()` erklärt: `on()`
+demselben Grund wie in `src/modules/cms.js`s Doku zu `createSite()` erklärt: `on()`
 liefert ohne existierenden Wert keine initiale Zustellung, ein komplett
 leerer Space würde jeden späteren Client auf unbestimmte Zeit "Lädt …"
 zeigen. **Aber Templates und Seiten (`cms/templates/*`, `cms/pages/*`) bleiben
@@ -81,7 +91,7 @@ absichtlich leer** — das ist der tatsächliche "Von Null"-Zustand:
 
 ```js
 import { Qu, createNetworkPlugin, createSpacesPlugin, createWebSocketChannel } from '../../src/index.js';
-import { createSite, onConfig, onPage } from '../cms-lib.mjs';
+import { createSite, onConfig, onPage } from '../../src/modules/cms.js';
 
 const qu = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
 const channel = createWebSocketChannel('ws://localhost:8787/relay');
@@ -104,7 +114,7 @@ statt eines Fehlers:
 <body></body>
 <script type="module">
   import { Qu, createNetworkPlugin, createSpacesPlugin, createWebSocketChannel } from '/src/index.js';
-  import { onConfig, onPage } from '/examples/cms-lib.mjs';
+  import { onConfig, onPage } from '/src/modules/cms.js';
 
   const qu = (await Qu.create()).use(createNetworkPlugin()).use(createSpacesPlugin());
   const channel = createWebSocketChannel('ws://' + location.host + '/relay');
@@ -157,10 +167,10 @@ tut das bereits real (nicht nur als Konzept):
 ```js
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import { parseHashRoute, buildHashRoute } from '../space-app-lib.mjs';
-// ... plus die eigene Content-Lib, hier forum-lib.mjs statt cms-lib.mjs
+// ... plus die eigene Content-Lib, hier forum-lib.mjs statt src/modules/cms.js
 ```
 
-Ein Blog wäre technisch der nächstliegende Fall — praktisch `cms-lib.mjs`
+Ein Blog wäre technisch der nächstliegende Fall — praktisch `src/modules/cms.js`
 selbst mit einer anderen Navigations-Konvention (Slugs als Datum+Titel statt
 Menüpunkte) und ohne den Präsentationsmodus, den ein Blog nicht braucht.
 Ein ToDo-Board über der Shell bräuchte nur `todo-lib.mjs` (bereits vorhanden
@@ -258,7 +268,7 @@ kleiner, generischer Erweiterungspunkt, kein Sonderfall pro Block-Typ.
 
 **Templates als Dateien auf dem Server gibt es hier bewusst nicht.** Sie
 sind QuBits wie alles andere (`cms/templates/<name>`, `setTemplate()`/
-`getTemplate()`/`onTemplate()` in `cms-lib.mjs`) — reine HTML-Strings im
+`getTemplate()`/`onTemplate()` in `src/modules/cms.js`) — reine HTML-Strings im
 selben Space, live editierbar, ohne Deployment/Dateisystem-Zugriff. Das
 beantwortet die Frage direkt: "wie verwaltet man HTML, wenn nicht als
 statische Datei" ist bereits die Grundarchitektur dieses CMS, kein

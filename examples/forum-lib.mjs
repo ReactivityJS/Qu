@@ -27,7 +27,7 @@
 // selbst liegt, denn `set()`s Id ist bereits global eindeutig innerhalb
 // des Boards.
 //
-// Nutzerverwaltung (wer darf posten) ist wie bei todo-lib.mjs/cms-lib.mjs
+// Nutzerverwaltung (wer darf posten) ist wie bei todo-lib.mjs/src/modules/cms.js
 // aus space-app-lib.mjs importiert, nicht hier eigenständig dupliziert.
 import { createSpaceApp, getManifest, canWrite, grantWriteAccess, revokeWriteAccess } from './space-app-lib.mjs';
 
