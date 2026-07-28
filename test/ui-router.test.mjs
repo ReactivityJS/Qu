@@ -8,6 +8,9 @@ const CATALOG = [
   { id: 'cms', category: 'service', label: 'CMS', entry: '/services/cms/index.html', enabled: true, spaceMode: 'perUser' },
   { id: 'disabled-app', category: 'service', label: 'Disabled', entry: '/services/disabled/index.html', enabled: false, spaceMode: 'perInstance' },
   { id: 'mount-only', category: 'service', label: 'Mount Only', mount: './mount-only.mjs', spaceMode: 'perInstance' },
+  { id: 'both', category: 'service', label: 'Both', entry: '/services/both/index.html', mount: './both.mjs', spaceMode: 'perInstance' },
+  { id: 'no-loader', category: 'service', label: 'No Loader', spaceMode: 'perInstance' }, // declared, but neither entry nor mount — nothing to actually load
+  { id: 'mounted-chat', category: 'service', label: 'Mounted Chat', mount: './mounted-chat.mjs', enabled: true }, // legacy fixed app, mount-only
 ];
 
 test('decideRoute(): an empty hash is the home screen', () => {
@@ -89,9 +92,31 @@ test('decideRoute(): an appId matching a DISABLED service is unknown, not space'
   assert.equal(d.appId, 'disabled-app');
 });
 
-test('decideRoute(): an appId matching a service with only `mount` (no `entry`) is unknown — this phase can act on neither', () => {
+test('decideRoute(): an appId matching a service with only `mount` (no `entry`) resolves to space, mount surfaced, no entry key at all', () => {
   const d = decideRoute('#/board-42/mount-only', { services: CATALOG });
+  assert.equal(d.kind, 'space');
+  assert.equal(d.mount, './mount-only.mjs');
+  assert.equal('entry' in d, false, 'no entry key when the matched service never declared one');
+});
+
+test('decideRoute(): a service declaring BOTH entry and mount surfaces both on the decision — the caller picks', () => {
+  const d = decideRoute('#/board-42/both', { services: CATALOG });
+  assert.equal(d.kind, 'space');
+  assert.equal(d.entry, '/services/both/index.html');
+  assert.equal(d.mount, './both.mjs');
+});
+
+test('decideRoute(): a service with NEITHER entry nor mount is unknown — declared metadata alone is nothing to load', () => {
+  const d = decideRoute('#/board-42/no-loader', { services: CATALOG });
   assert.equal(d.kind, 'unknown');
+});
+
+test('decideRoute(): a legacy bare fixed-app hash resolves via `mount` too, not just `entry`', () => {
+  const d = decideRoute('#/mounted-chat', { services: CATALOG });
+  assert.equal(d.kind, 'app');
+  assert.equal(d.appId, 'mounted-chat');
+  assert.equal(d.mount, './mounted-chat.mjs');
+  assert.equal('entry' in d, false);
 });
 
 test('decideRoute(): an appId with a loaded-but-non-matching catalog is unknown, spaceId+appId preserved', () => {

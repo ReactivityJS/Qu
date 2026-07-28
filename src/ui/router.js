@@ -4,12 +4,18 @@ import { parsePathSegments } from './hash-router.js';
 // hash-router.js's existing buildPath()/parsePathSegments() (reused
 // verbatim, not reimplemented). Node-safe (no `window` access anywhere in
 // this file) — the injection seam (`getHash`/`onHashChange` as parameters,
-// see createRouter() below) is what a FUTURE in-shell-embedded app would
-// need to not own `window.location.hash` outright, but that scoping/
-// translation mechanism itself is deliberately NOT built here yet — no
-// caller exists for it in this phase (every app is still an `entry`-
-// redirect), and building it now would be speculative generality with
-// nothing to verify it against.
+// see createRouter() below) is what an in-shell-embedded app needs to not
+// own `window.location.hash` outright.
+//
+// A matched service's `entry` AND/OR `mount` (server/service-registry.mjs's
+// App Manifest fields) are BOTH surfaced on the decision when present —
+// this function only ever decides WHICH app answers a route, never HOW to
+// load it (redirect vs. dynamic-import-and-mount): that choice belongs to
+// the caller (a shell that supports in-place mounting prefers `mount`; a
+// plain link/bookmark or a shell that doesn't support mounting falls back
+// to `entry`). A service needs at least one of the two to match at all —
+// one with neither (declared but with nothing to actually load) is
+// `unknown`, same as an unresolvable appId.
 //
 // Route shape is SPACE-FIRST, uniformly: the first segment is always a
 // Space id — either `~<fp>` (a User-Space, always structurally valid, no
@@ -48,9 +54,10 @@ import { parsePathSegments } from './hash-router.js';
  *
  * For BOTH space-first forms, the (optional) second segment is the appId
  * that renders this space:
- *   - given, matches an enabled+`entry`-having catalog service
- *     -> `{kind:'space', spaceId, appId, entry, segments}`
- *   - given, but no such match (unknown/disabled/no entry)
+ *   - given, matches an enabled catalog service with an `entry` and/or a
+ *     `mount` -> `{kind:'space', spaceId, appId, entry?, mount?, segments}`
+ *     (whichever of the two fields the matched service actually declared)
+ *   - given, but no such match (unknown/disabled/neither entry nor mount)
  *     -> `{kind:'unknown', spaceId, appId, segments}`
  *   - NOT given at all
  *     -> `{kind:'space-default', spaceId, segments}` — deciding a default
@@ -79,8 +86,8 @@ export function decideRoute(hash, { services } = {}) {
   if (!first.startsWith('~') && first !== 'u') {
     if (services === undefined) return { kind: 'pending', segments };
     const fixedMatch = services.find((s) => s.id === first && (s.spaceMode === undefined || s.spaceMode === 'fixed'));
-    if (fixedMatch && fixedMatch.enabled !== false && fixedMatch.entry) {
-      return { kind: 'app', appId: first, entry: fixedMatch.entry, segments };
+    if (fixedMatch && fixedMatch.enabled !== false && (fixedMatch.entry || fixedMatch.mount)) {
+      return { kind: 'app', appId: first, ...(fixedMatch.entry && { entry: fixedMatch.entry }), ...(fixedMatch.mount && { mount: fixedMatch.mount }), segments };
     }
   }
 
@@ -105,8 +112,8 @@ export function decideRoute(hash, { services } = {}) {
   if (services === undefined) return { kind: 'pending', segments };
 
   const match = services.find((s) => s.id === appId);
-  if (match && match.enabled !== false && match.entry) {
-    return { kind: 'space', spaceId, appId, entry: match.entry, segments };
+  if (match && match.enabled !== false && (match.entry || match.mount)) {
+    return { kind: 'space', spaceId, appId, ...(match.entry && { entry: match.entry }), ...(match.mount && { mount: match.mount }), segments };
   }
   return { kind: 'unknown', spaceId, appId, segments };
 }
