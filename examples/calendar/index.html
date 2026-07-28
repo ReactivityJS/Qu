@@ -17,16 +17,18 @@
        that one container so nothing here leaks into any other page. */
     .calendar-shell { max-width: 960px; }
     .gcal {
-      --gcal-bg: #ffffff;
-      --gcal-surface: #f8f9fa;
-      --gcal-border: #dadce0;
+      /* Etwas gedämpfter als reines Weiß/Google-Blau — auf dem dunklen
+         Seiten-Hintergrund wirkte die ursprüngliche Kombination zu grell. */
+      --gcal-bg: #f6f7f8;
+      --gcal-surface: #ececee;
+      --gcal-border: #d7d9dc;
       --gcal-text: #3c4043;
       --gcal-muted: #5f6368;
-      --gcal-accent: #1a73e8;
-      --gcal-accent-dark: #1558b3;
-      --gcal-danger: #d93025;
-      --gcal-today: #e8f0fe;
-      --gcal-shadow: 0 1px 3px rgba(60, 64, 67, 0.15), 0 1px 2px rgba(60, 64, 67, 0.3);
+      --gcal-accent: #3d6fb4;
+      --gcal-accent-dark: #2f5a97;
+      --gcal-danger: #b3453b;
+      --gcal-today: #e3ebf5;
+      --gcal-shadow: 0 1px 2px rgba(60, 64, 67, 0.12);
       background: var(--gcal-bg);
       color: var(--gcal-text);
       border-radius: 12px;
@@ -53,11 +55,12 @@
     .gcal-toolbar .left { display: flex; align-items: center; gap: 0.6rem; }
     .gcal-toolbar .title { font-size: 1.2rem; font-weight: 400; color: var(--gcal-text); min-width: 9rem; }
     .gcal-nav-arrows { display: flex; }
+    .gcal-nav-arrows[hidden] { display: none; }
     .gcal-btn { background: var(--gcal-bg); color: var(--gcal-text); border: 1px solid var(--gcal-border); border-radius: 6px; padding: 0.45rem 0.9rem; font-weight: 500; font-size: 0.85rem; cursor: pointer; }
     .gcal-btn:hover { background: var(--gcal-surface); }
     .gcal-btn-primary { background: var(--gcal-accent); color: #fff; border-color: var(--gcal-accent); }
     .gcal-btn-primary:hover { background: var(--gcal-accent-dark); }
-    .gcal-btn-danger { background: #fff; color: var(--gcal-danger); border-color: var(--gcal-danger); }
+    .gcal-btn-danger { background: var(--gcal-bg); color: var(--gcal-danger); border-color: var(--gcal-danger); }
     .gcal-btn-danger:hover { background: #fce8e6; }
     .gcal-view-switch { display: inline-flex; border: 1px solid var(--gcal-border); border-radius: 6px; overflow: hidden; }
     .gcal-view-switch button { background: var(--gcal-bg); border: none; border-right: 1px solid var(--gcal-border); color: var(--gcal-muted); padding: 0.45rem 0.9rem; font-size: 0.82rem; cursor: pointer; }
@@ -86,10 +89,12 @@
     .week-day.today .week-day-head { color: var(--gcal-accent); font-weight: 700; }
     .week-day-head { font-weight: 500; margin-bottom: 0.4rem; color: var(--gcal-muted); }
 
-    /* --- Day (agenda) view --- */
-    ul#day-events { list-style: none; margin: 0 0 1rem; padding: 0; }
-    ul#day-events li { background: var(--gcal-bg); border: 1px solid var(--gcal-border); border-left: 4px solid var(--gcal-accent); border-radius: 8px; padding: 0.7rem 0.9rem; margin-bottom: 0.6rem; cursor: pointer; display: flex; gap: 0.7rem; flex-wrap: wrap; align-items: baseline; }
-    ul#day-events li:hover { box-shadow: var(--gcal-shadow); }
+    /* --- Day (agenda) view + Listenansicht (agenda über mehrere Tage) --- */
+    ul#day-events, ul#agenda-list { list-style: none; margin: 0 0 1rem; padding: 0; }
+    ul#day-events li, ul#agenda-list li.agenda-event { background: var(--gcal-bg); border: 1px solid var(--gcal-border); border-left: 4px solid var(--gcal-accent); border-radius: 8px; padding: 0.7rem 0.9rem; margin-bottom: 0.6rem; cursor: pointer; display: flex; gap: 0.7rem; flex-wrap: wrap; align-items: baseline; }
+    ul#day-events li:hover, ul#agenda-list li.agenda-event:hover { box-shadow: var(--gcal-shadow); }
+    ul#agenda-list li.agenda-date-header { font-size: 0.78rem; font-weight: 600; color: var(--gcal-muted); text-transform: uppercase; letter-spacing: 0.02em; margin: 1rem 0 0.4rem; }
+    ul#agenda-list li.agenda-date-header:first-child { margin-top: 0; }
     .ev-time { color: var(--gcal-accent); font-weight: 600; font-size: 0.82rem; }
     .ev-title { font-weight: 500; }
     .ev-meta { font-size: 0.78rem; color: var(--gcal-muted); }
@@ -159,8 +164,18 @@
       .gcal-toolbar .right { display: flex; gap: 0.5rem; flex-wrap: wrap; }
       /* 44px minimum touch target (iOS guidance), same rule examples/chat/style.css already applies for its own mobile layout. */
       .gcal-btn, .gcal-view-switch button { min-height: 2.6rem; }
-      .day-cell { min-height: 60px; font-size: 0.68rem; padding: 0.25rem; }
-      .week-day { min-height: 110px; }
+      /* Auf dem Handy soll NICHTS horizontal gescrollt werden müssen — das
+         Monats-/Wochenraster bekommt hier keine feste Mindestbreite mehr
+         (anders als am Desktop, siehe .grid-scroll oben), sondern schrumpft
+         auf die tatsächliche Bildschirmbreite; Termin-Titel werden dafür
+         stärker abgeschnitten (Ellipsis) statt lesbar zu bleiben — wer den
+         vollen Titel sehen will, nutzt die Listen- oder Tagesansicht. */
+      .grid-scroll { overflow-x: visible; }
+      .weekday-row, .month-grid, .week-grid { min-width: 0; }
+      .day-cell { min-height: 56px; font-size: 0.62rem; padding: 0.2rem; }
+      .day-num { width: 1.2rem; height: 1.2rem; font-size: 0.68rem; }
+      .day-event { padding: 0.05rem 0.2rem; }
+      .week-day { min-height: 100px; font-size: 0.68rem; padding: 0.3rem; }
       ul#day-events li { padding: 0.7rem 0.8rem; }
       /* 16px stops iOS Safari from auto-zooming the page on input focus (same rule examples/chat/style.css's .composer inputs already apply). */
       #event-form input, #event-form textarea, #edit-form input, #edit-form textarea, .row input[type="text"], qu-people-search .qu-people-search-input { font-size: 16px; }
@@ -208,6 +223,7 @@
         </div>
         <div class="right" style="display:flex; align-items:center; gap:0.6rem;">
           <div class="gcal-view-switch">
+            <button type="button" id="nav-list">Liste</button>
             <button type="button" id="nav-month">Monat</button>
             <button type="button" id="nav-week">Woche</button>
             <button type="button" id="nav-day">Tag</button>
