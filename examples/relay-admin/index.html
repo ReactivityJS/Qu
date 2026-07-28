@@ -58,6 +58,16 @@
         <button id="connection-limit-save" type="button">Speichern</button>
       </div>
     </section>
+
+    <section class="panel">
+      <h2>Plattform-Module</h2>
+      <p class="hint">Optionale QUniverse-Shell-Features (Kontaktliste, CMS-Startseite, Benachrichtigungen,
+        Verzeichnis, Incognito-Identitäten) — getrennt von den Services oben: diese schalten keine eigene
+        App an/aus, sondern welche Bausteine eine Ökosystem-Shell überhaupt installiert/rendert. Ein Relay
+        ohne Plattform-Registry (<code>platformRegistry</code> nicht übergeben) zeigt hier keine Module an.</p>
+      <ul id="platform-modules-list" class="service-list"></ul>
+      <p id="platform-modules-off" class="hint" hidden>Keine Plattform-Registry auf diesem Relay konfiguriert.</p>
+    </section>
   </main>
   <script type="module" src="./app.mjs"></script>
 </body>

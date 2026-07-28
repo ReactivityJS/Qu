@@ -12,6 +12,7 @@
 
 import { createNetworkPlugin, createSpacesPlugin, createWebSocketChannel } from '../../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
+import { PLATFORM_MODULES } from '../../server/platform-registry.mjs'; // labels only (id -> label) — the actual enabled state always comes live from /relay/info, never from this static list
 
 const IDENTITY_KEY = 'qu-identity'; // siehe examples/chat/app.mjs's IDENTITY_KEY-Doku — bewusst DERSELBE Wert wie chat/people: EIN Fingerprint fürs gesamte Ökosystem, kein pro-App-Konto. Ein früherer eigener Key hier ('qu-relay-admin-identity') war ein Fehler — QU_RELAY_ADMINS wird typischerweise mit dem Fingerprint gepinnt, den man schon aus Chat/People kennt; ein zweiter, abweichender Key hätte hier still eine ANDERE Identität angelegt, die nie zu QU_RELAY_ADMINS passt, egal was dort eingetragen ist.
 
@@ -30,6 +31,8 @@ const rateLimitSaveBtn = $('rate-limit-save');
 const connectionLimitMaxEl = $('connection-limit-max');
 const connectionLimitFpsEl = $('connection-limit-fps');
 const connectionLimitSaveBtn = $('connection-limit-save');
+const platformModulesListEl = $('platform-modules-list');
+const platformModulesOffEl = $('platform-modules-off');
 
 function showStatus(message, kind) {
   statusEl.textContent = message;
@@ -108,9 +111,51 @@ function renderAdminConfig({ rateLimit, connectionLimit }) {
 
 async function refreshAdminConfig() {
   const info = await fetchJSON('/relay/info');
-  const adminConfig = info.adminConfig ?? { rateLimit: null, connectionLimit: null };
+  const adminConfig = info.adminConfig ?? { rateLimit: null, connectionLimit: null, platformModules: null };
   renderAdminConfig(adminConfig);
+  renderPlatformModules(adminConfig.platformModules);
   return adminConfig;
+}
+
+let togglePlatformModule; // assigned in main() once `qu`/relay info are known — same deferred-assignment shape as toggleService() above
+
+/**
+ * `platformModules`: `{ [id]: boolean }` (server/platform-registry.mjs's
+ * getConfig() shape) or `null` if this relay wasn't given a
+ * platformRegistry at all. Labels come from the static `PLATFORM_MODULES`
+ * import above — only the enabled flag is ever live/server-sourced.
+ */
+function renderPlatformModules(platformModules) {
+  if (!platformModules) {
+    platformModulesListEl.hidden = true;
+    platformModulesOffEl.hidden = false;
+    return;
+  }
+  platformModulesListEl.hidden = false;
+  platformModulesOffEl.hidden = true;
+  platformModulesListEl.textContent = '';
+  for (const { id, label } of PLATFORM_MODULES) {
+    const enabled = platformModules[id] ?? false;
+    const li = document.createElement('li');
+
+    const name = document.createElement('div');
+    name.className = 'name';
+    const labelEl = document.createElement('div');
+    labelEl.textContent = label;
+    const idEl = document.createElement('div');
+    idEl.className = 'id';
+    idEl.textContent = id;
+    name.append(labelEl, idEl);
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = enabled ? 'enabled' : 'disabled';
+    toggleBtn.textContent = enabled ? '● aktiv' : '○ deaktiviert';
+    toggleBtn.addEventListener('click', () => togglePlatformModule(id, label, enabled, toggleBtn));
+
+    li.append(name, toggleBtn);
+    platformModulesListEl.appendChild(li);
+  }
 }
 
 async function main() {
@@ -119,7 +164,9 @@ async function main() {
 
   const info = await fetchJSON('/relay/info');
   relayFpEl.textContent = info.fingerprint;
-  renderAdminConfig(info.adminConfig ?? { rateLimit: null, connectionLimit: null });
+  const initialAdminConfig = info.adminConfig ?? { rateLimit: null, connectionLimit: null, platformModules: null };
+  renderAdminConfig(initialAdminConfig);
+  renderPlatformModules(initialAdminConfig.platformModules);
 
   // createSpacesPlugin() is needed here for a subtle reason unrelated to
   // Spaces themselves: WITHOUT it, this Qu instance's LOCAL ingest() still
@@ -203,6 +250,30 @@ async function main() {
       rateLimitSaveBtn.disabled = false;
     }
   });
+
+  /**
+   * Same fire-and-forget-then-reread confirmation as toggleService()/the
+   * rate-limit/connection-limit save handlers above — a single module's
+   * flag flips via `{ modules: { [id]: !enabled } }`, leaving every other
+   * module's state untouched (server/platform-registry.mjs's configure()
+   * only ever patches the ids present in the payload).
+   */
+  togglePlatformModule = async (id, label, enabled, btn) => {
+    btn.disabled = true;
+    try {
+      await qu.session.publish('admin/config/platform-modules', { modules: { [id]: !enabled } }, { encryptFor: [info.fingerprint] });
+      await wait(200);
+      const { platformModules } = await refreshAdminConfig();
+      if (platformModules && platformModules[id] === !enabled) {
+        showStatus(`"${label}" ${enabled ? 'deaktiviert' : 'aktiviert'}.`, 'ok');
+      } else {
+        showStatus(`"${label}" unverändert — keine Bestätigung vom Relay erhalten. Ist deine Identität (${qu.fingerprint}) als QU_RELAY_ADMINS-Fingerprint hinterlegt?`, 'err');
+      }
+    } catch (e) {
+      showStatus(`Fehlgeschlagen: ${e.message}`, 'err');
+      btn.disabled = false;
+    }
+  };
 
   connectionLimitSaveBtn.addEventListener('click', async () => {
     connectionLimitSaveBtn.disabled = true;

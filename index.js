@@ -20,6 +20,7 @@ import { createPushRoutes } from './server/push-routes.mjs';
 import { createWebRTCRoutes } from './server/webrtc-routes.mjs';
 import { createPortalRoutes } from './server/portal-routes.mjs';
 import { createServiceRegistry } from './server/service-registry.mjs';
+import { createPlatformRegistry } from './server/platform-registry.mjs';
 import { createRelayInfoRoutes } from './server/relay-info-routes.mjs';
 import { createRelay } from './relay/relay.mjs';
 import { loadOrGenerateRelayIdentity } from './relay/relay-identity.mjs';
@@ -118,6 +119,19 @@ const registry = createServiceRegistry([
 ]);
 for (const id of (process.env.QU_SERVICES_DISABLED || '').split(',').map((s) => s.trim()).filter(Boolean)) {
   registry.setEnabled(id, false);
+}
+
+// The Platform-Feature registry (server/platform-registry.mjs — contacts,
+// CMS-homepage, notification-aggregation, directory, incognito) — this
+// demo deployment has no shell that reads it yet (that's QUniverse's job,
+// a separate product built on top of this repo), but every relay carries
+// one regardless so examples/relay-admin's platform-modules panel has a
+// real registry to administer, same as rate-limit/connection-limit above.
+// Same QU_SERVICES_DISABLED convention, its own env var:
+// `QU_PLATFORM_MODULES_DISABLED=contacts,incognito`.
+const platformRegistry = createPlatformRegistry();
+for (const id of (process.env.QU_PLATFORM_MODULES_DISABLED || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+  platformRegistry.setEnabled(id, false);
 }
 
 // Fingerprints allowed to administer this relay (currently: write the
@@ -362,7 +376,7 @@ const connectionGate = (maxConnectionsEnv != null || allowedFingerprintsEnv.leng
 // serve all three example apps, so it opts all three in; a deployment
 // serving only one of them would list only that one's rule.
 const pushRules = [createChatPushRule(), createCalendarPushRule(), createItemInvitePushRule()];
-relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, connectionGate, sendPush, pushSubscriptions, pushRules, relayAdmins, serviceRegistry: registry });
+relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, connectionGate, sendPush, pushSubscriptions, pushRules, relayAdmins, serviceRegistry: registry, platformRegistry });
 await relayApi.relay.publishProfile(); // makes ~<fingerprint>/epub discoverable — the one thing anything encrypting TO this relay needs to look up (also directly served at /relay/info above, no sync required)
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
 console.log(`[Relay] Identity: ${relayIdentity.fingerprint}${persistent ? ' (stable across restarts)' : ' (ephemeral — QU_STORE=memory, a fresh fingerprint every restart)'}`);
