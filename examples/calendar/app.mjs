@@ -60,6 +60,7 @@ const todayBtn = el('today-btn');
 const prevBtn = el('prev-btn');
 const nextBtn = el('next-btn');
 const createBtn = el('create-btn');
+const navListBtn = el('nav-list');
 const navMonthBtn = el('nav-month');
 const navWeekBtn = el('nav-week');
 const navDayBtn = el('nav-day');
@@ -294,35 +295,44 @@ async function main() {
     location.hash = buildPath(calendarId, nextView, nextParam ?? '', ...(nextExtra ? [nextExtra] : []));
   }
   function setActiveNav(activeView) {
-    for (const [btn, v] of [[navMonthBtn, 'month'], [navWeekBtn, 'week'], [navDayBtn, 'day']]) {
+    for (const [btn, v] of [[navListBtn, 'list'], [navMonthBtn, 'month'], [navWeekBtn, 'week'], [navDayBtn, 'day']]) {
       btn.classList.toggle('active', v === activeView);
     }
     toolbarEl.hidden = activeView === 'event' || activeView === 'settings';
+    // Die Listenansicht hat kein "vorher"/"nachher" (sie zeigt immer "ab
+    // jetzt") — Datums-Pfeile/Heute machen dort nichts Sinnvolles, also
+    // ausblenden statt eine falsche Erwartung zu wecken.
+    todayBtn.hidden = activeView === 'list';
+    el('gcal-toolbar').querySelector('.gcal-nav-arrows').hidden = activeView === 'list';
   }
   /** Ein repräsentatives Datum für die aktuelle Route — was "Heute"/"‹"/"›" als Bezugspunkt nehmen. */
   function currentAnchorMs() {
     if (view === 'week' || view === 'day') return parseYmd(param || ymd(Date.now()));
+    if (view === 'list') return Date.now();
     return parseYm(param || calendarBucketOf(Date.now()));
   }
 
   todayBtn.addEventListener('click', () => {
     if (view === 'week') navTo('week', ymd(Date.now()));
     else if (view === 'day') navTo('day', ymd(Date.now()));
-    else navTo('month', calendarBucketOf(Date.now()));
+    else if (view !== 'list') navTo('month', calendarBucketOf(Date.now()));
   });
   prevBtn.addEventListener('click', () => {
+    if (view === 'list') return;
     const anchor = currentAnchorMs();
     if (view === 'week') navTo('week', ymd(anchor - 7 * 86400000));
     else if (view === 'day') navTo('day', ymd(anchor - 86400000));
     else { const d = new Date(anchor); d.setUTCMonth(d.getUTCMonth() - 1); navTo('month', calendarBucketOf(d.getTime())); }
   });
   nextBtn.addEventListener('click', () => {
+    if (view === 'list') return;
     const anchor = currentAnchorMs();
     if (view === 'week') navTo('week', ymd(anchor + 7 * 86400000));
     else if (view === 'day') navTo('day', ymd(anchor + 86400000));
     else { const d = new Date(anchor); d.setUTCMonth(d.getUTCMonth() + 1); navTo('month', calendarBucketOf(d.getTime())); }
   });
   createBtn.addEventListener('click', () => navTo('event', 'new', ymd(currentAnchorMs())));
+  navListBtn.addEventListener('click', () => navTo('list'));
   navMonthBtn.addEventListener('click', () => navTo('month', calendarBucketOf(currentAnchorMs())));
   navWeekBtn.addEventListener('click', () => navTo('week', ymd(currentAnchorMs())));
   navDayBtn.addEventListener('click', () => navTo('day', ymd(currentAnchorMs())));
@@ -359,7 +369,7 @@ async function main() {
         </div>`;
       viewRoot.querySelectorAll('.day-cell').forEach((cellEl) => cellEl.addEventListener('click', (ev) => {
         if (ev.target.closest('.day-event')) return;
-        navTo('event', 'new', cellEl.dataset.date);
+        navTo('day', cellEl.dataset.date);
       }));
       viewRoot.querySelectorAll('.day-event').forEach((evEl) => evEl.addEventListener('click', (ev) => { ev.stopPropagation(); navTo('event', evEl.dataset.event); }));
     }
@@ -392,7 +402,7 @@ async function main() {
       viewRoot.innerHTML = `<div class="grid-scroll"><div class="week-grid">${days.join('')}</div></div>`;
       viewRoot.querySelectorAll('.week-day').forEach((cellEl) => cellEl.addEventListener('click', (ev) => {
         if (ev.target.closest('.day-event')) return;
-        navTo('event', 'new', cellEl.dataset.date);
+        navTo('day', cellEl.dataset.date);
       }));
       viewRoot.querySelectorAll('.day-event').forEach((evEl) => evEl.addEventListener('click', (ev) => { ev.stopPropagation(); navTo('event', evEl.dataset.event); }));
     }
@@ -422,6 +432,49 @@ async function main() {
       viewRoot.querySelectorAll('#day-events li').forEach((li) => li.addEventListener('click', () => navTo('event', li.dataset.event)));
     }
     subscribeBucket(bucket, draw);
+    await draw();
+  }
+
+  // --- Listenansicht (Agenda): anstehende Termine über mehrere Tage/Monate
+  // hinweg, ohne Raster — keine horizontale Breite, die auf dem Handy zum
+  // Scrollen zwingen würde, und für viele Termine übersichtlicher als ein
+  // Monatsraster mit vielen kleinen Chips. Bewusst auf ein festes Fenster
+  // begrenzt (heute + ~2 Monate, zwei Buckets) statt "alle Termine für
+  // immer" — dieselbe "nie den ganzen Kalender abonnieren"-Regel wie
+  // Monats-/Wochenansicht. ---
+  async function renderList() {
+    clearBucketSubs();
+    const fromMs = startOfDayUTC(Date.now());
+    const bucket1 = calendarBucketOf(fromMs);
+    const laterAnchor = new Date(fromMs);
+    laterAnchor.setUTCMonth(laterAnchor.getUTCMonth() + 2);
+    const bucket2 = calendarBucketOf(laterAnchor.getTime());
+    rangeTitleEl.textContent = 'Anstehende Termine';
+
+    async function draw() {
+      const evs = visibleEvents(fromMs, laterAnchor.getTime());
+      if (!evs.length) { viewRoot.innerHTML = '<p id="empty-notice">Keine anstehenden Termine in den nächsten zwei Monaten.</p>'; return; }
+      let lastDateStr = '';
+      const rows = [];
+      for (const q of evs) {
+        const dateStr = ymd(q.value.start);
+        if (dateStr !== lastDateStr) {
+          const d = parseYmd(dateStr);
+          const dow = new Date(d).getUTCDay();
+          rows.push(`<li class="agenda-date-header">${WEEKDAY_LONG[dow === 0 ? 6 : dow - 1]}, ${new Date(d).getUTCDate()}. ${MONTH_NAMES[new Date(d).getUTCMonth()]}</li>`);
+          lastDateStr = dateStr;
+        }
+        rows.push(`<li class="agenda-event" data-event="${esc(q.id)}" style="border-left-color:${colorForFp(q.writer)}">
+          <span class="ev-time">${q.value.allDay ? 'ganztägig' : hm(q.value.start)}</span>
+          <span class="ev-title">${esc(q.value.title)}</span>
+          ${q.value.location ? `<span class="ev-meta">📍 ${esc(q.value.location)}</span>` : ''}
+        </li>`);
+      }
+      viewRoot.innerHTML = `<ul id="agenda-list">${rows.join('')}</ul>`;
+      viewRoot.querySelectorAll('#agenda-list li.agenda-event').forEach((li) => li.addEventListener('click', () => navTo('event', li.dataset.event)));
+    }
+    subscribeBucket(bucket1, draw);
+    if (bucket2 !== bucket1) subscribeBucket(bucket2, draw);
     await draw();
   }
 
@@ -735,6 +788,7 @@ async function main() {
     if (view === 'month') await renderMonth(param || calendarBucketOf(Date.now()));
     else if (view === 'week') await renderWeek(param || ymd(Date.now()));
     else if (view === 'day') await renderDay(param || ymd(Date.now()));
+    else if (view === 'list') await renderList();
     else if (view === 'event') await renderEvent(param, extra);
     else if (view === 'settings') await renderSettings();
     else await renderMonth(calendarBucketOf(Date.now()));
