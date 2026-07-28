@@ -111,6 +111,18 @@ Verschlüsselung, Sync und Dateien: siehe [`API.md`](./API.md)
 `QuSession`, `QuStore`, …) bleiben für fortgeschrittene Fälle direkt
 nutzbar — `qu.runtime` ist die Fluchttür dorthin.
 
+## QUniverse — das Ökosystem-Produkt auf Qu
+
+[`quniverse/`](./quniverse/README.md) ist ein eigenständiges Produkt, das auf
+Qu aufbaut: ein Relay-Deployment + Ökosystem-Shell (Router, Navigation,
+Identity-Viewer, zentrale Benachrichtigungen, Push) + eine wachsende Zahl
+konkreter Apps (`quniverse/services/`). Es lebt als Unterordner in diesem
+Repo (kein eigenes `package.json`, reine relative Importe wie jedes
+`examples/`-Modul) — siehe [`quniverse/README.md`](./quniverse/README.md)
+für Start (`npm run quniverse`), Umgebungsvariablen und Struktur. Anders als
+`examples/` (Lernmaterial/Demos für Qu Core, Plugins und Module) ist
+`quniverse/` echte, nutzbare Produkt-Software.
+
 ## Grundkonzepte an Beispielen
 
 Baut die Kernkonzepte in der Reihenfolge auf, in der man sie beim Einsatz von

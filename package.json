@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node index.js",
     "test": "node --test",
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "quniverse": "node quniverse/server.mjs"
   },
   "license": "UNLICENSED",
   "devDependencies": {
