@@ -58,7 +58,18 @@ incognito-identity.js Independent utility: mint additional, unlinked identities
                       their main one for a given Space — hides which real user
                       is behind a Space's membership from co-members and casual
                       content inspection, NOT from a relay operator correlating
-                      connection metadata (see the file's own doc comment).
+                      connection metadata (see the file's own doc comment). Also
+                      exports a persisted, encrypted-to-self alias list
+                      (saveIncognitoIdentity()/loadIncognitoStore()/
+                      removeIncognitoIdentity()/onIncognitoIdentitiesChange()) —
+                      one QuBit per alias under the MAIN identity's own Space,
+                      so the alias list itself survives a reload and syncs
+                      across that identity's own devices, with only the COUNT
+                      of aliases ever visible to a relay mirroring it.
+
+contacts.js           Independent utility: a private "people I know" list —
+                      distinct from profiles.js's PUBLIC opt-in directory,
+                      encrypted-to-self, never visible to anyone but the owner.
 ```
 
 A new shared-Space app typically needs, bottom-up:
@@ -82,10 +93,11 @@ A new shared-Space app typically needs, bottom-up:
    same "one plain Space, get/put/set/map on top of it" recipe `chat.js`'s
    own doc comment demonstrates.
 
-`profiles.js`, `identity-transfer.js`, and `incognito-identity.js` sit
-outside this chain — they're about the identity itself (attributes,
-directory, device transfer, minting an additional one), not about any
-particular Space, and are useful to any app regardless of whether it uses
+`profiles.js`, `identity-transfer.js`, `incognito-identity.js`, and
+`contacts.js` sit outside this chain — they're about the identity itself
+(attributes, directory, device transfer, minting an additional one, a
+private contact list), not about any particular Space, and are useful to
+any app regardless of whether it uses
 `space-membership.js` at all.
 
 See each file's own header comment for the full reasoning; see
