@@ -13,6 +13,7 @@ export { buildPath, parsePathSegments } from '../ui/hash-router.js';
 export { decideRoute, createRouter } from '../ui/router.js';
 export { createWindowHashSource } from '../ui/router-browser.js';
 export { getTheme, setTheme, onThemeChange, applyTheme } from '../ui/theme.js';
+export { canShare, shareContent } from '../ui/share.mjs';
 export { findQu, QuViewElement, QuBindElement, QuListElement } from '../ui/components.js';
 export { QuProfileCardElement } from '../ui/profile-components.js';
 export { QuPeopleSearchElement } from '../ui/people-search-components.js';
