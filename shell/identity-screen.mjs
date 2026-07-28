@@ -8,9 +8,9 @@
 // testability (none — DOM-only, verified via a real browser, see the
 // Phase 1 plan's own verification section).
 
-import { isValidFingerprint, DIRECTORY_ID, buildPath } from '../../src/index.js';
-import { canShare, shareContent } from '../../src/ui/share.mjs';
-import { isPushSupported, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '../../src/ui/push.mjs';
+import { isValidFingerprint, DIRECTORY_ID, buildPath } from '../src/index.js';
+import { canShare, shareContent } from '../src/ui/share.mjs';
+import { isPushSupported, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '../src/ui/push.mjs';
 
 /**
  * Renders into `container` (cleared first). `qu` is the shell's shared,

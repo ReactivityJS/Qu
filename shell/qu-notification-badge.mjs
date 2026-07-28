@@ -29,8 +29,8 @@
 // would still needlessly break `findQu()`'s parentNode/host walk-up for
 // nothing this component needs.
 
-import { onNotification, onSpaceInvite, buildPath } from '../../src/index.js';
-import { findQu } from '../../src/ui/components.js';
+import { onNotification, onSpaceInvite, buildPath } from '../src/index.js';
+import { findQu } from '../src/ui/components.js';
 
 const LAST_SEEN_PREFIX = 'qu-inbox-last-seen-';
 const MAX_SHOWN = 20; // a dropdown, not a full inbox page — most-recent slice only, oldest still reachable by re-navigating (no pagination UI in this phase)

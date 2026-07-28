@@ -11,10 +11,12 @@
 // Reachable two ways, deliberately both real:
 //   #/services | #/examples | #/documentation   (a click on a tab, or a
 //     shared/bookmarked link with the hash already set)
-//   /services  | /examples  | /documentation     (typed/linked directly,
-//     no hash at all — server/portal-routes.mjs serves this same page for
-//     each; categoryFromPathname() below picks the matching category as
-//     the initial view before any hash exists)
+//   /dev/services | /dev/examples | /dev/documentation   (typed/linked
+//     directly, no hash at all — server/portal-routes.mjs serves this same
+//     page for each; categoryFromPathname() below strips the /dev/ prefix
+//     and picks the matching category as the initial view before any hash
+//     exists). This page itself now lives under /dev/ — QUniverse's own
+//     shell owns "/" (see root index.js's createRootContentRoutes()).
 //
 // The card CONTENT per category (which services/examples/docs exist, and
 // whether each is currently enabled) comes from GET /relay/services
@@ -25,8 +27,8 @@
 // "kept in sync manually") with one server-side source of truth every
 // client reads.
 
-import { buildPath, parsePathSegments } from './src/ui/hash-router.js';
-import { QuIdentity } from './src/index.js';
+import { buildPath, parsePathSegments } from '../src/ui/hash-router.js';
+import { QuIdentity } from '../src/index.js';
 
 // 'admin' is a real, navigable category (renderRoute()/showCategory()
 // both need to know about it) even though its TAB starts `hidden` in the
@@ -99,8 +101,8 @@ const sections = document.querySelectorAll('.cards-section');
 let serviceEntries = {};
 
 function categoryFromPathname() {
-  const segment = location.pathname.replace(/^\/|\/$/g, '');
-  return CATEGORIES.includes(segment) ? segment : null;
+  const match = /^\/dev\/([^/]+)\/?$/.exec(location.pathname);
+  return match && CATEGORIES.includes(match[1]) ? match[1] : null;
 }
 
 function showCategory(category) {

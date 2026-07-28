@@ -16,7 +16,7 @@ services/<name>/<name>-lib.mjs      Reine Logik, Node-testbar (put/set/Zeit-Shar
 services/<name>/<name>-lib.test.mjs node --test, echte In-Memory-Qu-Instanzen
                                      (kein Mocking — Qu-Repo-Konvention).
 services/<name>/app.mjs             Browser-UI — für einen `entry`-basierten Standalone-Service:
-                                     importiert ../../../src/ui/session-bootstrap.js (geteilte
+                                     importiert ../../src/ui/session-bootstrap.js (geteilte
                                      Identität). Für einen `mount`-basierten Service (siehe unten):
                                      exportiert nur `mount(container, {qu, spaceId, appId, segments})`,
                                      die Shell übergibt bereits ein verbundenes `qu` — kein eigener
@@ -29,7 +29,7 @@ services/<name>/index.html          Eigenständige Shell — nur falls die App z
 ## App-Manifest
 
 Das Manifest-Format ist in Qu selbst definiert
-(`../../server/service-registry.mjs`, Dateikopf-Kommentar) — additiv zum
+(`../server/service-registry.mjs`, Dateikopf-Kommentar) — additiv zum
 bestehenden Service-Katalog-Format:
 
 ```js
@@ -39,8 +39,8 @@ export default {
   category: 'service',
   label: 'Forum',
   description: 'Zeit-geshardetes Forum mit Boards/Topics.',
-  mount: '/quniverse/services/forum/app.mjs', // bevorzugt: In-Shell-Mount, kein Seitenwechsel (siehe unten)
-  // entry: '/quniverse/services/forum/index.html', // Alternative: eigenständige Seite (Fallback für nicht migrierte Services)
+  mount: '/services/forum/app.mjs', // bevorzugt: In-Shell-Mount, kein Seitenwechsel (siehe unten)
+  // entry: '/services/forum/index.html', // Alternative: eigenständige Seite (Fallback für nicht migrierte Services)
   icon: '💬',
   navOrder: 10,
   spaceMode: 'perInstance', // 'fixed' | 'perUser' | 'perInstance' — siehe Qu's APP-GUIDE.md Schritt 3
@@ -60,10 +60,10 @@ laufzeit-veränderlicher `relay-services/<id>`-QuBit (siehe
 
 `../index.html` + `../app.mjs` + `../shell/` (`qu-app-shell.mjs`,
 `qu-nav-dropdown.mjs`, `qu-notification-badge.mjs`, `identity-screen.mjs`)
-bilden die Willkommensseite: echter Router-Dispatch (`../../src/ui/router.js`),
+bilden die Willkommensseite: echter Router-Dispatch (`../src/ui/router.js`),
 Navigations-Dropdown (liest `/relay/services`, filtert/sortiert nach den
 Manifest-Feldern oben), zentrale Benachrichtigungs-Badge (`onNotification()`/
-`onSpaceInvite()`, `../../src/modules/notifications.js`), und `~<fp>`/`u/<fp>`-
+`onSpaceInvite()`, `../src/modules/notifications.js`), und `~<fp>`/`u/<fp>`-
 Identity-Viewer-Routen (Profilkarte, Verzeichnis-Sichtbarkeits-Toggle für
 die eigene Identität, App-Teilnahme via `listProfileAttrs`).
 

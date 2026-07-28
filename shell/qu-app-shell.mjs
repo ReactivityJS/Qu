@@ -32,11 +32,11 @@
 import {
   createNetworkPlugin, createSpacesPlugin, createProfilesPlugin, createWebSocketChannel,
   createRouter, buildPath, inboxId,
-} from '../../src/index.js';
-import { loadOrCreateIdentity, relayUrl } from '../../src/ui/session-bootstrap.js';
-import { createWindowHashSource } from '../../src/ui/router-browser.js';
-import { applyTheme } from '../../src/ui/theme.js';
-import { registerServiceWorker } from '../../src/ui/push.mjs';
+} from '../src/index.js';
+import { loadOrCreateIdentity, relayUrl } from '../src/ui/session-bootstrap.js';
+import { createWindowHashSource } from '../src/ui/router-browser.js';
+import { applyTheme } from '../src/ui/theme.js';
+import { registerServiceWorker } from '../src/ui/push.mjs';
 import { renderIdentityView } from './identity-screen.mjs';
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -105,14 +105,17 @@ export class QuAppShellElement extends HTMLElement {
       .then((services) => { this._services = services; router.setServices(services); })
       .catch((e) => { console.error('[qu-app-shell] failed to load /relay/services:', e); this._services = []; router.setServices([]); });
 
-    // Registered at `/quniverse/sw.js` (default scope `/quniverse/`, the
-    // directory of the script itself — see that file's own doc comment) —
-    // a platform-level registration covering this ecosystem's own pages,
-    // without reaching into Qu's unrelated `/examples/`, `/docs/`, `/test/`
-    // content served from the same origin. Independent of push support (run
-    // regardless, same "installability doesn't need push" reasoning
-    // examples/chat/app.mjs's own registerServiceWorker() call documents).
-    this._swRegistration = await registerServiceWorker('/quniverse/sw.js').catch((e) => { console.error('[qu-app-shell] service worker registration failed:', e); return null; });
+    // Registered at `/sw.js` (default scope `/`, the directory of the
+    // script itself — see that file's own doc comment) — a platform-level
+    // registration covering the whole ecosystem shell. Qu's own
+    // `/examples/<app>/` demos each keep their OWN, more specifically
+    // scoped service worker (`/examples/chat/sw.js` etc, scope
+    // `/examples/chat/`) — a more specific scope always wins over this
+    // root one for a matching request, so the two coexist without
+    // conflict. Independent of push support (run regardless, same
+    // "installability doesn't need push" reasoning examples/chat/app.mjs's
+    // own registerServiceWorker() call documents).
+    this._swRegistration = await registerServiceWorker('/sw.js').catch((e) => { console.error('[qu-app-shell] service worker registration failed:', e); return null; });
     this._vapidPublicKey = await fetch('/push/vapid-public-key')
       .then((res) => res.json())
       .then((info) => info.publicKey)
