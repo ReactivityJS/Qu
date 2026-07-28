@@ -12,6 +12,12 @@ export { viewKey, viewObject, bindKey, bindObject } from '../ui/bindings.js';
 export { buildPath, parsePathSegments } from '../ui/hash-router.js';
 export { decideRoute, createRouter } from '../ui/router.js';
 export { createWindowHashSource } from '../ui/router-browser.js';
+export { getTheme, setTheme, onThemeChange, applyTheme } from '../ui/theme.js';
+export { canShare, shareContent } from '../ui/share.mjs';
+export {
+  isPushSupported, registerServiceWorker, getExistingSubscription,
+  publishPushSubscription, subscribeToPush, unsubscribeFromPush,
+} from '../ui/push.mjs';
 export { findQu, QuViewElement, QuBindElement, QuListElement } from '../ui/components.js';
 export { QuProfileCardElement } from '../ui/profile-components.js';
 export { QuPeopleSearchElement } from '../ui/people-search-components.js';

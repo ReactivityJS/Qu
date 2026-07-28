@@ -32,10 +32,14 @@
 /**
  * Menschenlesbares Label als EIGENES Blatt unter einem Space, nicht Teil
  * des Manifests — dieselbe Konvention wie `~<fp>/alias` fürs Nutzerprofil
- * (README Abschnitt 2). Wichtig, weil ins Manifest übergebene Extra-Felder
- * (z. B. `qu.createSpace({ writers, readers, label })`) stillschweigend
- * verworfen werden — `buildManifest()` (modules/spaces.js) übernimmt nur
- * writers/readers/admins/createdAt, sonst nichts.
+ * (README Abschnitt 2). Zwar übernimmt `buildManifest()` (modules/spaces.js)
+ * inzwischen jedes zusätzliche Feld aus `opts` (z. B. `qu.createSpace({
+ * writers, readers, label })` würde `label` durchaus ins Manifest
+ * schreiben) — trotzdem bleibt ein eigenes Blatt hier die richtige Wahl:
+ * ein Label soll sich MEHRFACH ändern lassen, ohne dafür jedes Mal das
+ * ganze Manifest neu zu schreiben (was — anders als ein normales
+ * Content-Leaf — Admin-, nicht nur Writer-Rechte braucht, siehe
+ * `createSpaceACLResolver()`s `isManifestWrite`-Unterscheidung).
  */
 export async function setLabel(space, label) {
   return space.get('label').put(label);

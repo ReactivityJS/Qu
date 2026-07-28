@@ -1,6 +1,6 @@
-// Browser-seitiges Gegenstück zu cms-lib.mjs — genau der Schnitt, den
+// Browser-seitiges Gegenstück zu src/modules/cms.js — genau der Schnitt, den
 // src/ui/bindings.js (DOM-frei, testbar) vs. src/ui/components.js
-// (browser-only, `window`/DOM) bereits vormachen: cms-lib.mjs kennt kein
+// (browser-only, `window`/DOM) bereits vormachen: src/modules/cms.js kennt kein
 // `window`, dieses Modul schon (Hash-Routing) — deliberately getrennt.
 // Das reine `#spaceId/pfad`-Parsen/Bauen selbst kommt aus dem
 // gemeinsamen space-app-lib.mjs (jede Space-App teilt dasselbe Format);
@@ -9,7 +9,7 @@
 //
 // watchRoute() entscheidet bei JEDER Route-Auflösung neu, WELCHE Quelle
 // gilt — nicht einmalig beim Start, sondern reaktiv über onConfig()
-// (cms-lib.mjs), weil ein Owner den navigationMode jederzeit umschalten
+// (src/modules/cms.js), weil ein Owner den navigationMode jederzeit umschalten
 // kann und jeder bereits offene Client sofort folgen soll, ohne Reload:
 //
 //   "local"        — die Route kommt aus dem Browser-Hash, Format
@@ -19,7 +19,7 @@
 //                    examples/cms/index.html). `hashchange` treibt neue
 //                    Aufrufe von `onRoute()`.
 //   "presentation" — die Route kommt aus cms/state/route (onPresentedRoute()
-//                    in cms-lib.mjs); der lokale Hash-Unterpfad wird
+//                    in src/modules/cms.js); der lokale Hash-Unterpfad wird
 //                    ignoriert — eigene Klicks im Menü ändern nichts an
 //                    der tatsächlich angezeigten Seite, wie im Whitepaper/
 //                    in der Machbarkeitsstudie beschrieben.
@@ -31,7 +31,7 @@
 // inneren Abonnements sauber beendet (dieselbe disconnectedCallback()-
 // Pflicht wie überall sonst in QU — siehe ui/components.js).
 
-import { onConfig, onPresentedRoute } from './cms-lib.mjs';
+import { onConfig, onPresentedRoute } from '../src/modules/cms.js';
 import { parseHashRoute, buildHashRoute } from './space-app-lib.mjs';
 
 /** `{ siteId, path }` (space-app-lib.mjs's einheitliches `#spaceId/pfad`-Format) mit dem CMS-eigenen Default-Slug, sobald kein Unterpfad vorhanden ist. */

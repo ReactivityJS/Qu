@@ -12,8 +12,10 @@ test('setLabel()/getLabel(): a human-readable label lives as its own leaf, indep
   await setLabel(space, 'Mein Board');
   assert.equal(await getLabel(space), 'Mein Board');
 
-  // Confirms the doc comment's warning: passing `label` straight into
-  // createSpace()'s opts would be silently dropped by buildManifest().
+  // This test never passed `label` into createSpace()'s opts (only
+  // writers/readers) — so it's absent from the manifest either way; see
+  // space-index-lib.mjs's own doc comment for why setLabel() is still the
+  // right choice even though buildManifest() would now accept it there too.
   const manifest = (await alice.get(space.id)).value;
   assert.equal('label' in manifest, false, 'the label is not part of the manifest itself');
 });

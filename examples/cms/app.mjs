@@ -1,5 +1,5 @@
-// Beispiel 7 (Oberfläche): siehe ../cms-lib.mjs für die eigentliche Logik
-// und ../cms-router.js für das Hash-/Präsentations-Routing — diese Datei
+// Beispiel 7 (Oberfläche): siehe ../../src/modules/cms.js für die eigentliche
+// Logik und ../cms-router.js für das Hash-/Präsentations-Routing — diese Datei
 // ist nur die dünne UI-Schicht darüber, im selben Stil wie
 // examples/../archive/examples/03-todo-list.mjs (dünn, manuell rendern,
 // kein Framework).
@@ -12,16 +12,20 @@
 
 import { createWebSocketChannel, createNetworkPlugin, createSpacesPlugin } from '../../src/index.js';
 import {
-  createSite, getSiteManifest, canWrite, grantWriteAccess, revokeWriteAccess,
+  createSite,
   getConfig, onConfig, setNavigationMode,
   setTemplate, getTemplate, onTemplate,
   setPage, onPage,
   addNavItem, listNav, onNav,
   presentRoute,
-} from '../cms-lib.mjs';
+} from '../../src/modules/cms.js';
 import { watchRoute, navigate } from '../cms-router.js';
 import { loadOrCreateIdentity, relayUrl, ECOSYSTEM_IDENTITY_KEY } from '../space-app-browser.js';
-import { parseHashRoute, buildHashRoute, isPublic, setPublic, listReaders, addReader, removeReader } from '../space-app-lib.mjs';
+import {
+  parseHashRoute, buildHashRoute,
+  getManifest as getSiteManifest, canWrite, grantWriteAccess, revokeWriteAccess,
+  isPublic, setPublic, listReaders, addReader, removeReader,
+} from '../space-app-lib.mjs';
 
 // Bis hierhin ein eigener, von anderen Beispielen unabhängiger Key
 // ('qu-cms-identity-keys') — inzwischen überholt: EIN Fingerprint fürs
@@ -82,7 +86,7 @@ function escapeHtml(str) {
  * HTML ist (Fett/Kursiv/Links/Überschriften). `{{key}}` (zwei Klammern)
  * bleibt escaped — für einfache Textfelder wie den Titel. Sicherheitsmodell:
  * NUR ein Writer dieser Site kann Seiten-Body ODER Template überhaupt
- * schreiben (ACL-geprüft, siehe cms-lib.mjs) — wer Schreibrecht hat, kann
+ * schreiben (ACL-geprüft, siehe src/modules/cms.js) — wer Schreibrecht hat, kann
  * ohnehin schon beliebiges HTML in ein Template legen (setTemplate() prüft
  * nichts), das rohe Einsetzen des Bodys eröffnet also KEINE neue Fähigkeit,
  * nur denselben bereits vorhandenen Vertrauens-/Berechtigungsrahmen über
@@ -239,7 +243,7 @@ async function main() {
    * (onPage()) UND das von ihr referenzierte Template (onTemplate()) — ein
    * Template-Update muss die gerade offene Seite sofort neu rendern, ohne
    * dass sich an der Seite selbst etwas geändert hätte (genau der Zweck, den
-   * cms-lib.mjs's onTemplate()-Doku beschreibt). Die Editor-Felder werden
+   * src/modules/cms.js's onTemplate()-Doku beschreibt). Die Editor-Felder werden
    * NUR bei einer Seitenänderung zurückgesetzt, nicht bei einer reinen
    * Template-Änderung — sonst würde ein fremdes Template-Update laufende
    * Eingaben in editBodyInput überschreiben.

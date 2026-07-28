@@ -75,8 +75,15 @@ export function createSpaceACLResolver(runtime) {
   };
 }
 
-function buildManifest(fingerprint, { writers = [], readers = ['*'], admins } = {}) {
-  return { admins: admins ?? (fingerprint ? [fingerprint] : []), writers, readers, createdAt: Date.now() };
+/**
+ * `...rest` (e.g. an `appId` a caller passes to mark "this Space renders
+ * with THIS app by default", see `src/ui/router.js`'s `space-default` kind)
+ * is preserved verbatim on the manifest — additive, opt-in metadata this
+ * module itself has no opinion on, same stance it already takes on
+ * `writers`/`readers`/`admins` being the caller's choice, not a fixed shape.
+ */
+function buildManifest(fingerprint, { writers = [], readers = ['*'], admins, ...rest } = {}) {
+  return { admins: admins ?? (fingerprint ? [fingerprint] : []), writers, readers, createdAt: Date.now(), ...rest };
 }
 
 /** Convenience: create a new generic Space with an explicit manifest. Returns the new SpaceId, only once the manifest write has actually landed. */

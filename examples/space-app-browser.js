@@ -1,6 +1,6 @@
 // Browser-seitiger Gegenpart zu space-app-lib.mjs — derselbe Schnitt wie
 // ui/bindings.js (DOM-frei) vs. ui/components.js (browser-only) und
-// cms-lib.mjs vs. cms-router.js: space-app-lib.mjs kennt kein `window`,
+// src/modules/cms.js vs. cms-router.js: space-app-lib.mjs kennt kein `window`,
 // dieses Modul schon (Identity-Persistenz, Relay-URL, Hash-Navigation).
 //
 // `loadOrCreateIdentity`/`relayUrl` selbst leben inzwischen in

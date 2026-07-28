@@ -1,14 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Qu, createSpacesPlugin } from '../src/index.js';
+import { Qu, createSpacesPlugin, createProfilesPlugin } from '../index.js';
 import {
-  createSite, getSiteManifest, canWrite, grantWriteAccess,
-  getConfig, onConfig, updateConfig, setNavigationMode,
+  createSite, getConfig, onConfig, updateConfig, setNavigationMode,
   setTemplate, getTemplate, onTemplate,
   setPage, getPage, onPage,
   addNavItem, removeNavItem, listNav, onNav,
   presentRoute, onPresentedRoute,
-} from './cms-lib.mjs';
+  setHomepageSite, getHomepageSite, onHomepageSiteChange,
+  createCmsPlugin,
+} from './cms.js';
 
 test('createSite() writes a manifest and an initial config in one call, with sensible defaults', async () => {
   const owner = (await Qu.create()).use(createSpacesPlugin());
@@ -18,7 +19,7 @@ test('createSite() writes a manifest and an initial config in one call, with sen
   assert.equal(config.title, 'Mein Blog');
   assert.equal(config.theme, 'light');
   assert.equal(config.language, 'de');
-  assert.equal(config.navigationMode, 'local'); // Default, solange niemand explizit umschaltet
+  assert.equal(config.navigationMode, 'local'); // default, until someone explicitly switches it
 });
 
 test('createSite() seeds cms/state/route so a late joiner in presentation mode gets an initial delivery, not silence', async () => {
@@ -59,22 +60,19 @@ test('onConfig() delivers the current config, then live updates (e.g. a mode swi
   assert.deepEqual(seenModes, ['local', 'presentation']);
 });
 
-test('canWrite()/grantWriteAccess(): owner can write immediately; a stranger cannot until granted access', async () => {
+test('a site\'s write access is governed by the ordinary Space manifest (qu.addToRole()), not any CMS-specific mechanism', async () => {
   const owner = (await Qu.create()).use(createSpacesPlugin());
   const stranger = await Qu.create({ runtime: owner.runtime });
   const siteId = await createSite(owner);
 
-  assert.equal(await canWrite(owner, siteId), true);
-  assert.equal(await canWrite(stranger, siteId), false);
   await assert.rejects(() => setNavigationMode(stranger, siteId, 'presentation'));
 
-  await grantWriteAccess(owner, siteId, stranger.fingerprint);
-  assert.equal(await canWrite(stranger, siteId), true);
+  await owner.addToRole(siteId, 'writers', stranger.fingerprint);
   await setNavigationMode(stranger, siteId, 'presentation'); // must not throw anymore
 
-  const manifest = await getSiteManifest(owner, siteId);
-  assert.ok(manifest.writers.includes(owner.fingerprint));
-  assert.ok(manifest.writers.includes(stranger.fingerprint));
+  const manifest = await owner.get(siteId);
+  assert.ok(manifest.value.writers.includes(owner.fingerprint));
+  assert.ok(manifest.value.writers.includes(stranger.fingerprint));
 });
 
 test('a stranger cannot write config/pages/nav on a site they are not a writer of', async () => {
@@ -165,4 +163,40 @@ test('presentation mode: presentRoute()/onPresentedRoute() let an owner drive ev
 
   // A visitor who is not a writer can still observe the presented route (reading stays open).
   await assert.rejects(() => presentRoute(visitor, siteId, 'sneaky'));
+});
+
+test('setHomepageSite()/getHomepageSite(): a public, per-identity pointer to the user\'s own CMS site', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin()).use(createProfilesPlugin());
+  const other = await Qu.create({ runtime: owner.runtime });
+  const siteId = await createSite(owner, { title: 'Meine Homepage' });
+
+  assert.equal(await getHomepageSite(other, owner.fingerprint), null, 'nothing set yet');
+
+  await setHomepageSite(owner, siteId);
+  assert.equal(await getHomepageSite(other, owner.fingerprint), siteId, 'readable by anyone, same as any other public profile attribute');
+});
+
+test('onHomepageSiteChange(): live subscription fires only for the homepage-site attribute, not unrelated profile attrs', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin()).use(createProfilesPlugin());
+  const siteId = await createSite(owner);
+
+  const seen = [];
+  onHomepageSiteChange(owner, owner.fingerprint, (q) => seen.push(q.value));
+  await owner.setProfileAttr('unrelated-key', { anything: true });
+  await setHomepageSite(owner, siteId);
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.deepEqual(seen, [{ siteId }], 'the unrelated attribute write must not have triggered this callback');
+});
+
+test('createCmsPlugin() attaches sugar methods bound to the installing Qu instance', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin()).use(createProfilesPlugin()).use(createCmsPlugin());
+  const siteId = await owner.createSite({ title: 'Via Plugin' });
+
+  assert.equal((await owner.getConfig(siteId)).title, 'Via Plugin');
+  await owner.setPage(siteId, 'home', { title: 'Startseite' });
+  assert.equal((await owner.getPage(siteId, 'home')).title, 'Startseite');
+
+  await owner.setHomepageSite(siteId);
+  assert.equal(await owner.getHomepageSite(owner.fingerprint), siteId);
 });

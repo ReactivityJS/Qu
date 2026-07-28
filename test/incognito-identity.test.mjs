@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { Qu, createSpacesPlugin } from '../src/index.js';
 import {
   createIncognitoIdentity, listIncognitoIdentities, getIncognitoIdentity, deleteIncognitoIdentity, enterIncognito,
+  saveIncognitoIdentity, removeIncognitoIdentity, loadIncognitoStore, onIncognitoIdentitiesChange, createIncognitoPlugin,
 } from '../src/modules/incognito-identity.js';
+
+function wait(ms = 20) { return new Promise((r) => setTimeout(r, ms)); }
 
 test('createIncognitoIdentity(): generates a fresh, independent identity every call', async () => {
   const a = await createIncognitoIdentity('Kalender-Alias 1');
@@ -86,4 +89,117 @@ test('enterIncognito(): a Space created under the incognito identity mentions on
 test('enterIncognito(): rejects a store entry with no keys', async () => {
   const main = await Qu.create();
   await assert.rejects(() => enterIncognito(main, { alias: 'broken' }));
+});
+
+test('saveIncognitoIdentity()/loadIncognitoStore(): persists under the owner\'s own Space, encrypted-to-self, and round-trips through the exact plain-object shape the pure functions expect', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin());
+  const entry = await createIncognitoIdentity('Forum-Alias');
+  await saveIncognitoIdentity(owner, entry);
+
+  const store = await loadIncognitoStore(owner);
+  assert.deepEqual(Object.keys(store), ['Forum-Alias']);
+  assert.equal(store['Forum-Alias'].fingerprint, entry.fingerprint);
+  assert.deepEqual(store['Forum-Alias'].keys, entry.keys);
+
+  // The pure functions from earlier work UNCHANGED on top of this persisted store.
+  const listed = listIncognitoIdentities(store);
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].alias, 'Forum-Alias');
+  const got = getIncognitoIdentity(store, 'Forum-Alias');
+  assert.equal(got.fingerprint, entry.fingerprint);
+});
+
+test('saveIncognitoIdentity(): connectionMode defaults to \'sequential\' but is overridable per alias', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin());
+  const entryA = await createIncognitoIdentity('Default-Mode');
+  const entryB = await createIncognitoIdentity('Simultaneous-Mode');
+
+  await saveIncognitoIdentity(owner, entryA);
+  await saveIncognitoIdentity(owner, { ...entryB, connectionMode: 'simultaneous' });
+
+  const store = await loadIncognitoStore(owner);
+  assert.equal(store['Default-Mode'].connectionMode, 'sequential');
+  assert.equal(store['Simultaneous-Mode'].connectionMode, 'simultaneous');
+});
+
+test('saveIncognitoIdentity(): is actually encrypted — a third party reading the raw QuBit never sees the plaintext keys', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin());
+  const entry = await createIncognitoIdentity('Secret-Alias');
+  await saveIncognitoIdentity(owner, entry);
+
+  // runtime.get() is the RAW store read, bypassing Session's decrypt (the
+  // `.encrypted` flag listProfileAttrs() reports is a SESSION-level, post-
+  // decrypt annotation, not present on a raw qubit) — so the meaningful
+  // check here is simply that the stored `value` is NOT the plaintext
+  // payload (i.e. it's some opaque ciphertext envelope instead).
+  const raw = await owner.runtime.get(`${owner.own.id}/incognito/Secret-Alias`);
+  assert.ok(raw, 'a stored QuBit must exist at that id');
+  assert.notDeepEqual(raw.value, { fingerprint: entry.fingerprint, keys: entry.keys, createdAt: entry.createdAt }, 'the raw stored value must not be the plaintext payload');
+});
+
+test('loadIncognitoStore(): multiple aliases, and a second device (same identity, same Runtime/Store) sees the same store', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin());
+  const entryA = await createIncognitoIdentity('Alias A');
+  const entryB = await createIncognitoIdentity('Alias B');
+  await saveIncognitoIdentity(owner, entryA);
+  await saveIncognitoIdentity(owner, entryB);
+
+  // A "second device" holding the same identity is modeled as a second Qu
+  // instance sharing the same runtime/store, same convention as enterIncognito()'s
+  // own doc comment on "a second, independent identity sharing one Runtime" —
+  // here it's the SAME identity, proving replicated content is readable there.
+  const secondDevice = await Qu.create({ runtime: owner.runtime, identity: await owner.exportKeys() });
+  const store = await loadIncognitoStore(secondDevice);
+  assert.deepEqual(new Set(Object.keys(store)), new Set(['Alias A', 'Alias B']));
+});
+
+test('removeIncognitoIdentity(): tombstones an alias — loadIncognitoStore() and onIncognitoIdentitiesChange() both treat it as absent', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin());
+  // Listener registered BEFORE anything exists at this path, so there's no
+  // "initial catch-up vs. immediate write" race to reason about — every
+  // event below is a genuinely live delivery, in order.
+  const seen = [];
+  onIncognitoIdentitiesChange(owner, (q) => seen.push(q.value));
+
+  const entry = await createIncognitoIdentity('To-Remove');
+  await saveIncognitoIdentity(owner, entry);
+  await wait();
+  assert.ok((await loadIncognitoStore(owner))['To-Remove']);
+
+  await removeIncognitoIdentity(owner, 'To-Remove');
+  await wait();
+
+  assert.equal((await loadIncognitoStore(owner))['To-Remove'], undefined);
+  assert.deepEqual(seen.at(-1), null, 'the live subscription must see the tombstone (null) as its own event');
+});
+
+test('onIncognitoIdentitiesChange(): fires for both already-persisted and newly-saved aliases', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin());
+  const existing = await createIncognitoIdentity('Already-There');
+  await saveIncognitoIdentity(owner, existing);
+
+  const seenAliases = [];
+  onIncognitoIdentitiesChange(owner, (q) => seenAliases.push(q.id.split('/').pop()), { initial: true });
+  await wait();
+  assert.deepEqual(seenAliases, ['Already-There']);
+
+  const fresh = await createIncognitoIdentity('New-One');
+  await saveIncognitoIdentity(owner, fresh);
+  await wait();
+  assert.deepEqual(seenAliases.sort(), ['Already-There', 'New-One']);
+});
+
+test('qu.createIncognitoIdentity()/qu.saveIncognitoIdentity()/etc.: the qu-bound convenience wrappers behave identically to the standalone functions', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin()).use(createIncognitoPlugin());
+  const entry = await owner.createIncognitoIdentity('Plugin-Alias');
+  await owner.saveIncognitoIdentity(entry);
+
+  const store = await owner.loadIncognitoStore();
+  assert.ok(store['Plugin-Alias']);
+
+  const incognito = await owner.enterIncognito(store['Plugin-Alias']);
+  assert.equal(incognito.fingerprint, entry.fingerprint);
+
+  await owner.removeIncognitoIdentity('Plugin-Alias');
+  assert.equal((await owner.loadIncognitoStore())['Plugin-Alias'], undefined);
 });

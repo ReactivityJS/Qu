@@ -158,7 +158,7 @@ selbst auf.
 ### Spaces & Space-Nodes
 `qu.own` → `QuSpace` — gebunden an den eigenen User-Space (`qu.get(qu.userSpaceId)`), immer verfügbar, kein Plugin nötig.
 `qu.get(spaceId)` → `QuSpace` — gebunden an einen beliebigen bekannten Space (eigener, `~<fremder-fp>`, oder generische Space-Id); baut nur den Node, prüft nichts.
-`qu.createSpace({ writers?, readers?, admins? })` → `QuSpace` — **synchron**
+`qu.createSpace({ writers?, readers?, admins?, ...rest? })` → `QuSpace` — **synchron**
 (wie `get()`), Spaces-Plugin nötig. Liefert sofort einen Node für den neuen
 Space zurück, nicht nur die rohe Id — siehe [`QuSpace`](#quspace). Das
 Manifest wird im Hintergrund geschrieben (`space.ready` ist dessen eigenes
@@ -166,7 +166,12 @@ Promise); ein `async createSpace()` hätte hier den Node bis zum
 Manifest-Wert hindurchgereicht statt ihn zurückzugeben, weil `QuSpace`
 thenable ist und jedes Promise, das mit einem Thenable auflöst, dieses
 automatisch "durchreicht" (Promise-Spezifikation) — dieselbe "kein await
-navigiert, await liest"-Regel wie überall sonst in dieser API.
+navigiert, await liest"-Regel wie überall sonst in dieser API. Jedes
+weitere Feld in `opts` (`...rest`, z. B. `appId`) landet unverändert im
+Manifest — eine Konvention, kein fester Teil der Manifest-Form; `src/ui/router.js`s
+`space-default`-Routing-Entscheidung liest z. B. genau ein solches
+optionales `appId`-Feld, um eine Standard-App für einen generischen Space
+zu bestimmen.
 
 `qu.createSpaceAt(id, { writers?, readers?, admins? })` → `QuSpace` —
 identisch zu `createSpace()`, nur mit einer selbst gewählten, festen `id`

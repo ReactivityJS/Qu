@@ -58,6 +58,30 @@
         <button id="connection-limit-save" type="button">Speichern</button>
       </div>
     </section>
+
+    <section class="panel">
+      <h2>Plattform-Module</h2>
+      <p class="hint">Optionale QUniverse-Shell-Features (Kontaktliste, CMS-Startseite, Benachrichtigungen,
+        Verzeichnis, Incognito-Identitäten) — getrennt von den Services oben: diese schalten keine eigene
+        App an/aus, sondern welche Bausteine eine Ökosystem-Shell überhaupt installiert/rendert. Ein Relay
+        ohne Plattform-Registry (<code>platformRegistry</code> nicht übergeben) zeigt hier keine Module an.</p>
+      <ul id="platform-modules-list" class="service-list"></ul>
+      <p id="platform-modules-off" class="hint" hidden>Keine Plattform-Registry auf diesem Relay konfiguriert.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Theme</h2>
+      <p class="hint">Deployment-weites Farbschema (CSS Custom Properties), das jede App/jeder Service auf diesem
+        Relay lesen kann. Öffentlich lesbar, nur von einem Admin änderbar — ein plain signierter Write auf
+        <code>relay-config/theme</code>, kein verschlüsseltes Admin-Kommando (Farbwerte sind nicht geheim).</p>
+      <div id="theme-form" class="config-form">
+        <label>Akzentfarbe <input id="theme-accent" type="text" placeholder="#3a6df0" /></label>
+        <label>Hintergrund <input id="theme-bg" type="text" placeholder="#0d0f14" /></label>
+        <label>Textfarbe <input id="theme-text" type="text" placeholder="#e8e8ec" /></label>
+        <button id="theme-save" type="button">Speichern</button>
+        <button id="theme-clear" type="button">Zurücksetzen</button>
+      </div>
+    </section>
   </main>
   <script type="module" src="./app.mjs"></script>
 </body>

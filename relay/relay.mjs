@@ -150,6 +150,12 @@ export async function createRelay({
   // live, and the ACL branch just below is what makes those writes
   // require a relayAdmins fingerprint in the first place.
   serviceRegistry = null,
+  // Optional server/platform-registry.mjs instance — unlike
+  // serviceRegistry above, this carries no routes/ingestGates at all (a
+  // platform FEATURE isn't relay-executed code, see that file's own doc),
+  // so there's nothing to wire into the HTTP/ingest pipeline here — only
+  // the admin/config/platform-modules dispatch below touches it at all.
+  platformRegistry = null,
 } = {}) {
   const relay = (await Qu.create({ store, identity })).use(createSpacesPlugin()); // generic (non-User) rooms — the relay's own Runtime enforces this on every incoming push, exactly like any other write
 
@@ -189,6 +195,14 @@ export async function createRelay({
     const m = /^push-subscription\/([0-9a-f]{24})$/i.exec(id);
     if (m) return { writers: [m[1]], readers: ['*'] };
     if (id.startsWith('relay-services/')) return { writers: relayAdmins, readers: ['*'] };
+    // `relay-config/<key>` — deployment-wide, non-secret configuration data
+    // a shell reads (e.g. `relay-config/theme`, see src/ui/theme.js) — same
+    // "public content, admin-only writes" shape as relay-services/ above,
+    // NOT the ephemeral encrypted admin/ channel below: this is ordinary,
+    // persisted, replicated Space content (a plain signed write, no
+    // encryptFor needed — a theme color is not confidential), not a
+    // live-only command that reconfigures an in-memory object.
+    if (id.startsWith('relay-config/')) return { writers: relayAdmins, readers: ['*'] };
     if (id.startsWith('admin/')) return { writers: relayAdmins, readers: relayAdmins };
     return spacesACL(id);
   });
@@ -252,6 +266,20 @@ export async function createRelay({
       if (typeof connectionGate?.configure === 'function') {
         connectionGate.configure(decrypted);
         debug('relay', 'admin-config-connection-limit', { config: connectionGate.getConfig?.() });
+      }
+      return;
+    }
+
+    // `admin/config/platform-modules` -> `{ modules: { [id]: boolean } }`,
+    // live on the `platformRegistry` instance passed in above
+    // (server/platform-registry.mjs's configure()). Same no-op-if-absent
+    // reasoning as rate-limit/connection-limit above — a deployment that
+    // never opted into a platformRegistry simply has no platform-feature
+    // toggles to administer.
+    if (q.id === 'admin/config/platform-modules') {
+      if (typeof platformRegistry?.configure === 'function') {
+        platformRegistry.configure(decrypted);
+        debug('relay', 'admin-config-platform-modules', { config: platformRegistry.getConfig?.() });
       }
       return;
     }
@@ -648,11 +676,12 @@ export async function createRelay({
     pushSubscriptions,
     attachChannel,
     get connectedCount() { return connected.size; },
-    /** Current effective rate-limit/connection-limit config — `null` for a limit not installed at all (see `rateLimiter`/`connectionGate` options above). Read by e.g. server/relay-info-routes.mjs for the admin dashboard. */
+    /** Current effective rate-limit/connection-limit/platform-modules config — `null` for anything not installed at all (see `rateLimiter`/`connectionGate`/`platformRegistry` options above). Read by e.g. server/relay-info-routes.mjs for the admin dashboard. */
     getAdminConfig() {
       return {
         rateLimit: rateLimiter?.getConfig?.() ?? null,
         connectionLimit: connectionGate?.getConfig?.() ?? null,
+        platformModules: platformRegistry?.getConfig?.() ?? null,
       };
     },
   };

@@ -13,7 +13,9 @@ export {
   inboxId, ensureSpace, notifyMembers, onSpaceInvite, addSpaceMember, removeSpaceMember, createSpaceMembershipPlugin,
   spaceWriterRecipients,
 } from '../modules/space-membership.js';
-export { notifyUser, onNotification, createNotificationsPlugin } from '../modules/notifications.js';
+export { notifyUser, onNotification, createNotificationsPlugin, createNotificationPushRule } from '../modules/notifications.js';
+export { addContact, removeContact, listContacts, onContactsChange, createContactsPlugin } from '../modules/contacts.js';
+export { registerDevice, removeDevice, listDevices, onDevicesChange, createDevicesPlugin } from '../modules/devices.js';
 export {
   itemInviteBoxId, inviteToItem, onItemInvite, createItemInvitesPlugin, createItemInvitePushRule,
 } from '../modules/item-invites.js';
@@ -43,4 +45,14 @@ export {
 } from '../modules/calendar.js';
 export {
   createIncognitoIdentity, listIncognitoIdentities, getIncognitoIdentity, deleteIncognitoIdentity, enterIncognito,
+  saveIncognitoIdentity, removeIncognitoIdentity, loadIncognitoStore, onIncognitoIdentitiesChange, createIncognitoPlugin,
 } from '../modules/incognito-identity.js';
+export {
+  createSite, getConfig, onConfig, updateConfig, setNavigationMode,
+  setTemplate, getTemplate, onTemplate,
+  setPage, getPage, onPage,
+  addNavItem, removeNavItem, listNav, onNav,
+  presentRoute, onPresentedRoute,
+  setHomepageSite, getHomepageSite, onHomepageSiteChange,
+  createCmsPlugin,
+} from '../modules/cms.js';

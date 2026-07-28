@@ -1,4 +1,4 @@
-// Beispiel 8: die gemeinsame Basis, auf der cms-lib.mjs, und potenziell
+// Beispiel 8: die gemeinsame Basis, auf der src/modules/cms.js, und potenziell
 // auch todo-lib.mjs/forum-lib.mjs, aufsetzen können — der Teil einer
 // "Space-App", der in JEDER von ihnen gleich aussieht, herausgezogen statt
 // dreifach dupliziert:
@@ -27,7 +27,7 @@
 // Seiten/ToDo-Items/Forum-Posts. Die drei haben unterschiedliche
 // Schreibmuster aus gutem Grund (todo-lib.mjs: set() + Tombstone-Delete;
 // forum-lib.mjs: set() + Zeit-Sharding, um endloses Wachstum zu
-// vermeiden; cms-lib.mjs: put() pro Slug, ganze Seite auf einmal) — sie
+// vermeiden; src/modules/cms.js: put() pro Slug, ganze Seite auf einmal) — sie
 // in ein universelles Objekt zu pressen würde eins davon strukturell
 // verschlechtern. "So viele Primitive wie nötig, so wenige wie möglich"
 // gilt hier genauso wie im Core selbst: eine gemeinsame SCHALE
@@ -37,7 +37,7 @@
 // Der Browser-seitige Gegenpart (Identity-Bootstrap, Relay-URL,
 // `watchRoute()`/`navigate()` mit echtem `window`/Hash) liegt getrennt in
 // space-app-browser.js — derselbe Schnitt wie überall sonst im Repo
-// (ui/bindings.js vs. ui/components.js, cms-lib.mjs vs. cms-router.js):
+// (ui/bindings.js vs. ui/components.js, src/modules/cms.js vs. cms-router.js):
 // diese Datei bleibt vollständig ohne Browser mit `node --test` prüfbar.
 
 /**

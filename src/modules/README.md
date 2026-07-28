@@ -58,7 +58,38 @@ incognito-identity.js Independent utility: mint additional, unlinked identities
                       their main one for a given Space — hides which real user
                       is behind a Space's membership from co-members and casual
                       content inspection, NOT from a relay operator correlating
-                      connection metadata (see the file's own doc comment).
+                      connection metadata (see the file's own doc comment). Also
+                      exports a persisted, encrypted-to-self alias list
+                      (saveIncognitoIdentity()/loadIncognitoStore()/
+                      removeIncognitoIdentity()/onIncognitoIdentitiesChange()) —
+                      one QuBit per alias under the MAIN identity's own Space,
+                      so the alias list itself survives a reload and syncs
+                      across that identity's own devices, with only the COUNT
+                      of aliases ever visible to a relay mirroring it.
+
+contacts.js           Independent utility: a private "people I know" list —
+                      distinct from profiles.js's PUBLIC opt-in directory,
+                      encrypted-to-self, never visible to anyone but the owner.
+
+devices.js             Independent utility: "which devices does this identity
+                      currently use" — listing/labeling only, encrypted-to-self.
+                      Deliberately does NOT support per-device revocation (every
+                      device holds a verbatim copy of the same keypair today —
+                      see the file's own doc comment for why that's a real,
+                      intentionally-punted limitation, not an oversight).
+
+cms.js                Independent App-Space module: a "site" (config, HTML
+                      templates, pages, nav menu, presentation-mode state) —
+                      all ordinary QuBits under one Space, no new mechanism.
+                      Started as examples/cms-lib.mjs, promoted here once
+                      other apps needed the same "editable page + template"
+                      primitive (a Forum "About" page, an Admin announcement,
+                      QUniverse's own per-user homepage). Also exports a
+                      per-identity homepage-discovery convention
+                      (setHomepageSite()/getHomepageSite()/
+                      onHomepageSiteChange(), a public profiles.js attribute)
+                      — a user's own CMS site is just another generic Space,
+                      NOT squeezed into their reserved `~<fp>` User-Space.
 ```
 
 A new shared-Space app typically needs, bottom-up:
@@ -78,14 +109,15 @@ A new shared-Space app typically needs, bottom-up:
    shell merges both feeds, since they share the same per-identity inbox.
 4. Its own content module (own file, own shape) for whatever it actually
    stores — messages (`chat.js` is exactly this for chat), events
-   (`calendar.js`, for a calendar), todos, posts, pages — following the
-   same "one plain Space, get/put/set/map on top of it" recipe `chat.js`'s
-   own doc comment demonstrates.
+   (`calendar.js`, for a calendar), todos, posts, pages (`cms.js`, for a
+   site) — following the same "one plain Space, get/put/set/map on top of
+   it" recipe `chat.js`'s own doc comment demonstrates.
 
-`profiles.js`, `identity-transfer.js`, and `incognito-identity.js` sit
-outside this chain — they're about the identity itself (attributes,
-directory, device transfer, minting an additional one), not about any
-particular Space, and are useful to any app regardless of whether it uses
+`profiles.js`, `identity-transfer.js`, `incognito-identity.js`,
+`contacts.js`, and `devices.js` sit outside this chain — they're about the
+identity itself (attributes, directory, device transfer, minting an
+additional one, a private contact list, a private device list), not about
+any particular Space, and are useful to any app regardless of whether it uses
 `space-membership.js` at all.
 
 See each file's own header comment for the full reasoning; see
