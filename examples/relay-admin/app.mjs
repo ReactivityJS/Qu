@@ -39,6 +39,14 @@ const themeBgEl = $('theme-bg');
 const themeTextEl = $('theme-text');
 const themeSaveBtn = $('theme-save');
 const themeClearBtn = $('theme-clear');
+const deploymentPanelEl = $('deployment-panel');
+const deploymentOffEl = $('deployment-off');
+const deploymentQuniverseEl = $('deployment-quniverse');
+const deploymentDocsEl = $('deployment-docs');
+const deploymentExamplesEl = $('deployment-examples');
+const deploymentStoreEl = $('deployment-store');
+const deploymentPushEl = $('deployment-push');
+const deploymentTurnEl = $('deployment-turn');
 
 function showStatus(message, kind) {
   statusEl.textContent = message;
@@ -81,6 +89,32 @@ function renderServices(services) {
     li.append(name, badge, toggleBtn);
     listEl.appendChild(li);
   }
+}
+
+/**
+ * `deployment` — index.js's own startup-time env-var choices
+ * (server/relay-info-routes.mjs's own doc explains why these are
+ * read-only: unlike `adminConfig`, there is no `admin/config/*` write
+ * path for any of them, and never will be — they gate which code paths
+ * were even initialized at process start). `null` for a relay that
+ * doesn't pass this option at all (e.g. an older deployment, or one that
+ * considers even this much detail too much to expose) — shows the
+ * explanatory hint instead of stale/misleading fields.
+ */
+function renderDeployment(deployment) {
+  if (!deployment) {
+    deploymentPanelEl.hidden = true;
+    deploymentOffEl.hidden = false;
+    return;
+  }
+  deploymentPanelEl.hidden = false;
+  deploymentOffEl.hidden = true;
+  deploymentQuniverseEl.textContent = deployment.content?.quniverse ? 'an' : 'aus';
+  deploymentDocsEl.textContent = deployment.content?.docs ? 'an' : 'aus';
+  deploymentExamplesEl.textContent = deployment.content?.examples ? 'an' : 'aus';
+  deploymentStoreEl.textContent = deployment.store === 'persistent' ? 'persistent' : 'flüchtig (QU_STORE=memory)';
+  deploymentPushEl.textContent = deployment.push?.enabled ? `an (${deployment.push.subject})` : 'aus (QU_PUSH=0)';
+  deploymentTurnEl.textContent = deployment.turnConfigured ? 'konfiguriert' : 'nicht konfiguriert (nur STUN)';
 }
 
 let toggleService; // assigned in main() once `qu`/relay info are known — see below
@@ -170,6 +204,7 @@ async function main() {
 
   const info = await fetchJSON('/relay/info');
   relayFpEl.textContent = info.fingerprint;
+  renderDeployment(info.deployment ?? null);
   const initialAdminConfig = info.adminConfig ?? { rateLimit: null, connectionLimit: null, platformModules: null };
   renderAdminConfig(initialAdminConfig);
   renderPlatformModules(initialAdminConfig.platformModules);

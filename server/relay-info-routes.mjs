@@ -32,12 +32,26 @@
 // so this stays a plain, unauthenticated GET, exactly like the rest of
 // this file. The actual write path (changing these values) remains the
 // signed+encrypted `admin/config/*` channel — this route is read-only.
-export function createRelayInfoRoutes({ fingerprint, epub, admins = [], getAdminConfig = null }) {
+//
+// `deployment` (optional, a plain object): the STARTUP-time env-var
+// choices index.js already made before this route was even built
+// (QU_STORE, QU_SERVE_*, QU_PUSH, QU_TURN_URLS, …) — unlike `adminConfig`
+// above, none of these can change at runtime (they gate which code paths
+// were even initialized, e.g. whether a persistent store was opened at
+// all), so there is no matching `admin/config/*` write-path and never
+// will be for these specific keys; this is READ-ONLY visibility, not a
+// promise of live-editability, and examples/relay-admin's "Server-
+// Konfiguration" panel says so explicitly rather than rendering inputs
+// that would silently do nothing. Same "not actually a secret, purely a
+// display convenience" reasoning as `admins`/`adminConfig` — an operator
+// who considers even THIS too much detail to expose can simply omit the
+// option (defaults to `null`, the route then reports it as such).
+export function createRelayInfoRoutes({ fingerprint, epub, admins = [], getAdminConfig = null, deployment = null }) {
   return [{
     match: (p) => p === '/relay/info',
     handle: (_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ fingerprint, epub, admins, adminConfig: getAdminConfig?.() ?? null }));
+      res.end(JSON.stringify({ fingerprint, epub, admins, adminConfig: getAdminConfig?.() ?? null, deployment }));
     },
   }];
 }

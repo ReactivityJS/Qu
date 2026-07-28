@@ -49,7 +49,8 @@ export default {
 };
 ```
 
-Registrierung in `server.mjs`: den Manifest-Export in
+Registrierung in `../index.js` (dem einen Server-Prozess, der Relay UND
+QUniverse-Shell bedient): den Manifest-Export in
 `createServiceRegistry(definitions)`s Array aufnehmen (code-seitig, wie
 jeder andere `service-registry.mjs`-Eintrag) — oder, für einen rein
 link-basierten Eintrag ohne eigenen Code in diesem Repo, als

@@ -50,8 +50,12 @@ export function renderIdentityView(container, { qu, fingerprint, repl, swRegistr
 
   const isOwn = fingerprint === qu.fingerprint;
   if (isOwn) {
+    container.appendChild(renderAliasEditor(qu));
     container.appendChild(renderVisibilityToggle(qu));
     container.appendChild(renderPushToggle(qu, { repl, swRegistration, vapidPublicKey }));
+    container.appendChild(renderAttributesEditor(qu));
+  } else {
+    container.appendChild(renderAddContactButton(qu, fingerprint));
   }
 
   renderAppParticipation(qu, fingerprint, appsList);
@@ -101,6 +105,135 @@ function renderShareButton(fingerprint) {
   const wrap = document.createElement('p');
   wrap.className = 'qu-identity-share-wrap';
   wrap.append(btn, status);
+  return wrap;
+}
+
+/**
+ * Own-profile-only alias editor — `Qu#publishProfile({alias})` (src/qu.js)
+ * always re-writes `pub`/`epub` alongside `alias` in the same call, which
+ * is harmless here (both are deterministic re-exports of this identity's
+ * OWN already-loaded keys, not a second identity change smuggled in), so
+ * this stays the one, already-documented write path rather than a new
+ * alias-only primitive. Every `<qu-profile-card>` showing this fingerprint
+ * anywhere in the shell updates live on its own once this lands (that
+ * component's own `.on('alias')` subscription, ui/profile-components.js) —
+ * this function only needs to update ITS OWN input's placeholder/value
+ * after a successful save, nothing else.
+ */
+function renderAliasEditor(qu) {
+  const wrap = document.createElement('div');
+  wrap.className = 'qu-identity-alias-edit';
+  const label = document.createElement('label');
+  label.textContent = 'Alias';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = 64;
+  input.disabled = true; // enabled once the current alias has actually loaded — never save blind over an unknown current value
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.textContent = 'Speichern';
+  saveBtn.disabled = true;
+  const status = document.createElement('span');
+  status.className = 'qu-identity-alias-status';
+  wrap.append(label, input, saveBtn, status);
+
+  // Same two-part shape renderVisibilityToggle() below uses, and for the
+  // identical reason: `qu.readProfile()`/`qu.get()` are pure LOCAL reads
+  // (see session.js's own doc — "qu.get(id) never does I/O by itself").
+  // After a fresh page load this session's local store is EMPTY of
+  // everything except the identity keys themselves (session-bootstrap.js's
+  // own "everything else uses a fresh MemoryAdapter" doc), so a one-shot
+  // read alone would show the fallback (the fingerprint itself) forever —
+  // only a live `.on()` subscription, which (registered while a
+  // connection is already active) itself triggers the real network fetch
+  // via subscribeDispatch, ever brings the ACTUAL current alias back. The
+  // `document.activeElement !== input` guard is this field's own addition
+  // (renderVisibilityToggle's checkbox needs no such guard, an atomic
+  // click has nothing to clobber): a live update must never overwrite an
+  // in-progress, not-yet-saved edit while the user is still typing.
+  const path = `~${qu.fingerprint}`;
+  qu.get(path).get('alias').then((q) => {
+    if (document.activeElement !== input) input.value = q?.value ?? qu.fingerprint;
+    input.disabled = false;
+    saveBtn.disabled = false;
+  }).catch((e) => { console.error('[identity-screen] initial alias read failed:', e); input.disabled = false; saveBtn.disabled = false; });
+  qu.get(path).get('alias').on((q) => {
+    if (document.activeElement !== input) input.value = q?.value ?? qu.fingerprint;
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const alias = input.value.trim();
+    if (!alias) { status.textContent = 'Alias darf nicht leer sein.'; return; }
+    saveBtn.disabled = true;
+    status.textContent = '';
+    try {
+      await qu.publishProfile({ alias });
+      status.textContent = 'Gespeichert.';
+    } catch (e) {
+      console.error('[identity-screen] publishProfile(alias) failed:', e);
+      status.textContent = `Fehlgeschlagen: ${e.message}`;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  return wrap;
+}
+
+/**
+ * Shown only for someone ELSE's profile (never your own — see the
+ * isOwn/else split in renderIdentityView() above): the one place in the
+ * shell that actually calls `qu.addContact()`/`qu.removeContact()`
+ * (services/contacts/app.mjs's own list is the other consumer, same
+ * plugin, same private per-identity list — see src/modules/contacts.js's
+ * file doc for why this is never published anywhere, unlike the
+ * visibility toggle above). One-shot `listContacts()` read to decide the
+ * button's initial "add" vs. "remove" label — same "never toggle blind"
+ * stance as renderVisibilityToggle()/renderPushToggle() above.
+ */
+function renderAddContactButton(qu, fingerprint) {
+  const wrap = document.createElement('p');
+  wrap.className = 'qu-identity-contact';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.disabled = true;
+  wrap.appendChild(btn);
+
+  function setLabel(isContact) {
+    btn.dataset.isContact = String(isContact);
+    btn.textContent = isContact ? '📇 Aus Kontakten entfernen' : '📇 Zu Kontakten hinzufügen';
+  }
+
+  qu.listContacts().then((contacts) => {
+    setLabel(contacts.some((c) => c.fingerprint === fingerprint));
+    btn.disabled = false;
+  }).catch((e) => { console.error('[identity-screen] initial listContacts failed:', e); btn.disabled = false; setLabel(false); });
+  // Same reasoning as renderAliasEditor()'s own doc comment: listContacts()
+  // alone is a one-shot LOCAL read, blind to this identity's OWN
+  // contacts list as stored at the relay until something actually asks
+  // the network for it — this live subscription (src/modules/contacts.js's
+  // onContactsChange()) is that ask, filtered down to just the ONE
+  // fingerprint this button cares about.
+  qu.onContactsChange((q) => {
+    if (q.id.slice(q.id.lastIndexOf('/') + 1) !== fingerprint) return;
+    setLabel(q.value != null);
+    btn.disabled = false;
+  });
+
+  btn.addEventListener('click', async () => {
+    const wasContact = btn.dataset.isContact === 'true';
+    btn.disabled = true;
+    try {
+      if (wasContact) await qu.removeContact(fingerprint);
+      else await qu.addContact(fingerprint);
+      setLabel(!wasContact);
+    } catch (e) {
+      console.error('[identity-screen] add/removeContact failed:', e);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   return wrap;
 }
 
@@ -199,6 +332,121 @@ function renderPushToggle(qu, { repl, swRegistration, vapidPublicKey }) {
       hint.textContent = ` (fehlgeschlagen: ${e.message})`;
     } finally {
       checkbox.disabled = false;
+    }
+  });
+
+  return wrap;
+}
+
+/**
+ * Own-profile-only custom-attribute editor — the UI for
+ * src/modules/profiles.js's `setProfileAttr()`/`deleteProfileAttr()`/
+ * `listProfileAttrs()`/`onProfileAttrsChange()` (already installed as
+ * `qu.*` sugar by createProfilesPlugin(), same as renderVisibilityToggle()
+ * above uses `qu.setDirectoryVisible`). "privat" in the UI means
+ * `encryptFor: [qu.fingerprint]` — encrypted-to-self, same mechanism
+ * every other private field in this codebase uses (modules/contacts.js's
+ * own doc calls this out explicitly): readable by THIS identity from any
+ * of ITS OWN devices/sessions, unreadable by anyone else, including a
+ * relay operator with full storage access. A plain (non-private)
+ * attribute is readable by anyone who can read this identity's Space at
+ * all — same default as alias/avatar.
+ *
+ * Live via `onProfileAttrsChange()` rather than a one-shot list — an
+ * add/edit/delete from ANOTHER of this identity's own devices/tabs
+ * updates this list without a manual refresh, same reactive stance as
+ * every other `.on()`/`.map()` subscription in this file.
+ */
+function renderAttributesEditor(qu) {
+  const wrap = document.createElement('div');
+  wrap.className = 'qu-identity-attrs';
+  const heading = document.createElement('h3');
+  heading.textContent = 'Eigene Attribute';
+  const list = document.createElement('ul');
+  list.className = 'qu-identity-attrs-list';
+  wrap.append(heading, list);
+
+  const rows = new Map(); // key -> <li> — so a live update patches the existing row instead of rebuilding the whole list
+
+  function renderRow(key, entry) {
+    let li = rows.get(key);
+    if (!li) {
+      li = document.createElement('li');
+      rows.set(key, li);
+      list.appendChild(li);
+    }
+    if (entry == null) { li.remove(); rows.delete(key); return; }
+    li.textContent = '';
+    const keyEl = document.createElement('code');
+    keyEl.textContent = key;
+    const valueEl = document.createElement('span');
+    valueEl.className = 'qu-identity-attrs-value';
+    valueEl.textContent = entry.private ? '🔒 (privat)' : String(entry.value);
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.textContent = '✕';
+    delBtn.title = `"${key}" löschen`;
+    delBtn.addEventListener('click', async () => {
+      delBtn.disabled = true;
+      try {
+        await qu.deleteProfileAttr(key);
+      } catch (e) {
+        console.error('[identity-screen] deleteProfileAttr failed:', e);
+        delBtn.disabled = false;
+      }
+    });
+    li.append(keyEl, ': ', valueEl, delBtn);
+  }
+
+  qu.listProfileAttrs(qu.fingerprint).then((attrs) => {
+    for (const [key, entry] of Object.entries(attrs)) renderRow(key, entry);
+  }).catch((e) => console.error('[identity-screen] initial listProfileAttrs failed:', e));
+  // `q.value === null` on a live event is the tombstone shape
+  // (deleteProfileAttr()'s own doc) — `entry` built here matches
+  // listProfileAttrs()'s own `{value, private}` shape so renderRow() has
+  // one consistent input either way.
+  qu.onProfileAttrsChange(qu.fingerprint, (q) => {
+    const key = q.id.slice(q.id.lastIndexOf('/') + 1);
+    renderRow(key, q.value == null ? null : { value: q.value, private: !!q.encrypted });
+  });
+
+  const form = document.createElement('div');
+  form.className = 'qu-identity-attrs-form';
+  const keyInput = document.createElement('input');
+  keyInput.type = 'text';
+  keyInput.placeholder = 'Schlüssel';
+  keyInput.maxLength = 64;
+  const valueInput = document.createElement('input');
+  valueInput.type = 'text';
+  valueInput.placeholder = 'Wert';
+  const privateLabel = document.createElement('label');
+  const privateCheckbox = document.createElement('input');
+  privateCheckbox.type = 'checkbox';
+  privateLabel.append(privateCheckbox, ' privat (nur für mich, verschlüsselt)');
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.textContent = 'Hinzufügen';
+  const status = document.createElement('span');
+  status.className = 'qu-identity-attrs-status';
+  form.append(keyInput, valueInput, privateLabel, addBtn, status);
+  wrap.appendChild(form);
+
+  addBtn.addEventListener('click', async () => {
+    const key = keyInput.value.trim();
+    const value = valueInput.value;
+    if (!key) { status.textContent = 'Schlüssel darf nicht leer sein.'; return; }
+    addBtn.disabled = true;
+    status.textContent = '';
+    try {
+      await qu.setProfileAttr(key, value, privateCheckbox.checked ? { encryptFor: [qu.fingerprint] } : undefined);
+      keyInput.value = '';
+      valueInput.value = '';
+      privateCheckbox.checked = false;
+    } catch (e) {
+      console.error('[identity-screen] setProfileAttr failed:', e);
+      status.textContent = `Fehlgeschlagen: ${e.message}`;
+    } finally {
+      addBtn.disabled = false;
     }
   });
 

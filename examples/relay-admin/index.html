@@ -27,6 +27,23 @@
     <section id="status" class="status" hidden></section>
 
     <section class="panel">
+      <h2>Server-Konfiguration</h2>
+      <p class="hint">Startup-Umgebungsvariablen dieses Prozesses (siehe README) — rein lesend: diese Werte
+        entscheiden, welche Code-Pfade beim Start überhaupt initialisiert wurden (z. B. ob ein persistenter
+        Store geöffnet wurde), und lassen sich deshalb NICHT über ein Admin-Kommando ändern, anders als die
+        Panels unten — nur ein Neustart mit anderen Umgebungsvariablen ändert sie.</p>
+      <div id="deployment-panel">
+        <div><span class="label">QUniverse-Shell ("/")</span> <span id="deployment-quniverse">…</span></div>
+        <div><span class="label">Dokumentation</span> <span id="deployment-docs">…</span></div>
+        <div><span class="label">Lern-Demos (examples/)</span> <span id="deployment-examples">…</span></div>
+        <div><span class="label">Store</span> <span id="deployment-store">…</span></div>
+        <div><span class="label">Web Push</span> <span id="deployment-push">…</span></div>
+        <div><span class="label">TURN (WebRTC)</span> <span id="deployment-turn">…</span></div>
+      </div>
+      <p id="deployment-off" class="hint" hidden>Dieses Relay liefert keine Deployment-Konfiguration (kein <code>deployment</code>-Feld in <code>/relay/info</code>).</p>
+    </section>
+
+    <section class="panel">
       <div class="panel-head">
         <h2>Services</h2>
         <button id="refresh-btn" type="button">↻ Aktualisieren</button>

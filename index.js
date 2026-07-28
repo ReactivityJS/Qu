@@ -54,6 +54,8 @@ import {
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
 import { createRootContentRoutes } from './server/root-content-routes.mjs';
+import directoryManifest from './services/directory/manifest.mjs';
+import contactsManifest from './services/contacts/manifest.mjs';
 
 // Last-resort safety net. Every known instance of "an async listener's
 // rejection goes uncaught" has been fixed at its source (Channel dispatch,
@@ -121,12 +123,10 @@ const DOC_DEFINITIONS = [
 ];
 
 // Real, usable QUniverse products (category 'service') — as opposed to
-// EXAMPLE_DEFINITIONS above, which are pure teaching material. Empty for
-// now (the ecosystem shell itself needs no registry entry); the first real
-// entry here is a later, separate piece of work (e.g. a Contacts service
-// under services/contacts/, registered with a `mount` field). Only added
-// when QU_SERVE_QUNIVERSE is on.
-const QUNIVERSE_DEFINITIONS = [];
+// EXAMPLE_DEFINITIONS above, which are pure teaching material. Only added
+// when QU_SERVE_QUNIVERSE is on (these `mount` modules import shell-facing
+// Qu-Components that only make sense inside the ecosystem shell itself).
+const QUNIVERSE_DEFINITIONS = [directoryManifest, contactsManifest];
 
 // The Services/Examples/Documentation catalog (dev/portal.mjs, server/
 // portal-routes.mjs, and QUniverse's own <qu-nav-dropdown>) — the single
@@ -341,7 +341,19 @@ const server = startServer({
     ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null }),
     ...createWebRTCRoutes({ iceServers }),
     ...createPortalRoutes({ root, registry }),
-    ...createRelayInfoRoutes({ fingerprint: relayIdentity.fingerprint, epub: relayEpub, admins: relayAdmins, getAdminConfig: () => relayApi?.getAdminConfig?.() ?? null }),
+    ...createRelayInfoRoutes({
+      fingerprint: relayIdentity.fingerprint, epub: relayEpub, admins: relayAdmins,
+      getAdminConfig: () => relayApi?.getAdminConfig?.() ?? null,
+      // Startup-only env-var choices (see relay-info-routes.mjs's own doc
+      // on why these are read-only, unlike adminConfig above) — rendered
+      // by examples/relay-admin's "Server-Konfiguration" panel.
+      deployment: {
+        content: { quniverse: serveQuniverse, docs: serveDocs, examples: serveExamples },
+        store: persistent ? 'persistent' : 'memory',
+        push: pushEnabled ? { enabled: true, subject: vapidSubject } : { enabled: false },
+        turnConfigured: turnUrls.length > 0,
+      },
+    }),
   ],
 });
 

@@ -131,12 +131,50 @@ Umgebungsvariablen entscheiden, welche HTTP-Inhaltsbereiche aktiv sind
 Ist QUniverse deaktiviert, liefert `/` stattdessen das alte Qu-Dev-Portal
 aus ([`dev/`](./dev/index.html), Karten-Katalog für Services/Examples/Docs
 — sonst unter `/dev/` erreichbar, solange Docs oder Examples aktiv sind).
-Details, Struktur und der vollständige Satz an Relay-Umgebungsvariablen
-(Rate-Limit, Connection-Gate, VAPID/Push, Relay-Admins, …) stehen in
-[`services/README.md`](./services/README.md) (App-/Service-Template) und
-im Quellcode von `index.js` selbst (ausführlich kommentiert). Anders als
-`examples/` (Lernmaterial/Demos für Qu Core, Plugins und Module) ist
+Struktur und der App-/Service-Vertrag (`manifest.mjs`, Mount-Contract) für
+eigene Apps stehen in [`services/README.md`](./services/README.md). Anders
+als `examples/` (Lernmaterial/Demos für Qu Core, Plugins und Module) ist
 `services/` echte, nutzbare Produkt-Software.
+
+### Umgebungsvariablen (`index.js`)
+
+Alles, was der eine Server-Prozess beim Start liest — jede Variable ist
+außerdem im Quellcode von `index.js` an ihrer jeweiligen Stelle ausführlich
+kommentiert. Die dritte Spalte sagt, wie sich ein Wert ändern lässt: **Start**
+heißt, nur ein Prozess-Neustart mit anderem Wert wirkt (diese Werte
+entscheiden, welche Code-Pfade beim Hochfahren überhaupt initialisiert
+werden — es gibt dafür bewusst keinen Laufzeit-Mechanismus). **Admin-Portal**
+heißt, der Wert ist zusätzlich zur Startkonfiguration LIVE über ein
+signiertes `admin/config/*`-Kommando änderbar (`examples/relay-admin`) —
+der Startwert ist dann nur der Anfangszustand, kein Deckel.
+
+| Variable | Bedeutung | Default | Änderbar |
+|---|---|---|---|
+| `PORT` | HTTP-/WebSocket-Port. | `8787` | Start |
+| `QU_STORE` | `memory` = flüchtig, kein Disk-I/O, neuer Fingerprint bei jedem Neustart. Jeder andere Wert (auch unset) = persistent (`.relay-data/`). | persistent | Start |
+| `QU_SERVE_QUNIVERSE` | QUniverse-Shell besitzt `/`. `=0` deaktiviert. | an | Start |
+| `QU_SERVE_DOCS` | README/API/App-Guide/Whitepaper/Lab/Playground/Test-Runner. `=0` deaktiviert. | an | Start |
+| `QU_SERVE_EXAMPLES` | Qu's Lern-Demos (chat/people/forum/calendar/cms/hunt). `=0` deaktiviert. | an | Start |
+| `QU_SERVICES_DISABLED` | Kommagetrennte Service-Ids, die beim Start deaktiviert starten (z. B. `forum,hunt`) — feiner als die drei Bereichs-Toggles oben. | keine | Start (danach zusätzlich live über Admin-Portal togglebar) |
+| `QU_PLATFORM_MODULES_DISABLED` | Kommagetrennte Plattform-Modul-Ids (Kontaktliste, CMS-Startseite, Benachrichtigungen, Verzeichnis, Incognito-Identitäten), die beim Start deaktiviert starten. | keine | Start (danach zusätzlich live über Admin-Portal togglebar) |
+| `QU_RELAY_ADMINS` | Kommagetrennte Fingerprints mit Schreibrecht auf `admin/`/`relay-services/` (Service-/Modul-Toggles, Rate-Limit, Connection-Limit, Theme). | keine (kein Admin) | Start |
+| `QU_RATE_LIMIT` | `=0` deaktiviert das eingehende Rate-Limit komplett. | an | Start |
+| `QU_RATE_LIMIT_MAX` / `QU_RATE_LIMIT_WINDOW_MS` | Schreibvorgänge pro Fingerprint / Zeitfenster in ms. | `200` / `1000` | Start, danach live über Admin-Portal |
+| `QU_REQUIRE_DIRECT_WRITER` | `=1` verwirft jeden Push, dessen Signer nicht die Verbindung selbst ist (strengere Stern-Topologie-Prüfung). | aus | Start |
+| `QU_MAX_CONNECTIONS` / `QU_ALLOWED_FINGERPRINTS` | Max. gleichzeitig verbundene Fingerprints / feste Zulassungsliste (kommagetrennt). | kein Limit | Start, danach live über Admin-Portal |
+| `QU_PUSH` | `=0` deaktiviert Web Push komplett (kein Schlüsselpaar, `/push/vapid-public-key` liefert `null`). | an | Start |
+| `QU_VAPID_PUBLIC_KEY` / `QU_VAPID_PRIVATE_KEY` | Festes VAPID-Schlüsselpaar statt automatischer Generierung (in `QU_STORE=memory` sonst bei jedem Neustart neu, in persistentem Modus sonst einmalig generiert und in `.relay-data/vapid-keys.json` abgelegt). Beide zusammen setzen, sonst werden sie ignoriert. | auto-generiert | Start |
+| `QU_VAPID_SUBJECT` | `mailto:`-Kontakt im VAPID-Header. | `mailto:admin@example.com` | Start |
+| `QU_TURN_URLS` / `QU_TURN_USERNAME` / `QU_TURN_CREDENTIAL` | TURN-Server für WebRTC-Anrufe (`examples/chat`), zusätzlich zu den öffentlichen STUN-Servern — ohne TURN scheitern Anrufe zwischen Peers hinter symmetrischem NAT/restriktiver Firewall. | keins (nur STUN) | Start |
+| `QU_ENABLE_TEST_ENDPOINT` | `=1` schaltet `/test/run-node-tests` frei (führt `node --test` server-seitig aus — nur für vertrauenswürdige Umgebungen). | aus | Start |
+| `QU_DEBUG` / `QU_DEBUG_SCOPE` | `QU_DEBUG=0` schaltet die Relay-Konsolenausgabe (Ingest/Push/Sync/Datei-Transfer) ab; `QU_DEBUG_SCOPE` filtert sie (kommagetrennt). | an, ungefiltert | Start |
+
+Ein Admin sieht die aktuell wirksamen Werte aller **Start**-Variablen
+zusätzlich schreibgeschützt im Admin-Portal (Panel "Server-Konfiguration",
+`GET /relay/info`s `deployment`-Feld) — ohne dafür Logs oder die
+Prozessumgebung durchsuchen zu müssen. Der Admin-Portal-Link selbst
+erscheint automatisch im Header der QUniverse-Shell, sobald die eigene
+Fingerprint auf der `QU_RELAY_ADMINS`-Liste steht.
 
 ## Grundkonzepte an Beispielen
 
