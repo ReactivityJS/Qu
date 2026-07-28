@@ -113,15 +113,30 @@ nutzbar — `qu.runtime` ist die Fluchttür dorthin.
 
 ## QUniverse — das Ökosystem-Produkt auf Qu
 
-[`quniverse/`](./quniverse/README.md) ist ein eigenständiges Produkt, das auf
-Qu aufbaut: ein Relay-Deployment + Ökosystem-Shell (Router, Navigation,
-Identity-Viewer, zentrale Benachrichtigungen, Push) + eine wachsende Zahl
-konkreter Apps (`quniverse/services/`). Es lebt als Unterordner in diesem
-Repo (kein eigenes `package.json`, reine relative Importe wie jedes
-`examples/`-Modul) — siehe [`quniverse/README.md`](./quniverse/README.md)
-für Start (`npm run quniverse`), Umgebungsvariablen und Struktur. Anders als
+QUniverse ist das eigenständige Produkt, das auf Qu aufbaut: eine
+Ökosystem-Shell (Router, Navigation, Identity-Viewer, zentrale
+Benachrichtigungen, Push) + eine wachsende Zahl konkreter Apps
+(`services/`). Es teilt sich EINEN Server-Prozess mit Qu selbst — es gibt
+nur EIN `index.js` und EIN `sw.js` in diesem Repo, kein separater
+Relay/Prozess für QUniverse. `npm start` startet alles; drei unabhängige
+Umgebungsvariablen entscheiden, welche HTTP-Inhaltsbereiche aktiv sind
+(alle standardmäßig an, `=0` deaktiviert):
+
+| Variable | Inhaltsbereich |
+|---|---|
+| `QU_SERVE_QUNIVERSE` | Die QUniverse-Shell (`index.html`, `app.mjs`, `shell/`, echte Apps unter `services/`) — besitzt `/`. |
+| `QU_SERVE_DOCS` | README/API/App-Guide/Whitepaper/Lab/Playground/Browser-Testrunner (`docs/`, `test/`). |
+| `QU_SERVE_EXAMPLES` | Qu's eigene Lern-Demos (`examples/`: chat, people, forum, calendar, cms, hunt) — reines Lernmaterial, keine echten QUniverse-Produkte. |
+
+Ist QUniverse deaktiviert, liefert `/` stattdessen das alte Qu-Dev-Portal
+aus ([`dev/`](./dev/index.html), Karten-Katalog für Services/Examples/Docs
+— sonst unter `/dev/` erreichbar, solange Docs oder Examples aktiv sind).
+Details, Struktur und der vollständige Satz an Relay-Umgebungsvariablen
+(Rate-Limit, Connection-Gate, VAPID/Push, Relay-Admins, …) stehen in
+[`services/README.md`](./services/README.md) (App-/Service-Template) und
+im Quellcode von `index.js` selbst (ausführlich kommentiert). Anders als
 `examples/` (Lernmaterial/Demos für Qu Core, Plugins und Module) ist
-`quniverse/` echte, nutzbare Produkt-Software.
+`services/` echte, nutzbare Produkt-Software.
 
 ## Grundkonzepte an Beispielen
 

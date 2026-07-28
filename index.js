@@ -1,13 +1,32 @@
-// Server entry point. Deliberately empty of QU logic — it only wires the
-// generic static server (server/static-server.mjs) to this repo's own
-// directory, so that index.html, demo/, test/, and the docs viewer can be
-// opened over http://localhost instead of file:// (which browsers block
-// fetch() and strict ESM loading on for local files), and attaches a
-// universal QU relay (relay/relay.mjs — no chat/app assumptions of its
-// own) over a Node WebSocket bridge (relay/node-ws-bridge.mjs) to the same
-// port. Persistence and which topics to relay are plain configuration
-// values chosen here, for this specific deployment — the relay itself
-// makes no assumption about either.
+// THE server entry point — one relay + configurable HTTP content, nothing
+// more. It wires the generic static server (server/static-server.mjs) to
+// this repo's own directory, so that index.html, examples/, test/, and the
+// docs viewer can be opened over http://localhost instead of file://
+// (which browsers block fetch() and strict ESM loading on for local
+// files), and attaches a universal QU relay (relay/relay.mjs — no chat/app
+// assumptions of its own) over a Node WebSocket bridge
+// (relay/node-ws-bridge.mjs) to the same port. Persistence and which
+// topics to relay are plain configuration values chosen here, for this
+// specific deployment — the relay itself makes no assumption about either.
+//
+// The relay (WebSocket, peer-to-peer message routing) is always on — the
+// ONE thing this process always does. Which HTTP content areas ride along
+// on top of it is a runtime config choice, three independent toggles (each
+// `=0` to disable, same convention as QU_PUSH/QU_RATE_LIMIT below):
+//   QU_SERVE_QUNIVERSE  — the QUniverse ecosystem shell (index.html/app.mjs/
+//                         shell/, real `services/*` apps) — owns "/".
+//   QU_SERVE_DOCS       — README/API/App-Guide/Whitepaper/interactive Lab/
+//                         Playground/browser test runner (docs/, test/).
+//   QU_SERVE_EXAMPLES   — Qu's own teaching demos (examples/*: chat, people,
+//                         forum, calendar, cms, hunt) — pure learning
+//                         material, not real QUniverse products (see
+//                         services/README.md's repo-hygiene note).
+// All three default to enabled. When QUniverse is disabled, "/" falls back
+// to the dev portal (dev/index.html) if docs or examples are still on —
+// see server/root-content-routes.mjs. Disabling an area only removes it
+// from the catalog/from "/" — its static files stay directly fetchable,
+// same non-guarantee an `enabled: false` service-registry entry already
+// has (the real boundary is always identity/ACL, never a hidden URL).
 //
 // Run: node index.js   (or: npm start)
 
@@ -30,10 +49,11 @@ import { createPersistedMap } from './relay/persisted-map.mjs';
 import { sendWebPush, generateVapidKeys } from './relay/webpush.mjs';
 import {
   QuIdentity, QuStore, MemoryAdapter, MemoryFileStorageAdapter, NullAdapter, enableConsoleDebug, createRateLimiter, createConnectionGate, isValidFingerprint,
-  createChatPushRule, createCalendarPushRule, createItemInvitePushRule,
+  createChatPushRule, createCalendarPushRule, createItemInvitePushRule, createNotificationPushRule,
 } from './src/index.js';
 import { FileSystemStorageAdapter } from './src/adapters/node-fs.js';
 import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storage.js';
+import { createRootContentRoutes } from './server/root-content-routes.mjs';
 
 // Last-resort safety net. Every known instance of "an async listener's
 // rejection goes uncaught" has been fixed at its source (Channel dispatch,
@@ -68,33 +88,63 @@ if (process.env.QU_DEBUG !== '0') {
 // always-persistent default so existing deployments see no behavior change.
 const persistent = process.env.QU_STORE !== 'memory';
 
-// The Services/Examples/Documentation catalog (portal.mjs, server/
-// portal-routes.mjs) — the single source of truth every consumer reads
-// from, replacing what used to be two independently hand-maintained
-// SERVICE_APPS objects (see server/service-registry.mjs's file doc for
-// the full history). `entry`-only definitions here are the code-level
-// "seed" catalog; an operator with a relayAdmins fingerprint can add
-// FURTHER pure-data (link-only) entries at runtime, no restart, by
-// publishing to `relay-services/<id>` (see relay/relay.mjs) — this array
-// is not the only source once the relay is running, just the bootstrap
-// one. QU_SERVICES_DISABLED (comma-separated ids) turns any of these off
-// at startup, e.g. `QU_SERVICES_DISABLED=forum,hunt`.
-const registry = createServiceRegistry([
-  { id: 'chat', category: 'service', label: '💬 Messenger', description: 'Verschlüsselter 1:1- und Gruppen-Chat, Anrufe, Dateiübertragung — installierbar als PWA.', entry: '/examples/chat/index.html' },
-  { id: 'people', category: 'service', label: '👥 People', description: 'Globales, opt-in Identitäten-Verzeichnis — ein Profil (Alias, Avatar, Zusatz-Attribute), wiederverwendbar über jede Qu-App hinweg.', entry: '/examples/people/index.html' },
-  { id: 'forum', category: 'service', label: '🗂️ Forum', description: 'Themen mit Titel + Antworten auf einem geteilten Space.', entry: '/examples/forum/index.html' },
-  { id: 'calendar', category: 'service', label: '📅 Kalender', description: 'Verschlüsselter, gemeinsam genutzter Kalender — Monats-/Wochen-/Tagesansicht, Einladung zum Kalender UND zu einzelnen Terminen, RSVP, Push-Benachrichtigungen.', entry: '/examples/calendar/index.html' },
-  { id: 'cms', category: 'service', label: '📄 CMS', description: 'Seiten/Templates auf einem geteilten Space, mehrere Autoren.', entry: '/examples/cms/index.html' },
-  { id: 'hunt', category: 'service', label: '🗺️ Hunt', description: 'Standort-basiertes Fang-Spiel auf einem geteilten Space.', entry: '/examples/hunt/index.html' },
+// The three independently toggleable HTTP content areas — see this file's
+// own top-of-file doc comment. Each `=0` to disable, unset/anything else
+// keeps it on (same convention as QU_PUSH/QU_RATE_LIMIT below).
+const serveQuniverse = process.env.QU_SERVE_QUNIVERSE !== '0';
+const serveDocs = process.env.QU_SERVE_DOCS !== '0';
+const serveExamples = process.env.QU_SERVE_EXAMPLES !== '0';
+
+// Qu's own teaching demos — pure learning material (see services/README.md's
+// repo-hygiene note: real QUniverse products live under `services/`, NEVER
+// here), category 'example' accordingly. Only added to the registry at all
+// when QU_SERVE_EXAMPLES is on.
+const EXAMPLE_DEFINITIONS = [
+  { id: 'chat', category: 'example', label: '💬 Messenger', description: 'Verschlüsselter 1:1- und Gruppen-Chat, Anrufe, Dateiübertragung — installierbar als PWA.', entry: '/examples/chat/index.html' },
+  { id: 'people', category: 'example', label: '👥 People', description: 'Globales, opt-in Identitäten-Verzeichnis — ein Profil (Alias, Avatar, Zusatz-Attribute), wiederverwendbar über jede Qu-App hinweg.', entry: '/examples/people/index.html' },
+  { id: 'forum', category: 'example', label: '🗂️ Forum', description: 'Themen mit Titel + Antworten auf einem geteilten Space.', entry: '/examples/forum/index.html' },
+  { id: 'calendar', category: 'example', label: '📅 Kalender', description: 'Verschlüsselter, gemeinsam genutzter Kalender — Monats-/Wochen-/Tagesansicht, Einladung zum Kalender UND zu einzelnen Terminen, RSVP, Push-Benachrichtigungen.', entry: '/examples/calendar/index.html' },
+  { id: 'cms', category: 'example', label: '📄 CMS', description: 'Seiten/Templates auf einem geteilten Space, mehrere Autoren.', entry: '/examples/cms/index.html' },
+  { id: 'hunt', category: 'example', label: '🗺️ Hunt', description: 'Standort-basiertes Fang-Spiel auf einem geteilten Space.', entry: '/examples/hunt/index.html' },
   { id: 'example-modules', category: 'example', label: 'Beispiel-Module', description: 'Sechs kurze, fokussierte Module (ToDo-Liste, Forum, App-Space, Sub-Space-Index, Space-App-Basis, CMS-Erweiterung) — Logik getrennt von jeder Oberfläche, mit node --test nachvollziehbar.', entry: '/docs/examples.html' },
   { id: 'lab', category: 'example', label: 'Interaktives Lab', description: 'Core, Storage, Spaces/ACL, Netzwerk/Relay/Mirror — Schritt für Schritt im Browser, mit echten Objekten in der Konsole zum Weiterprobieren.', entry: '/docs/lab/index.html' },
   { id: 'playground', category: 'example', label: 'Playground', description: 'Eine fertig initialisierte qu-Instanz in der Konsole, dazu Copy-Paste-Beispiele für get/put/set/on/map, Spaces, Referenzen, Dateien und eine echte Relay-Verbindung.', entry: '/docs/playground.html' },
+];
+
+// Only added when QU_SERVE_DOCS is on.
+const DOC_DEFINITIONS = [
   { id: 'readme', category: 'documentation', label: 'README', description: 'Schnelleinstieg, Projektstruktur, Kernprinzipien.', entry: '/docs/view.html?file=/README.md' },
   { id: 'api', category: 'documentation', label: 'API-Referenz', description: 'Jede öffentliche Funktion/Klasse — Parameter, Rückgabewerte, Beispiele.', entry: '/docs/view.html?file=/API.md' },
   { id: 'app-guide', category: 'documentation', label: 'App-Guide', description: 'Eine vernetzte App bauen: mehrere Instanzen tauschen Daten über einen echten Relay und einen gemeinsamen App-Space aus.', entry: '/docs/view.html?file=/APP-GUIDE.md' },
   { id: 'whitepaper', category: 'documentation', label: 'Whitepaper', description: 'Architektur-Spezifikation — Contracts, Sicherheitsmodell, Spaces, Facade.', entry: '/docs/view.html?file=/qu-whitepaper-v0.6.md' },
   { id: 'tests', category: 'documentation', label: 'Tests', description: 'Dieselbe Testsuite wie npm test, hier im Browser ausgeführt.', entry: '/test/index.html' },
-  // category: 'admin', not 'service' — portal.mjs only ever renders
+];
+
+// Real, usable QUniverse products (category 'service') — as opposed to
+// EXAMPLE_DEFINITIONS above, which are pure teaching material. Empty for
+// now (the ecosystem shell itself needs no registry entry); the first real
+// entry here is a later, separate piece of work (e.g. a Contacts service
+// under services/contacts/, registered with a `mount` field). Only added
+// when QU_SERVE_QUNIVERSE is on.
+const QUNIVERSE_DEFINITIONS = [];
+
+// The Services/Examples/Documentation catalog (dev/portal.mjs, server/
+// portal-routes.mjs, and QUniverse's own <qu-nav-dropdown>) — the single
+// source of truth every consumer reads from, replacing what used to be two
+// independently hand-maintained SERVICE_APPS objects (see server/
+// service-registry.mjs's file doc for the full history). `entry`-only
+// definitions here are the code-level "seed" catalog; an operator with a
+// relayAdmins fingerprint can add FURTHER pure-data (link-only) entries at
+// runtime, no restart, by publishing to `relay-services/<id>` (see
+// relay/relay.mjs) — this array is not the only source once the relay is
+// running, just the bootstrap one. QU_SERVICES_DISABLED (comma-separated
+// ids) turns any of these off at startup, e.g. `QU_SERVICES_DISABLED=forum,hunt`
+// — independent of, and finer-grained than, the three whole-area toggles above.
+const registry = createServiceRegistry([
+  ...(serveExamples ? EXAMPLE_DEFINITIONS : []),
+  ...(serveDocs ? DOC_DEFINITIONS : []),
+  ...(serveQuniverse ? QUNIVERSE_DEFINITIONS : []),
+  // category: 'admin', not 'service' — dev/portal.mjs only ever renders
   // 'service'/'example'/'documentation' cards, so this never appears in
   // the public Services tab. That's a discoverability choice, not a
   // security boundary: static file serving has no notion of "this
@@ -103,7 +153,9 @@ const registry = createServiceRegistry([
   // entirely the relayAdmins ACL check on the writes this app makes (see
   // relay/relay.mjs), same as any other Qu app. Hiding the tab only saves
   // a non-admin visitor a confusing detour into an app they can open but
-  // can't do anything privileged in.
+  // can't do anything privileged in. Always registered, independent of
+  // the three area toggles — administering a relay never depends on which
+  // content areas that same relay happens to be serving.
   { id: 'relay-admin', category: 'admin', label: 'Relay-Admin', description: 'Services verwalten (nur für QU_RELAY_ADMINS-Fingerprints).', entry: '/examples/relay-admin/index.html' },
   // Reference custom service (relay/services/fail2ban.mjs, see
   // server/service-registry.mjs's extension contract doc for the full
@@ -122,13 +174,13 @@ for (const id of (process.env.QU_SERVICES_DISABLED || '').split(',').map((s) => 
 }
 
 // The Platform-Feature registry (server/platform-registry.mjs — contacts,
-// CMS-homepage, notification-aggregation, directory, incognito) — this
-// demo deployment has no shell that reads it yet (that's QUniverse's job,
-// a separate product built on top of this repo), but every relay carries
-// one regardless so examples/relay-admin's platform-modules panel has a
-// real registry to administer, same as rate-limit/connection-limit above.
-// Same QU_SERVICES_DISABLED convention, its own env var:
-// `QU_PLATFORM_MODULES_DISABLED=contacts,incognito`.
+// CMS-homepage, notification-aggregation, directory, incognito) — read by
+// the QUniverse shell (shell/qu-app-shell.mjs, once it grows a screen that
+// actually gates on a specific module) when QU_SERVE_QUNIVERSE is on; every
+// relay carries one regardless so examples/relay-admin's platform-modules
+// panel always has a real registry to administer, same as rate-limit/
+// connection-limit above. Same QU_SERVICES_DISABLED convention, its own
+// env var: `QU_PLATFORM_MODULES_DISABLED=contacts,incognito`.
 const platformRegistry = createPlatformRegistry();
 for (const id of (process.env.QU_PLATFORM_MODULES_DISABLED || '').split(',').map((s) => s.trim()).filter(Boolean)) {
   platformRegistry.setEnabled(id, false);
@@ -280,6 +332,11 @@ let relayApi;
 const server = startServer({
   root, port,
   routes: [
+    // Checked before the other content-area routes below (and before
+    // static-server.mjs's own plain-file fallback) — decides what "/"
+    // itself serves based on the three QU_SERVE_* toggles. See this file's
+    // own top-of-file doc comment and server/root-content-routes.mjs.
+    ...createRootContentRoutes({ root, serveQuniverse, serveDocs, serveExamples }),
     ...createTestRoutes({ root }),
     ...createPushRoutes({ publicKey: pushEnabled ? vapidPublicKey : null }),
     ...createWebRTCRoutes({ iceServers }),
@@ -372,14 +429,18 @@ const connectionGate = (maxConnectionsEnv != null || allowedFingerprintsEnv.leng
 //
 // Which apps' writes actually trigger a push is entirely THIS deployment's
 // choice (relay.mjs's `pushRules` doc comment) — relay.mjs itself has no
-// idea Chat/Calendar/item-invites exist. This bundled deployment happens to
-// serve all three example apps, so it opts all three in; a deployment
-// serving only one of them would list only that one's rule.
-const pushRules = [createChatPushRule(), createCalendarPushRule(), createItemInvitePushRule()];
+// idea Chat/Calendar/item-invites/QUniverse exist. This bundled deployment
+// happens to serve the example apps AND the QUniverse shell, so it opts
+// all four in; a deployment serving only one area would list only its own
+// rule(s). createNotificationPushRule() (src/modules/notifications.js) is
+// QUniverse's own generic hook — any app calling qu.notifyUser() gets
+// push-enabled automatically, no per-app rule needed on top of it.
+const pushRules = [createChatPushRule(), createCalendarPushRule(), createItemInvitePushRule(), createNotificationPushRule()];
 relayApi = await createRelay({ store, fileStorage, identity: relayIdentity, pushTopics: ['qu-demo-room/'], allowDynamicSubscribe: true, requireDirectWriter, rateLimiter, connectionGate, sendPush, pushSubscriptions, pushRules, relayAdmins, serviceRegistry: registry, platformRegistry });
 await relayApi.relay.publishProfile(); // makes ~<fingerprint>/epub discoverable — the one thing anything encrypting TO this relay needs to look up (also directly served at /relay/info above, no sync required)
 bridgeWebSocketServer(server, relayApi, { path: '/relay' });
 console.log(`[Relay] Identity: ${relayIdentity.fingerprint}${persistent ? ' (stable across restarts)' : ' (ephemeral — QU_STORE=memory, a fresh fingerprint every restart)'}`);
+console.log(`[Relay] Content areas — QUniverse: ${serveQuniverse ? 'on' : 'off (QU_SERVE_QUNIVERSE=0)'}, Docs: ${serveDocs ? 'on' : 'off (QU_SERVE_DOCS=0)'}, Examples: ${serveExamples ? 'on' : 'off (QU_SERVE_EXAMPLES=0)'} — "/" serves ${serveQuniverse ? 'the QUniverse shell' : (serveDocs || serveExamples) ? 'the dev portal (dev/index.html)' : 'a placeholder (nothing enabled)'}`);
 // The FULL list, not just a count — a count ("2 admin fingerprint(s)
 // configured") can never reveal a subtle mismatch (wrong case, a stray
 // quote character from a docker-compose quoting mistake, an extra
