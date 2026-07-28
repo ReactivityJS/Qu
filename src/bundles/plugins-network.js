@@ -7,6 +7,7 @@ export { Router } from '../network/router.js';
 export { sendRoutedEvent, onRoutedEvent } from '../network/routed-events.js';
 export { createWebSocketChannel } from '../network/transports/websocket-browser.js';
 export { createWebRTCChannel } from '../network/transports/webrtc-browser.js';
+export { createManualSignalingChannel } from '../network/transports/webrtc-manual-signaling.js';
 export { PeerConnectionManager } from '../network/webrtc-peer-manager.js';
 export { createWebRTCPlugin } from '../network/webrtc-plugin.js';
 export { DefaultReplication } from '../network/replication/default.js';
