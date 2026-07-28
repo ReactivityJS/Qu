@@ -30,7 +30,7 @@
 // exact contract a mount module must implement.
 
 import {
-  createNetworkPlugin, createSpacesPlugin, createProfilesPlugin, createWebSocketChannel,
+  createNetworkPlugin, createSpacesPlugin, createProfilesPlugin, createContactsPlugin, createWebSocketChannel,
   createRouter, buildPath, inboxId,
 } from '../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../src/ui/session-bootstrap.js';
@@ -69,7 +69,8 @@ export class QuAppShellElement extends HTMLElement {
     const qu = (await loadOrCreateIdentity())
       .use(createNetworkPlugin())
       .use(createSpacesPlugin())
-      .use(createProfilesPlugin());
+      .use(createProfilesPlugin())
+      .use(createContactsPlugin());
     this.qu = qu; // MUST be set before any descendant <qu-*> element renders — see file doc above
     this._stopTheme = applyTheme(qu); // this deployment's relay-config/theme (qu-core's admin/relay-admin panel), live — see that file's own doc for the null/never-set behavior
 
@@ -105,6 +106,8 @@ export class QuAppShellElement extends HTMLElement {
       .then((services) => { this._services = services; router.setServices(services); })
       .catch((e) => { console.error('[qu-app-shell] failed to load /relay/services:', e); this._services = []; router.setServices([]); });
 
+    this._revealAdminLinkIfAdmin(qu);
+
     // Registered at `/sw.js` (default scope `/`, the directory of the
     // script itself — see that file's own doc comment) — a platform-level
     // registration covering the whole ecosystem shell. Qu's own
@@ -116,10 +119,12 @@ export class QuAppShellElement extends HTMLElement {
     // "installability doesn't need push" reasoning examples/chat/app.mjs's
     // own registerServiceWorker() call documents).
     this._swRegistration = await registerServiceWorker('/sw.js').catch((e) => { console.error('[qu-app-shell] service worker registration failed:', e); return null; });
+    this._reRenderIdentityIfCurrent(); // see that method's own doc — a page loaded directly on #/~<fp> rendered the push toggle before `_swRegistration` existed
     this._vapidPublicKey = await fetch('/push/vapid-public-key')
       .then((res) => res.json())
       .then((info) => info.publicKey)
       .catch((e) => { console.error('[qu-app-shell] failed to load /push/vapid-public-key:', e); return null; });
+    this._reRenderIdentityIfCurrent(); // see that method's own doc — a page loaded directly on #/~<fp> rendered the push toggle before `_vapidPublicKey` existed (the actual bug this fixes: "auf diesem Relay deaktiviert" shown even though push IS enabled server-side)
   }
 
   /** Persistent header (nav dropdown + notification badge + own profile card) + the screen area the router swaps content into — built once, right after `.qu` is set. */
@@ -133,9 +138,19 @@ export class QuAppShellElement extends HTMLElement {
     brand.textContent = 'QUniverse';
     const nav = document.createElement('qu-nav-dropdown');
     const notifications = document.createElement('qu-notification-badge');
+    // Hidden until _revealAdminLinkIfAdmin() below confirms this identity is
+    // actually on the relay's QU_RELAY_ADMINS list — nav-catalog.mjs's
+    // visibleCatalogEntries() deliberately excludes category:'admin' from
+    // qu-nav-dropdown ("a product nav, not a dev/ops catalog"), so an admin
+    // otherwise has no visible link to relay-admin anywhere in this shell.
+    this._adminLinkEl = document.createElement('a');
+    this._adminLinkEl.className = 'qu-shell-admin-link';
+    this._adminLinkEl.href = '/examples/relay-admin/index.html';
+    this._adminLinkEl.textContent = '🛠️ Admin-Portal';
+    this._adminLinkEl.hidden = true;
     const ownCard = document.createElement('qu-profile-card');
     ownCard.setAttribute('href', buildPath(`~${this.qu.fingerprint}`));
-    header.append(brand, nav, notifications, ownCard);
+    header.append(brand, nav, notifications, this._adminLinkEl, ownCard);
 
     this._screenEl = document.createElement('main');
     this._screenEl.className = 'qu-shell-screen';
@@ -153,6 +168,7 @@ export class QuAppShellElement extends HTMLElement {
         ]);
         const repl = await qu.connect(channel, { pushTopics: [''] });
         this._repl = repl; // exposed for identity-screen.mjs's push-toggle (subscribeToPush()/unsubscribeFromPush() both need the replication instance's own sync(), see qu-core/src/ui/push.mjs)
+        this._reRenderIdentityIfCurrent(); // see that method's own doc — a page loaded directly on #/~<fp> rendered the push toggle before `repl` existed
         // `pushTopics` only pushes FUTURE writes from here on (network/
         // replication/default.js's own doc) — it never catches this session
         // up on data that already existed on the relay before this exact
@@ -197,6 +213,7 @@ export class QuAppShellElement extends HTMLElement {
   _renderRoute(decision) {
     const screen = this._screenEl;
     if (!screen) return; // not laid out yet (still bootstrapping) — the router's own first emission can race _buildLayout(), a later route change will re-render correctly once it's up
+    this._lastDecision = decision; // see _reRenderIdentityIfCurrent()'s own doc — router.start() dispatches SYNCHRONOUSLY (src/ui/router.js), well before _swRegistration/_vapidPublicKey/_repl below have resolved
     const gen = ++this._routeGen; // see _renderGenericSpaceDefault()'s own use of this
     this._stopMountedApp?.(); // ANY route change tears down a previously mounted app first — no partial in-place updates yet, see _mountApp()'s own doc
     this._stopMountedApp = null;
@@ -274,6 +291,46 @@ export class QuAppShellElement extends HTMLElement {
     const loading = document.createElement('p');
     loading.textContent = 'Lädt …';
     screen.appendChild(loading);
+  }
+
+  /**
+   * The identity view (`renderIdentityView()` in `_renderRoute()` above) is
+   * the ONE screen that reads `_swRegistration`/`_vapidPublicKey`/`_repl` —
+   * all three are still `undefined` at `router.start()`'s own synchronous
+   * first dispatch (see `_renderRoute()`'s own comment), so a page LOADED
+   * directly on a `#/~<fp>` URL (a bookmark, a shared link, a reload) would
+   * otherwise render the push toggle permanently stuck on "auf diesem
+   * Relay deaktiviert" — the one-shot render never happens again on its
+   * own once the real values arrive. Called after each of those three
+   * settles; a no-op unless the CURRENTLY shown route is still the same
+   * identity view (never re-renders out from under a since-navigated-away
+   * screen or a since-mounted app).
+   */
+  _reRenderIdentityIfCurrent() {
+    const d = this._lastDecision;
+    if (d?.kind === 'space-default' && d.spaceId?.startsWith('~')) this._renderRoute(d);
+  }
+
+  /**
+   * Purely a UI convenience, NOT a security check (same stance as dev/
+   * portal.mjs's own revealAdminTabIfLocalIdentityIsAdmin(), which this
+   * mirrors) — reveals `_adminLinkEl` only if THIS shell's already-loaded
+   * identity happens to be on the relay's QU_RELAY_ADMINS list
+   * (GET /relay/info). A real unauthorized write attempt still fails at
+   * the relay's own ACL either way; this only saves an actual admin the
+   * trouble of remembering/bookmarking `/examples/relay-admin/index.html`
+   * — see qu-nav-dropdown.mjs's nav-catalog.mjs for why it isn't already
+   * in the regular app menu.
+   */
+  async _revealAdminLinkIfAdmin(qu) {
+    let admins;
+    try {
+      admins = (await (await fetch('/relay/info')).json()).admins ?? [];
+    } catch (e) {
+      console.error('[qu-app-shell] failed to load /relay/info — admin link stays hidden:', e);
+      return;
+    }
+    if (this._adminLinkEl && admins.includes(qu.fingerprint)) this._adminLinkEl.hidden = false;
   }
 
   /**
