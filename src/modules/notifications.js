@@ -78,3 +78,56 @@ export function createNotificationsPlugin() {
     },
   };
 }
+
+const NOTIFICATION_ID_RE = /^inbox-([0-9a-f]{24})\/notifications\//i;
+
+/**
+ * `createRelay({ pushRules: [...] })` descriptor (relay/relay.mjs's own doc
+ * comment on the exact `{pattern, resolveRecipients, buildPayload}` shape)
+ * — this is THE platform-level "hook in easily" mechanism the whole
+ * notifications feed is built around: any app/service that wants push-
+ * enabled notifications does NOT need its own push rule at all, a
+ * relay.mjs `pushRules` entry, or any relay-side wiring beyond opting THIS
+ * ONE rule in once per deployment. It only ever needs to call
+ * `qu.notifyUser(fp, {message, ...})` — a write this module already
+ * defines and every recipient's `onNotification()` already reads.
+ *
+ * `pattern` is `'**'` (matches every qubit ever ingested, same technique
+ * relay.mjs's own admin command listener already uses) rather than a
+ * prefix-style pattern built from `inbox-*` followed by `notifications`
+ * and a trailing `*` segment — core/pattern.js's `patternToRegExp()` only
+ * ever treats a segment that IS EXACTLY `*` as a wildcard; a segment
+ * merely CONTAINING one (`inbox-*`, since the recipient fingerprint is
+ * embedded inside `inboxId()`'s compound `inbox-<fp>` id, not a segment of
+ * its own) is matched LITERALLY, so a prefix-style pattern here would
+ * silently never match anything at all.
+ * `resolveRecipients()` below is what actually narrows this down to real
+ * notification writes, via `NOTIFICATION_ID_RE` — a broad pattern is
+ * harmless precisely because every OTHER write just resolves to zero
+ * recipients here, same "cheap to check, only acts on a real match" shape
+ * relay.mjs's own generic `on('**')` admin dispatch already relies on.
+ *
+ * `resolveRecipients()` reads the recipient fingerprint straight out of
+ * the qubit's OWN id (`inbox-<fp>/notifications/<...>` — the fp this
+ * notification was addressed to, not its writer/sender) rather than
+ * inspecting the (opaque, app-defined) notification payload itself.
+ * `buildPayload()` deliberately stays a generic template — the
+ * notification's own `message` field (already documented as a short,
+ * human-readable summary, never confidential content) plus the sender's
+ * public alias if relay.mjs already resolved one, same "template + alias,
+ * never decrypted content" contract createChatPushRule()/
+ * createCalendarPushRule() already follow.
+ */
+export function createNotificationPushRule() {
+  return {
+    pattern: '**',
+    resolveRecipients: (q) => {
+      const m = NOTIFICATION_ID_RE.exec(q.id);
+      return m ? [m[1]] : [];
+    },
+    buildPayload: (q, senderAlias) => ({
+      title: 'QUniverse',
+      body: q.value?.message || (senderAlias ? `Neue Benachrichtigung von ${senderAlias}` : 'Du hast eine neue Benachrichtigung erhalten'),
+    }),
+  };
+}
