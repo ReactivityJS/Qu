@@ -7,74 +7,172 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="stylesheet" href="/assets/style.css" />
   <style>
-    .calendar-shell { max-width: 760px; }
-    .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
-    .box h3 { margin: 0 0 0.6rem; font-size: 0.95rem; color: var(--accent); }
-    code.fp { display: block; background: #00000066; padding: 0.5rem 0.7rem; border-radius: 6px; font-size: 0.8rem; word-break: break-all; margin: 0.4rem 0; }
-    .top-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 1rem; }
-    .top-bar .push { font-size: 0.75rem; color: var(--muted); display: flex; align-items: center; gap: 0.5rem; }
-    nav.calendar-nav { display: flex; gap: 0.4rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border); }
-    nav.calendar-nav button { background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted); font: inherit; padding: 0.55rem 0.4rem; cursor: pointer; }
-    nav.calendar-nav button.active, nav.calendar-nav button:hover { color: var(--accent); border-bottom-color: var(--accent); }
-    .row { display: flex; gap: 0.5rem; align-items: center; }
-    .row input[type="text"] { flex: 1; background: #00000066; border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.6rem; color: var(--text); font-size: 0.85rem; }
-    button { background: var(--accent); color: #0f1115; border: none; border-radius: 6px; padding: 0.45rem 0.9rem; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
-    button.danger { background: var(--fail); }
-    .month-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
-    .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; font-size: 0.75rem; color: var(--muted); text-align: center; margin-bottom: 4px; }
-    .month-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
-    .day-cell { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; min-height: 76px; padding: 0.3rem; cursor: pointer; font-size: 0.72rem; }
-    .day-cell:hover { border-color: var(--accent); }
-    .day-num { font-weight: 600; margin-bottom: 0.2rem; }
-    .day-event { background: var(--accent); color: #0f1115; border-radius: 4px; padding: 0.1rem 0.3rem; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
-    .week-day { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; min-height: 140px; padding: 0.4rem; cursor: pointer; font-size: 0.75rem; }
-    .week-day:hover { border-color: var(--accent); }
-    .week-day-head { font-weight: 600; margin-bottom: 0.3rem; color: var(--muted); }
-    ul#day-events { list-style: none; margin: 0 0 1rem; padding: 0; }
-    ul#day-events li { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; margin-bottom: 0.5rem; cursor: pointer; display: flex; gap: 0.6rem; flex-wrap: wrap; }
-    ul#day-events li:hover { border-color: var(--accent); }
-    .ev-time { color: var(--accent); font-weight: 600; }
-    .ev-meta { font-size: 0.78rem; color: var(--muted); }
-    .ev-desc { white-space: pre-wrap; }
-    #event-form label, #edit-form label { display: block; margin-bottom: 0.6rem; font-size: 0.85rem; }
-    #event-form input[type="text"], #event-form textarea, #edit-form input[type="text"], #edit-form textarea { width: 100%; background: #00000066; border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.6rem; color: var(--text); font-size: 0.85rem; margin-top: 0.2rem; }
-    #time-fields.hidden { display: none; }
-    .back-link { background: none; color: var(--accent); padding: 0; margin-bottom: 0.75rem; }
-    #member-list { list-style: none; padding: 0; margin: 0 0 0.75rem; }
-    #member-list li { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+    /* This app deliberately breaks from the rest of the site's dark theme
+       inside its own card — a calendar is one of the few app shapes where
+       "looks like the familiar Google-Calendar light UI" genuinely serves
+       recognizability more than matching the surrounding docs site does.
+       The page shell (title, intro paragraph, "back" link) stays on the
+       site's normal dark background; only the `.gcal` card below opts into
+       its own light palette, scoped entirely by CSS custom properties on
+       that one container so nothing here leaks into any other page. */
+    .calendar-shell { max-width: 960px; }
+    .gcal {
+      --gcal-bg: #ffffff;
+      --gcal-surface: #f8f9fa;
+      --gcal-border: #dadce0;
+      --gcal-text: #3c4043;
+      --gcal-muted: #5f6368;
+      --gcal-accent: #1a73e8;
+      --gcal-accent-dark: #1558b3;
+      --gcal-danger: #d93025;
+      --gcal-today: #e8f0fe;
+      --gcal-shadow: 0 1px 3px rgba(60, 64, 67, 0.15), 0 1px 2px rgba(60, 64, 67, 0.3);
+      background: var(--gcal-bg);
+      color: var(--gcal-text);
+      border-radius: 12px;
+      box-shadow: var(--gcal-shadow);
+      font-family: 'Google Sans', Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+      overflow: hidden;
+    }
+    .gcal * { box-sizing: border-box; }
+    .gcal a { color: var(--gcal-accent); }
+    .gcal button { font-family: inherit; }
 
-    /* Grid-Ansichten (Monat/Woche) horizontal scrollbar statt gequetscht —
-       dieselbe "breiter Inhalt scrollt in seinem eigenen Container, nie die
-       ganze Seite" Regel wie bei Tabellen/Diagrammen: 7 Spalten unter ~480px
-       Breite wären sonst so schmal, dass Termin-Titel/Datum unlesbar würden.
-       Auf einem Handy in Portrait bleibt die Rasterbreite konstant (480px)
-       und wird per Wischgeste erreicht, statt jede Spalte künstlich zu
-       stauchen. */
+    /* --- App bar: identity + settings gear --- */
+    .gcal-appbar { display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1.25rem; border-bottom: 1px solid var(--gcal-border); gap: 0.75rem; flex-wrap: wrap; }
+    .gcal-appbar .brand { display: flex; align-items: center; gap: 0.55rem; font-size: 1.1rem; font-weight: 500; color: var(--gcal-text); }
+    .gcal-appbar .brand .dot { width: 0.85rem; height: 0.85rem; border-radius: 3px; background: var(--gcal-accent); display: inline-block; }
+    .gcal-status { font-size: 0.78rem; color: var(--gcal-muted); }
+    .gcal-identity-chip { font-size: 0.75rem; color: var(--gcal-muted); background: var(--gcal-surface); border: 1px solid var(--gcal-border); border-radius: 999px; padding: 0.25rem 0.7rem; white-space: nowrap; }
+    .gcal-icon-btn { background: none; border: none; width: 2.5rem; height: 2.5rem; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 1.15rem; color: var(--gcal-muted); padding: 0; }
+    .gcal-icon-btn:hover { background: var(--gcal-surface); }
+
+    /* --- Toolbar: date nav + view switcher + create --- */
+    .gcal-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.75rem 1.25rem; flex-wrap: wrap; border-bottom: 1px solid var(--gcal-border); }
+    .gcal-toolbar[hidden] { display: none; }
+    .gcal-toolbar .left { display: flex; align-items: center; gap: 0.6rem; }
+    .gcal-toolbar .title { font-size: 1.2rem; font-weight: 400; color: var(--gcal-text); min-width: 9rem; }
+    .gcal-nav-arrows { display: flex; }
+    .gcal-btn { background: var(--gcal-bg); color: var(--gcal-text); border: 1px solid var(--gcal-border); border-radius: 6px; padding: 0.45rem 0.9rem; font-weight: 500; font-size: 0.85rem; cursor: pointer; }
+    .gcal-btn:hover { background: var(--gcal-surface); }
+    .gcal-btn-primary { background: var(--gcal-accent); color: #fff; border-color: var(--gcal-accent); }
+    .gcal-btn-primary:hover { background: var(--gcal-accent-dark); }
+    .gcal-btn-danger { background: #fff; color: var(--gcal-danger); border-color: var(--gcal-danger); }
+    .gcal-btn-danger:hover { background: #fce8e6; }
+    .gcal-view-switch { display: inline-flex; border: 1px solid var(--gcal-border); border-radius: 6px; overflow: hidden; }
+    .gcal-view-switch button { background: var(--gcal-bg); border: none; border-right: 1px solid var(--gcal-border); color: var(--gcal-muted); padding: 0.45rem 0.9rem; font-size: 0.82rem; cursor: pointer; }
+    .gcal-view-switch button:last-child { border-right: none; }
+    .gcal-view-switch button.active { background: var(--gcal-today); color: var(--gcal-accent); font-weight: 500; }
+    .gcal-view-switch button:hover:not(.active) { background: var(--gcal-surface); }
+
+    .gcal-body { padding: 1rem 1.25rem 1.5rem; }
+
+    /* --- Month grid --- */
     .grid-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .weekday-row, .month-grid, .week-grid { min-width: 480px; }
+    .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); font-size: 0.72rem; color: var(--gcal-muted); text-align: center; padding-bottom: 0.4rem; text-transform: uppercase; letter-spacing: 0.02em; }
+    .month-grid { display: grid; grid-template-columns: repeat(7, 1fr); border-top: 1px solid var(--gcal-border); border-left: 1px solid var(--gcal-border); }
+    .day-cell { background: var(--gcal-bg); border-right: 1px solid var(--gcal-border); border-bottom: 1px solid var(--gcal-border); min-height: 92px; padding: 0.35rem; cursor: pointer; font-size: 0.72rem; }
+    .day-cell:hover { background: var(--gcal-surface); }
+    .day-cell.today .day-num { background: var(--gcal-accent); color: #fff; }
+    .day-num { font-weight: 500; margin-bottom: 0.3rem; width: 1.5rem; height: 1.5rem; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; }
+    .day-event { border-radius: 4px; padding: 0.12rem 0.4rem; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; display: flex; align-items: center; gap: 0.3rem; }
+    .day-event .dot { width: 6px; height: 6px; border-radius: 50%; background: #ffffffb0; flex: 0 0 auto; }
+
+    /* --- Week grid --- */
+    .week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; border-top: 1px solid var(--gcal-border); border-left: 1px solid var(--gcal-border); }
+    .week-day { background: var(--gcal-bg); border-right: 1px solid var(--gcal-border); border-bottom: 1px solid var(--gcal-border); min-height: 160px; padding: 0.5rem; cursor: pointer; font-size: 0.75rem; }
+    .week-day:hover { background: var(--gcal-surface); }
+    .week-day.today .week-day-head { color: var(--gcal-accent); font-weight: 700; }
+    .week-day-head { font-weight: 500; margin-bottom: 0.4rem; color: var(--gcal-muted); }
+
+    /* --- Day (agenda) view --- */
+    ul#day-events { list-style: none; margin: 0 0 1rem; padding: 0; }
+    ul#day-events li { background: var(--gcal-bg); border: 1px solid var(--gcal-border); border-left: 4px solid var(--gcal-accent); border-radius: 8px; padding: 0.7rem 0.9rem; margin-bottom: 0.6rem; cursor: pointer; display: flex; gap: 0.7rem; flex-wrap: wrap; align-items: baseline; }
+    ul#day-events li:hover { box-shadow: var(--gcal-shadow); }
+    .ev-time { color: var(--gcal-accent); font-weight: 600; font-size: 0.82rem; }
+    .ev-title { font-weight: 500; }
+    .ev-meta { font-size: 0.78rem; color: var(--gcal-muted); }
+    .ev-desc { white-space: pre-wrap; }
+    #empty-notice { color: var(--gcal-muted); font-size: 0.88rem; padding: 1.5rem 0; text-align: center; }
+
+    /* --- Forms / cards --- */
+    .gcal-card { background: var(--gcal-bg); border: 1px solid var(--gcal-border); border-radius: 10px; padding: 1.1rem 1.3rem; margin-bottom: 1.1rem; }
+    .gcal-card h3 { margin: 0 0 0.7rem; font-size: 0.95rem; color: var(--gcal-text); font-weight: 500; }
+    .gcal-card p.hint { margin: 0 0 0.75rem; font-size: 0.8rem; color: var(--gcal-muted); }
+    .row { display: flex; gap: 0.5rem; align-items: center; }
+    .row input[type="text"] { flex: 1; background: var(--gcal-surface); border: 1px solid var(--gcal-border); border-radius: 6px; padding: 0.5rem 0.7rem; color: var(--gcal-text); font-size: 0.88rem; }
+    .row input[type="text"]:focus { outline: 2px solid var(--gcal-accent); outline-offset: -1px; background: var(--gcal-bg); }
+    #event-form label, #edit-form label { display: block; margin-bottom: 0.7rem; font-size: 0.82rem; color: var(--gcal-muted); }
+    #event-form input[type="text"], #event-form textarea, #event-form select,
+    #edit-form input[type="text"], #edit-form textarea, #edit-form select {
+      width: 100%; background: var(--gcal-surface); border: 1px solid var(--gcal-border); border-radius: 6px;
+      padding: 0.5rem 0.7rem; color: var(--gcal-text); font-size: 0.88rem; margin-top: 0.3rem; font-family: inherit;
+    }
+    #event-form input:focus, #event-form textarea:focus, #edit-form input:focus, #edit-form textarea:focus { outline: 2px solid var(--gcal-accent); outline-offset: -1px; background: var(--gcal-bg); }
+    #time-fields.hidden { display: none; }
+    .back-link { background: none; color: var(--gcal-accent); border: none; padding: 0; margin-bottom: 0.9rem; font-size: 0.85rem; cursor: pointer; }
+    #member-list { list-style: none; padding: 0; margin: 0 0 0.75rem; }
+    #member-list li { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid var(--gcal-border); font-size: 0.85rem; }
+    #member-list li:last-child { border-bottom: none; }
+
+    /* --- Location autocomplete --- */
+    .loc-field { position: relative; }
+    .loc-suggestions { list-style: none; margin: 0; padding: 0; position: absolute; left: 0; right: 0; top: 100%; background: var(--gcal-bg); border: 1px solid var(--gcal-border); border-top: none; border-radius: 0 0 6px 6px; box-shadow: var(--gcal-shadow); z-index: 5; max-height: 12rem; overflow-y: auto; }
+    .loc-suggestions li { padding: 0.5rem 0.7rem; font-size: 0.82rem; cursor: pointer; }
+    .loc-suggestions li:hover, .loc-suggestions li.active { background: var(--gcal-surface); }
+    .loc-suggestions[hidden] { display: none; }
+
+    /* --- Directory search (invite pickers) --- */
+    qu-people-search { display: block; margin-bottom: 0.6rem; }
+    qu-people-search .qu-people-search-input { width: 100%; background: var(--gcal-surface); border: 1px solid var(--gcal-border); border-radius: 6px; padding: 0.5rem 0.7rem; font-size: 0.85rem; color: var(--gcal-text); font-family: inherit; }
+    qu-people-search .qu-people-search-input:focus { outline: 2px solid var(--gcal-accent); outline-offset: -1px; }
+    qu-people-search .qu-people-search-results { list-style: none; margin: 0.4rem 0 0; padding: 0; max-height: 11rem; overflow-y: auto; border: 1px solid var(--gcal-border); border-radius: 6px; }
+    qu-people-search .qu-people-search-results:empty { border: none; }
+    qu-people-search .qu-people-search-results li { border-bottom: 1px solid var(--gcal-border); }
+    qu-people-search .qu-people-search-results li:last-child { border-bottom: none; }
+    .qu-profile-card { display: block; padding: 0.5rem 0.7rem; cursor: pointer; text-decoration: none; color: inherit; }
+    .qu-profile-card:hover { background: var(--gcal-surface); }
+    .qu-profile-alias { display: block; font-size: 0.85rem; color: var(--gcal-text); }
+    .qu-profile-avatar { width: 1.5rem; height: 1.5rem; border-radius: 50%; margin-right: 0.5rem; vertical-align: middle; }
+    .fp-badge { display: block; font-family: ui-monospace, Menlo, monospace; font-size: 0.68rem; color: var(--gcal-muted); margin-top: 0.1rem; word-break: break-all; }
+
+    /* --- Settings sections --- */
+    .gcal-settings-section { margin-bottom: 1.5rem; }
+    .gcal-settings-section:last-child { margin-bottom: 0; }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    .toggle-row .label { font-size: 0.88rem; }
+    .toggle-row .label .sub { display: block; font-size: 0.78rem; color: var(--gcal-muted); margin-top: 0.15rem; }
+    select.gcal-select { background: var(--gcal-surface); border: 1px solid var(--gcal-border); border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem; color: var(--gcal-text); font-family: inherit; }
+    #identity-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+    #identity-list li { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid var(--gcal-border); font-size: 0.85rem; }
+    #identity-list li:last-child { border-bottom: none; }
 
     @media (max-width: 640px) {
       body { padding: 1rem; }
       h1 { font-size: 1.4rem; }
       .calendar-shell { max-width: 100%; }
-      .top-bar { flex-direction: column; align-items: stretch; }
-      .top-bar .push { justify-content: space-between; }
-      code.fp { font-size: 0.72rem; }
-      nav.calendar-nav { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; margin-bottom: 1rem; }
-      nav.calendar-nav button { flex: 0 0 auto; padding: 0.6rem 0.55rem; font-size: 0.8rem; }
-      /* 44px Mindest-Touch-Ziel (iOS-Empfehlung), wie examples/chat/style.css es für seine mobile Ansicht bereits durchzieht. */
-      button { min-height: 2.75rem; padding: 0.6rem 1rem; }
-      .row { flex-wrap: wrap; }
-      .month-bar { font-size: 0.9rem; }
-      .month-bar button { min-height: 2.5rem; padding: 0.5rem 0.9rem; }
+      .gcal-appbar, .gcal-toolbar { padding: 0.65rem 0.8rem; }
+      .gcal-body { padding: 0.8rem 0.8rem 1.2rem; }
+      .gcal-toolbar { flex-direction: column; align-items: stretch; }
+      .gcal-toolbar .left { justify-content: space-between; }
+      .gcal-toolbar .right { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+      /* 44px minimum touch target (iOS guidance), same rule examples/chat/style.css already applies for its own mobile layout. */
+      .gcal-btn, .gcal-view-switch button { min-height: 2.6rem; }
       .day-cell { min-height: 60px; font-size: 0.68rem; padding: 0.25rem; }
       .week-day { min-height: 110px; }
       ul#day-events li { padding: 0.7rem 0.8rem; }
-      /* 16px verhindert, dass iOS Safari beim Fokussieren eines Feldes automatisch hineinzoomt (dieselbe Regel wie examples/chat/style.css's .composer-Inputs). */
-      #event-form input, #event-form textarea, #edit-form input, #edit-form textarea, .row input[type="text"] { font-size: 16px; }
+      /* 16px stops iOS Safari from auto-zooming the page on input focus (same rule examples/chat/style.css's .composer inputs already apply). */
+      #event-form input, #event-form textarea, #edit-form input, #edit-form textarea, .row input[type="text"], qu-people-search .qu-people-search-input { font-size: 16px; }
       #time-fields label { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
       #time-fields label input { width: auto; flex: 1 1 auto; min-width: 0; }
+      /* Ein Textfeld + ein Button nebeneinander wird auf Handy-Breite zu
+         schmal (der Button-Text wirkt gequetscht) — hier gezielt stapeln,
+         nicht die generische .row-Klasse (die auch die 3er-RSVP-Buttonreihe
+         trägt, die als Reihe bleiben soll). */
+      #add-member-form, #invite-event-form { flex-wrap: wrap; }
+      #add-member-form input[type="text"], #invite-event-form input[type="text"],
+      #add-member-form button, #invite-event-form button { flex: 1 1 100%; }
     }
   </style>
 </head>
@@ -85,27 +183,41 @@
     <p class="lede">
       Ein Kalender ist ein <code>Space</code> (wie ein Chat-Room), jeder Termin ein Eintrag darin —
       Monats-/Wochen-/Tagesansicht, Einladung zum Kalender UND getrennt zu einzelnen Terminen, RSVP,
-      Push-Benachrichtigungen bei Änderungen. Details im Kern-Modul
-      <a href="/docs/code.html?file=/src/modules/calendar.js">src/modules/calendar.js</a>.
+      Push-Benachrichtigungen bei Änderungen, optional inkognito über eine Zweit-Identität. Details im
+      Kern-Modul <a href="/docs/code.html?file=/src/modules/calendar.js">src/modules/calendar.js</a>.
     </p>
-    <div id="status" class="chat-status">Verbinde …</div>
 
-    <div class="top-bar">
-      <code class="fp" id="my-fp" style="margin:0">…</code>
-      <div class="push">
-        <span id="push-status">…</span>
-        <button type="button" id="push-toggle-btn">…</button>
+    <div class="gcal">
+      <div class="gcal-appbar">
+        <div class="brand"><span class="dot"></span> Kalender</div>
+        <div class="gcal-status" id="status">Verbinde …</div>
+        <div style="display:flex; align-items:center; gap:0.6rem;">
+          <span class="gcal-identity-chip" id="identity-chip">…</span>
+          <button type="button" class="gcal-icon-btn" id="nav-settings" title="Einstellungen" aria-label="Einstellungen">⚙</button>
+        </div>
       </div>
+
+      <div class="gcal-toolbar" id="gcal-toolbar">
+        <div class="left">
+          <button type="button" class="gcal-btn" id="today-btn">Heute</button>
+          <div class="gcal-nav-arrows">
+            <button type="button" class="gcal-icon-btn" id="prev-btn" aria-label="Zurück">‹</button>
+            <button type="button" class="gcal-icon-btn" id="next-btn" aria-label="Weiter">›</button>
+          </div>
+          <div class="title" id="range-title">…</div>
+        </div>
+        <div class="right" style="display:flex; align-items:center; gap:0.6rem;">
+          <div class="gcal-view-switch">
+            <button type="button" id="nav-month">Monat</button>
+            <button type="button" id="nav-week">Woche</button>
+            <button type="button" id="nav-day">Tag</button>
+          </div>
+          <button type="button" class="gcal-btn gcal-btn-primary" id="create-btn">+ Neuer Termin</button>
+        </div>
+      </div>
+
+      <div class="gcal-body" id="view-root"></div>
     </div>
-
-    <nav class="calendar-nav">
-      <button type="button" id="nav-month">Monat</button>
-      <button type="button" id="nav-week">Woche</button>
-      <button type="button" id="nav-day">Tag</button>
-      <button type="button" id="nav-settings">Einstellungen</button>
-    </nav>
-
-    <div id="view-root"></div>
   </main>
 
   <script type="module" src="./app.mjs"></script>
