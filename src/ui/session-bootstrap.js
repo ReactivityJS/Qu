@@ -10,8 +10,17 @@
 // conventions imports from `src/ui/`, not from `examples/` — a module under
 // `src/` should never need to depend on example code, and a real app
 // shouldn't either.
+//
+// Identity persistence goes through `runtime.ingest()` (Qu's core write
+// pipeline — verify/ACL/dispatch, same path every other QuBit takes), not a
+// bare adapter `.put()` call — a prior version of this file bypassed the
+// pipeline entirely, which meant nothing could ever `.on()`-subscribe to
+// "the identity changed" (e.g. a future incognito-alias switcher). Reusing
+// the pipeline costs nothing extra and keeps this file honest to Qu's own
+// core principle: a QuBit is the one shape everything is, no exceptions for
+// bootstrap code.
 
-import { Qu, LocalStorageAdapter } from '../index.js';
+import { Qu, QuStore, MemoryAdapter, LocalStorageAdapter, SessionStorageAdapter, NullAdapter, QuIdentity, createSpacesPlugin } from '../index.js';
 
 /**
  * The one shared identity every example in this repo now converges on
@@ -25,65 +34,126 @@ import { Qu, LocalStorageAdapter } from '../index.js';
  */
 export const ECOSYSTEM_IDENTITY_KEY = 'qu-identity';
 
-// Empty namespace: LocalStorageAdapter would otherwise prefix every key
-// with `qu:` (its own default) — this predates the adapter, and every
-// caller already chooses a full, self-contained key name, so an empty
-// namespace here keeps every existing localStorage key exactly as it
-// already is instead of silently orphaning already-stored data.
-const storage = new LocalStorageAdapter({ namespace: '' });
+// Device-local ONLY, never replicated (see `replicate: false` on the mount
+// below) — the raw private-key JWK material must never leave this device,
+// encrypted or not (unlike an incognito alias, which — once that module
+// exists — deliberately DOES replicate, but only ever encrypted-to-self
+// under the main identity's own Space; this fixed prefix is upstream of
+// that, the main identity itself, before any Space/network exists at all).
+// A fixed prefix rather than the storage key itself, since several distinct
+// storage keys (e.g. one per `tier`, or an app's own isolated key) can share
+// the same mount.
+const BOOTSTRAP_PREFIX = 'local-identity-bootstrap/';
 
 /**
- * Identität aus `localStorage` laden, oder beim allerersten Aufruf neu
- * erzeugen und dort ablegen. `storageKey` defaultet auf
- * `ECOSYSTEM_IDENTITY_KEY` (siehe deren Doku) — weiterhin überschreibbar für
- * eine bewusst isolierte App.
+ * Which Web Storage object (if any) a tier's adapter is backed by — used
+ * ONLY for the corrupted-vs-absent pre-check below, mirroring exactly which
+ * raw object `WebStorageAdapter` (this tier's adapter) itself wraps
+ * internally. `'memory'`/`'none'` have no addressable raw storage to peek
+ * (nothing survives a reload either way), so corruption detection simply
+ * doesn't apply to them — falling through to "absent" is the correct,
+ * only-possible answer for those two.
+ */
+const TIER_RAW_STORAGE = {
+  durable: () => localStorage,
+  session: () => sessionStorage,
+};
+
+const TIER_ADAPTERS = {
+  durable: () => new LocalStorageAdapter({ namespace: '' }),
+  session: () => new SessionStorageAdapter({ namespace: '' }),
+  memory: () => new MemoryAdapter(),
+  none: () => new NullAdapter(),
+};
+
+/**
+ * Identität laden, oder beim allerersten Aufruf neu erzeugen und dort
+ * ablegen. `storageKey` defaultet auf `ECOSYSTEM_IDENTITY_KEY` (s. o.),
+ * weiterhin überschreibbar für eine bewusst isolierte App.
+ *
+ * `tier` wählt den Adapter, der die Identität tatsächlich trägt:
+ *   - `'durable'` (Default) — `LocalStorageAdapter`, übersteht Reload/Neustart.
+ *   - `'session'` — `SessionStorageAdapter`, übersteht nur einen Reload
+ *     innerhalb desselben Tabs, weg nach Tab-Schließen.
+ *   - `'memory'` — `MemoryAdapter`, weg nach jedem Reload.
+ *   - `'none'` — `NullAdapter`, wird nie persistiert; jeder erneute Aufruf
+ *     erzeugt eine komplett neue Identität, es sei denn der Aufrufer hält
+ *     die zurückgegebene `Qu`-Instanz selbst in einem Closure fest.
+ * Ein flüchtigerer Tier ist der naheliegende Baustein für einen späteren
+ * Incognito-Alias, der bewusst nicht auf dem Hauptgerät verweilen soll —
+ * dieses Modul selbst kennt "Incognito" aber nicht, es bietet nur die
+ * Tier-Wahl generisch an.
  *
  * `migrateFrom` (optional, ein oder mehrere ältere Storage-Keys): falls
  * unter `storageKey` NOCH NICHTS liegt, aber einer dieser älteren Keys eine
- * Identität trägt, wird sie EINMALIG dorthin kopiert (nicht verschoben — der
+ * Identität trägt, wird sie EINMALIG übernommen (nicht verschoben — der
  * alte Key bleibt unangetastet, falls noch etwas anderes ihn liest) statt
- * eine komplett neue Identität anzulegen. Das ist die konkrete Antwort auf
- * "wie migriert eine App mit einem alten, App-eigenen Key auf den
- * gemeinsamen `ECOSYSTEM_IDENTITY_KEY`, ohne bestehende Nutzer:innen ihre
- * bisherige Identität (und damit ihre bekannten Kontakte/Räume) verlieren
- * zu lassen": examples/forum und examples/cms rufen dies mit ihrem
- * jeweiligen alten Key als `migrateFrom` auf.
- *
- * Goes through Qu's own StorageAdapter (LocalStorageAdapter) instead of
- * calling `localStorage` directly — this is the one place identity has to
- * exist BEFORE any Qu instance does (you need it to create the instance in
- * the first place), which is exactly why LocalStorageAdapter is built to
- * work standalone: it has no dependency on a Runtime/QuStore, just a plain
- * namespaced get/put over Web Storage, usable at any point — including
- * this one, the earliest possible.
+ * eine komplett neue Identität anzulegen. Historisch waren ältere Keys
+ * immer `localStorage`-basiert (jede App hatte bislang ihren eigenen,
+ * dauerhaften Key) — die Migrationsprüfung geht deshalb bewusst immer
+ * gegen `localStorage`, unabhängig vom gewählten `tier` der NEUEN Identität.
  */
-export async function loadOrCreateIdentity(storageKey = ECOSYSTEM_IDENTITY_KEY, { migrateFrom = [] } = {}) {
-  // Ein beschädigter Wert (nicht valides JSON) behandelt storage.get() wie
-  // "nicht vorhanden" — für JEDEN anderen Key genau richtig, aber hier die
-  // eine Stelle, an der das katastrophal wäre: ein `saved == null` würde
-  // sonst kommentarlos eine KOMPLETT NEUE Identität erzeugen und die alte
-  // (samt Fingerprint, damit samt Kontakten/Räumen anderer Nutzer) für immer
-  // unauffindbar machen. Deshalb hier die einzige bewusste Ausnahme von
-  // "immer über den Adapter, nie direkt localStorage": ein roher
-  // Vorab-Check, der "wirklich leer" von "vorhanden, aber kaputt"
-  // unterscheidet, bevor überhaupt erwogen wird, eine neue Identität
-  // anzulegen.
-  if (localStorage.getItem(storageKey) !== null) {
-    const saved = await storage.get(storageKey);
-    if (saved) return Qu.create({ identity: saved });
-    throw new Error(`Deine gespeicherte Identität unter "${storageKey}" ist beschädigt (kein gültiges JSON) — um Datenverlust zu vermeiden, wird KEINE neue Identität angelegt. Bitte Browser-Konsole/localStorage prüfen, bevor dieser Eintrag gelöscht wird.`);
+export async function loadOrCreateIdentity(storageKey = ECOSYSTEM_IDENTITY_KEY, { migrateFrom = [], tier = 'durable' } = {}) {
+  const idAdapter = (TIER_ADAPTERS[tier] ?? TIER_ADAPTERS.durable)();
+  const bootstrapId = `${BOOTSTRAP_PREFIX}${storageKey}`;
+  const store = new QuStore([
+    { prefix: BOOTSTRAP_PREFIX, adapter: idAdapter, replicate: false },
+    { prefix: '', adapter: new MemoryAdapter() }, // everything else this Qu instance ever writes — unrelated to identity bootstrap, same default as before
+  ]);
+
+  // Ein beschädigter Wert (nicht valides JSON — z. B. ein Rest aus der Zeit
+  // vor diesem Adapter) behandelt der Adapter selbst wie "nicht vorhanden"
+  // (WebStorageAdapter's eigene Doku) — für JEDEN anderen Key genau richtig,
+  // aber hier die eine Stelle, an der das katastrophal wäre: ein
+  // `saved == null` würde sonst kommentarlos eine KOMPLETT NEUE Identität
+  // erzeugen und die alte für immer unauffindbar machen. Deshalb der rohe
+  // Vorab-Check gegen das jeweilige Tier's eigenes Speicherobjekt (nur für
+  // `durable`/`session` überhaupt möglich, s. o.), der "wirklich leer" von
+  // "vorhanden, aber kaputt" unterscheidet, bevor überhaupt erwogen wird,
+  // eine neue Identität anzulegen.
+  const rawStorage = TIER_RAW_STORAGE[tier]?.();
+  const rawPresent = rawStorage ? rawStorage.getItem(bootstrapId) !== null : undefined;
+
+  if (rawPresent) {
+    const q = await store.get(bootstrapId);
+    if (q?.value) return Qu.create({ identity: q.value, store });
+    throw new Error(`Deine gespeicherte Identität unter "${storageKey}" ist beschädigt (kein gültiges JSON) — um Datenverlust zu vermeiden, wird KEINE neue Identität angelegt. Bitte Browser-Konsole/Speicher prüfen, bevor dieser Eintrag gelöscht wird.`);
+  }
+  if (rawPresent === undefined) {
+    // 'memory'/'none': kein roher Vorab-Check möglich — trotzdem den Store
+    // selbst fragen (deckt z. B. eine bereits in DIESEM Seitenaufruf zuvor
+    // erzeugte 'memory'-Identität ab, falls derselbe Store wiederverwendet wird).
+    const q = await store.get(bootstrapId);
+    if (q?.value) return Qu.create({ identity: q.value, store });
   }
 
+  let identity;
   for (const legacyKey of Array.isArray(migrateFrom) ? migrateFrom : [migrateFrom]) {
     if (!legacyKey || localStorage.getItem(legacyKey) === null) continue;
-    const legacy = await storage.get(legacyKey);
-    if (!legacy) continue; // corrupt legacy entry — fall through to a fresh identity rather than propagate the corruption
-    await storage.put(storageKey, legacy);
-    return Qu.create({ identity: legacy });
+    let legacy;
+    try { legacy = JSON.parse(localStorage.getItem(legacyKey)); } catch { continue; }
+    if (!legacy) continue;
+    identity = legacy;
+    break;
   }
 
-  const qu = await Qu.create();
-  await storage.put(storageKey, await qu.exportKeys());
+  const qu = await Qu.create({ identity, store }); // identity undefined -> Qu.create() generates a fresh one, exactly like before
+  identity = await qu.exportKeys();
+
+  // Schreibt reaktiv über die normale ingest()-Pipeline statt eines rohen
+  // adapter.put() — genau der Punkt dieser Überarbeitung. `bootstrapId` liegt
+  // NICHT unter `~<fp>` (der Fingerprint ist ja erst NACH dem Lesen dieses
+  // Blobs bekannt, ein späterer Seitenaufruf kennt ihn noch nicht) und
+  // braucht deshalb eine eigene Schreib-Freigabe — createSpacesPlugin()s
+  // ohnehin bestehende Bootstrap-Regel ("kein Manifest = jeder darf
+  // schreiben", modules/spaces.js) übernimmt das, ohne einen eigenen
+  // Custom-ACL-Zweig nur für diesen einen Pfad zu brauchen. Harmlos auch für
+  // einen Aufrufer, der `createSpacesPlugin()` selbst noch einmal
+  // installiert (macht nur den bereits identischen ACL-Resolver erneut,
+  // redundant aber ungefährlich).
+  qu.use(createSpacesPlugin());
+  await qu.runtime.publish(bootstrapId, identity);
+
   return qu;
 }
 
