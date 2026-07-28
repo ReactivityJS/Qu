@@ -162,3 +162,30 @@ export function relayUrl() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/relay`;
 }
+
+// Fester, eigener Key — bewusst NICHT derselbe Mechanismus wie die
+// Identität selbst (kein QuBit, kein `runtime.ingest()`): eine Geräte-Id
+// ist reine, unsignierte, lokale Korrelations-Information ("welches
+// Browser-Profil ist das"), kein geheimes Schlüsselmaterial und kein Inhalt,
+// der je repliziert werden soll — deshalb genügt ein einfacher
+// `localStorage`-Wert, ganz ohne Store/ACL-Maschinerie.
+const DEVICE_ID_KEY = 'qu-device-id';
+
+/**
+ * Stabile, geräte-lokale Id — einmal beim ersten Aufruf per
+ * `crypto.randomUUID()` erzeugt, danach aus `localStorage` gelesen, damit
+ * wiederholte Aufrufe von DEMSELBEN Browser/Gerät denselben Wert liefern
+ * (Voraussetzung für `modules/devices.js`s `registerDevice(qu, deviceId,
+ * …)`, damit ein Reload den bestehenden Geräte-Eintrag aktualisiert statt
+ * einen neuen anzulegen). Kein Bezug zu einer Identität — dieselbe Geräte-Id
+ * bleibt gültig, auch wenn die aktive Identität (Haupt oder ein
+ * Incognito-Alias) wechselt.
+ */
+export function getOrCreateDeviceId() {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+}

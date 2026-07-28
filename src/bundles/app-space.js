@@ -15,6 +15,7 @@ export {
 } from '../modules/space-membership.js';
 export { notifyUser, onNotification, createNotificationsPlugin } from '../modules/notifications.js';
 export { addContact, removeContact, listContacts, onContactsChange, createContactsPlugin } from '../modules/contacts.js';
+export { registerDevice, removeDevice, listDevices, onDevicesChange, createDevicesPlugin } from '../modules/devices.js';
 export {
   itemInviteBoxId, inviteToItem, onItemInvite, createItemInvitesPlugin, createItemInvitePushRule,
 } from '../modules/item-invites.js';

@@ -143,9 +143,26 @@ const INCOGNITO_PREFIX = 'incognito';
  * other `put()`) — re-saving the same alias with new `createdAt`/`keys`
  * would be unusual in practice, but not guarded against here, same "trust
  * the caller" stance every other `put()`-based module in this directory takes.
+ *
+ * `connectionMode` ('sequential' | 'simultaneous', default 'sequential'):
+ * a per-alias PREFERENCE for whether a UI should keep the main identity's
+ * relay connection open while this alias is also connected. This is
+ * deliberately just a stored preference, not something this module (or any
+ * other Qu-core code) enforces — the actual connect/disconnect
+ * orchestration is a caller/UI concern. What IS structural, and needs no
+ * enforcement here either: network/handshake.js's authenticateChannel()
+ * already binds exactly one identity per Channel, so two identities can
+ * never end up multiplexed over the same connection regardless of this
+ * setting — 'simultaneous' only ever means "two separate connections are
+ * both open," never "one connection claims two identities." Default
+ * 'sequential' matches the safer recommendation (reduces, but — a relay
+ * operator logging connect-time/IP over time can still correlate — does
+ * NOT eliminate, the timing-correlation risk this file's own doc comment
+ * already describes); a caller choosing 'simultaneous' should surface that
+ * tradeoff to the user, not silently opt them in.
  */
-export async function saveIncognitoIdentity(qu, { alias, fingerprint, keys, createdAt }) {
-  return qu.own.get(INCOGNITO_PREFIX).get(alias).put({ fingerprint, keys, createdAt }, { encryptFor: [qu.fingerprint] });
+export async function saveIncognitoIdentity(qu, { alias, fingerprint, keys, createdAt, connectionMode = 'sequential' }) {
+  return qu.own.get(INCOGNITO_PREFIX).get(alias).put({ fingerprint, keys, createdAt, connectionMode }, { encryptFor: [qu.fingerprint] });
 }
 
 /**

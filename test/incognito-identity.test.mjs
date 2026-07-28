@@ -109,6 +109,19 @@ test('saveIncognitoIdentity()/loadIncognitoStore(): persists under the owner\'s 
   assert.equal(got.fingerprint, entry.fingerprint);
 });
 
+test('saveIncognitoIdentity(): connectionMode defaults to \'sequential\' but is overridable per alias', async () => {
+  const owner = (await Qu.create()).use(createSpacesPlugin());
+  const entryA = await createIncognitoIdentity('Default-Mode');
+  const entryB = await createIncognitoIdentity('Simultaneous-Mode');
+
+  await saveIncognitoIdentity(owner, entryA);
+  await saveIncognitoIdentity(owner, { ...entryB, connectionMode: 'simultaneous' });
+
+  const store = await loadIncognitoStore(owner);
+  assert.equal(store['Default-Mode'].connectionMode, 'sequential');
+  assert.equal(store['Simultaneous-Mode'].connectionMode, 'simultaneous');
+});
+
 test('saveIncognitoIdentity(): is actually encrypted — a third party reading the raw QuBit never sees the plaintext keys', async () => {
   const owner = (await Qu.create()).use(createSpacesPlugin());
   const entry = await createIncognitoIdentity('Secret-Alias');

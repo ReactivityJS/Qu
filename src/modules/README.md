@@ -70,6 +70,13 @@ incognito-identity.js Independent utility: mint additional, unlinked identities
 contacts.js           Independent utility: a private "people I know" list —
                       distinct from profiles.js's PUBLIC opt-in directory,
                       encrypted-to-self, never visible to anyone but the owner.
+
+devices.js             Independent utility: "which devices does this identity
+                      currently use" — listing/labeling only, encrypted-to-self.
+                      Deliberately does NOT support per-device revocation (every
+                      device holds a verbatim copy of the same keypair today —
+                      see the file's own doc comment for why that's a real,
+                      intentionally-punted limitation, not an oversight).
 ```
 
 A new shared-Space app typically needs, bottom-up:
@@ -93,11 +100,11 @@ A new shared-Space app typically needs, bottom-up:
    same "one plain Space, get/put/set/map on top of it" recipe `chat.js`'s
    own doc comment demonstrates.
 
-`profiles.js`, `identity-transfer.js`, `incognito-identity.js`, and
-`contacts.js` sit outside this chain — they're about the identity itself
-(attributes, directory, device transfer, minting an additional one, a
-private contact list), not about any particular Space, and are useful to
-any app regardless of whether it uses
+`profiles.js`, `identity-transfer.js`, `incognito-identity.js`,
+`contacts.js`, and `devices.js` sit outside this chain — they're about the
+identity itself (attributes, directory, device transfer, minting an
+additional one, a private contact list, a private device list), not about
+any particular Space, and are useful to any app regardless of whether it uses
 `space-membership.js` at all.
 
 See each file's own header comment for the full reasoning; see
