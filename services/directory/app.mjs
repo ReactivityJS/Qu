@@ -1,9 +1,12 @@
-// Verzeichnis — Reference-Implementierung des Mount-Vertrags aus
-// services/README.md: ein `mount(container, {qu}) -> stopFn`-Export, sonst
-// nichts. Wickelt nur die bereits bestehende <qu-people-search>-Komponente
+// Nutzerverzeichnis — named to disambiguate from services/app-directory
+// ("App-Verzeichnis") once both exist side by side in the nav dropdown.
+// Reference-Implementierung des Mount-Vertrags aus services/README.md: ein
+// `mount(container, {qu}) -> stopFn`-Export, sonst nichts. Wickelt nur die
+// bereits bestehende <qu-people-search>-Komponente
 // (src/ui/people-search-components.js) ein, dieselbe, die die Shell selbst
-// schon auf ihrer Startseite verwendet — als eigener, im Nav-Dropdown
-// gelisteter, direkt verlinkbarer Screen statt nur dort eingebettet.
+// schon auf ihrer Startseite verwendet, und die services/contacts/app.mjs's
+// eigene Suche (siehe dort) — als eigener, im Nav-Dropdown gelisteter,
+// direkt verlinkbarer Screen statt nur dort eingebettet.
 //
 // Kein `<name>-lib.mjs` nötig (siehe services/README.md's Vorlage) — hier
 // steckt keine eigene Logik, nur Layout um eine bereits fertige,
@@ -13,7 +16,7 @@ import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert 
 
 export function mount(container) {
   const heading = document.createElement('h2');
-  heading.textContent = '🧭 Verzeichnis';
+  heading.textContent = '🧭 Nutzerverzeichnis';
   const hint = document.createElement('p');
   hint.className = 'qu-directory-hint';
   hint.textContent = 'Nur Identitäten, die sich selbst sichtbar gemacht haben (eigenes Profil → „Im Verzeichnis sichtbar“).';

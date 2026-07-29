@@ -135,11 +135,12 @@ export class QuAppShellElement extends HTMLElement {
     const brand = document.createElement('span');
     brand.className = 'qu-shell-brand';
     brand.textContent = 'QUniverse';
+    const historyNav = document.createElement('qu-history-nav');
     const nav = document.createElement('qu-nav-dropdown');
     const notifications = document.createElement('qu-notification-badge');
     const ownCard = document.createElement('qu-profile-card');
     ownCard.setAttribute('href', buildPath(`~${this.qu.fingerprint}`));
-    header.append(brand, nav, notifications, ownCard);
+    header.append(brand, historyNav, nav, notifications, ownCard);
 
     this._screenEl = document.createElement('main');
     this._screenEl.className = 'qu-shell-screen';
@@ -191,7 +192,23 @@ export class QuAppShellElement extends HTMLElement {
         const inboxTopic = inboxId(qu.fingerprint);
         await repl.sync({ topic: inboxTopic, since: 0 }).catch((e) => console.error('[qu-app-shell] initial inbox sync failed:', e));
         await repl.subscribe(inboxTopic).catch((e) => console.error('[qu-app-shell] inbox subscribe failed:', e));
-        return;
+
+        // A resolved qu.connect() only means the connection is up RIGHT NOW —
+        // the WebSocket can still drop later (relay restart, laptop
+        // sleep/wake, mobile network handover, …), and until this fix
+        // NOTHING noticed: the loop above `return`ed on first success, so a
+        // later drop just left the shell silently offline until a manual
+        // reload. Waiting here for `channel.onClose()` turns this into an
+        // actual loop again — `attempt` resets to -1 (so the very next
+        // `for`-increment lands back on 0) on every successful connection,
+        // so a connection that drops after being healthy for a while always
+        // retries fast again, never inheriting a backoff grown from a much
+        // earlier, unrelated failure.
+        await new Promise((resolve) => channel.onClose(resolve));
+        this._repl = null;
+        console.error('[qu-app-shell] connection lost, reconnecting…');
+        this._reRenderIdentityIfCurrent(); // push toggle etc. must not keep showing state for a repl that's gone
+        attempt = -1;
       } catch (e) {
         console.error('[qu-app-shell] connect failed, retrying:', e);
         await wait(Math.min(1000 * 2 ** attempt, 15000));
