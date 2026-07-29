@@ -14,11 +14,12 @@ import { initAdminPanel } from './panel.mjs';
 const MARKUP = `
   <h2>🛠️ Relay-Admin</h2>
   <p class="hint">
-    Services dieses Relays ein-/ausschalten. Jede Änderung ist ein signiertes,
+    Relay-weite Einstellungen. Jede Änderung ist ein signiertes,
     NUR für diesen Relay verschlüsseltes Kommando — wirkt nur, wenn deine
     Identität als <code>QU_RELAY_ADMINS</code>-Fingerprint beim Relay
     hinterlegt ist. Diese Seite selbst prüft das nicht (kann sie nicht — sie
-    zeigt einfach, was das Relay bei Ablehnung meldet).
+    zeigt einfach, was das Relay bei Ablehnung meldet). Einzelne Apps
+    aktivieren/deaktivieren: siehe App-Verzeichnis.
   </p>
 
   <section id="identity-panel" class="panel">
@@ -44,14 +45,6 @@ const MARKUP = `
       <div><span class="label">TURN (WebRTC)</span> <span id="deployment-turn">…</span></div>
     </div>
     <p id="deployment-off" class="hint" hidden>Dieses Relay liefert keine Deployment-Konfiguration (kein <code>deployment</code>-Feld in <code>/relay/info</code>).</p>
-  </section>
-
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Services</h2>
-      <button id="refresh-btn" type="button">↻ Aktualisieren</button>
-    </div>
-    <ul id="service-list" class="service-list"></ul>
   </section>
 
   <section class="panel">
@@ -82,9 +75,9 @@ const MARKUP = `
   <section class="panel">
     <h2>Plattform-Module</h2>
     <p class="hint">Optionale QUniverse-Shell-Features (Kontaktliste, CMS-Startseite, Benachrichtigungen,
-      Verzeichnis, Incognito-Identitäten) — getrennt von den Services oben: diese schalten keine eigene
-      App an/aus, sondern welche Bausteine eine Ökosystem-Shell überhaupt installiert/rendert. Ein Relay
-      ohne Plattform-Registry (<code>platformRegistry</code> nicht übergeben) zeigt hier keine Module an.</p>
+      Verzeichnis, Incognito-Identitäten) — anders als eine einzelne App (App-Verzeichnis): diese schalten
+      keine eigene App an/aus, sondern welche Bausteine eine Ökosystem-Shell überhaupt installiert/rendert.
+      Ein Relay ohne Plattform-Registry (<code>platformRegistry</code> nicht übergeben) zeigt hier keine Module an.</p>
     <ul id="platform-modules-list" class="service-list"></ul>
     <p id="platform-modules-off" class="hint" hidden>Keine Plattform-Registry auf diesem Relay konfiguriert.</p>
   </section>

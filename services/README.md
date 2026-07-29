@@ -6,6 +6,14 @@ etabliert hat (`<app>-lib.mjs` + `<app>-lib.test.mjs` + `app.mjs`) —
 erweitert um ein `manifest.mjs`, mit dem sich eine App gegenüber der
 Ökosystem-Shell registriert.
 
+**`services/hello-world/` ist das minimale, echte, laufende
+Referenzbeispiel** für all das unten Beschriebene — Qu-Components
+(`<qu-view>`/`<qu-bind>`) statt manueller `get()`/`on()`/`put()`-Plumbing,
+ein per-User-Einstellungsbereich, ein globaler admin-only-Einstellungsbereich,
+In-App-Navigation über `segments`, und (siehe `manifest.mjs`s
+`hasSettings`/`hasAdmin`) Direkt-Links aus `services/app-directory` in genau
+diese beiden Bereiche. Zum Kopieren für eine neue App, nicht nur zum Lesen.
+
 ```
 services/<name>/<name>-lib.mjs      Reine Logik, Node-testbar (put/set/Zeit-Sharding
                                      nach Qu-README §7). Baut auf Qu's
@@ -46,6 +54,13 @@ export default {
   spaceMode: 'perInstance', // 'fixed' | 'perUser' | 'perInstance' — siehe Qu's APP-GUIDE.md Schritt 3
   notificationTopics: ['reply', 'mention'],
   usesCms: false,
+  // Beide optional — nur setzen, wenn app.mjs tatsächlich etwas unter
+  // `#/<id>/settings` bzw. `#/<id>/admin` mountet (siehe services/hello-world/
+  // für das lauffähige Beispiel). services/app-directory/app.mjs liest diese
+  // Felder und zeigt dann eine ⚙️/🛠️-Direkt-Verknüpfung pro Zeile —
+  // `hasAdmin`s Verknüpfung zusätzlich nur für eine QU_RELAY_ADMINS-Identität.
+  hasSettings: true,
+  hasAdmin: true,
 };
 ```
 

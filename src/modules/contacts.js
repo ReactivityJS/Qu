@@ -1,4 +1,5 @@
 import { isValidFingerprint } from '../core/identity.js';
+import { star, unstar, listStarred, onStarredChange } from './starred.js';
 
 // A private "people I know" list — distinct from modules/profiles.js's
 // PUBLIC, opt-in directory (`DIRECTORY_ID`): a contact entry is never
@@ -6,14 +7,13 @@ import { isValidFingerprint } from '../core/identity.js';
 // modules/incognito-identity.js's persisted alias list (same
 // `encryptFor: [qu.fingerprint]` path, no new crypto here either).
 //
-// One QuBit per contact, keyed by the CONTACT's own fingerprint (not a
-// `set()` collection) — only the owner ever writes into their own
-// `contacts/` subtree, so there's no multi-writer collision to guard
-// against, and keying by fingerprint makes "add the same contact twice"
-// naturally idempotent (LWW overwrite, same entry) and "remove" a plain
-// `put(null)` tombstone — same convention `modules/profiles.js`'s
-// `deleteProfileAttr()` and `modules/incognito-identity.js`'s
-// `removeIncognitoIdentity()` already use.
+// A contact is really just a STARRED PERSON — this module is a thin
+// wrapper over modules/starred.js's generic "one QuBit per item, keyed by
+// the item's own id, LWW tombstone via put(null)" mechanism (the exact
+// same shape modules/favorites.js's starred APPS need), translating this
+// domain's own vocabulary (a fingerprint + optional local `alias` label)
+// onto it. Same storage id (`contacts/<fp>`) as before this was factored
+// out — nothing else in this codebase needed to change.
 const CONTACTS_PREFIX = 'contacts';
 
 /**
@@ -29,12 +29,12 @@ export async function addContact(qu, contactFingerprint, { alias } = {}) {
   if (!isValidFingerprint(contactFingerprint)) {
     throw new Error(`[Contacts] addContact() requires a valid fingerprint, got: "${contactFingerprint}"`);
   }
-  return qu.own.get(CONTACTS_PREFIX).get(contactFingerprint).put({ fingerprint: contactFingerprint, alias, addedAt: Date.now() }, { encryptFor: [qu.fingerprint] });
+  return star(qu, CONTACTS_PREFIX, contactFingerprint, { data: { fingerprint: contactFingerprint, alias }, encryptFor: [qu.fingerprint] });
 }
 
 /** Tombstones one contact (`put(null)`) — `listContacts()`/`onContactsChange()` both treat it as absent. Removing an unknown fingerprint is a harmless no-op, same "no special-cased absence" stance as `modules/spaces.js`'s `removeFromRole()`. */
 export async function removeContact(qu, contactFingerprint) {
-  return qu.own.get(CONTACTS_PREFIX).get(contactFingerprint).put(null);
+  return unstar(qu, CONTACTS_PREFIX, contactFingerprint);
 }
 
 /**
@@ -43,18 +43,11 @@ export async function removeContact(qu, contactFingerprint) {
  * just path), same defense-in-depth stance as `listProfileAttrs()`/
  * `loadIncognitoStore()` — a stray write under this identity's own
  * `contacts/` subtree is structurally impossible under the normal ACL, but
- * never assumed away here regardless.
+ * never assumed away here regardless (enforced by modules/starred.js's
+ * shared `listStarred()`, not duplicated here).
  */
 export async function listContacts(qu) {
-  const prefix = `${qu.own.id}/${CONTACTS_PREFIX}/`;
-  const rows = await qu.session.query(`${prefix}**`);
-  const contacts = [];
-  for (const q of rows) {
-    if (q.writer !== qu.fingerprint) continue;
-    if (q.value == null) continue; // tombstoned
-    contacts.push(q.value);
-  }
-  return contacts;
+  return listStarred(qu, CONTACTS_PREFIX);
 }
 
 /**
@@ -65,7 +58,7 @@ export async function listContacts(qu) {
  * contact's fingerprint.
  */
 export function onContactsChange(qu, callback, opts) {
-  return qu.own.get(CONTACTS_PREFIX).map(callback, opts);
+  return onStarredChange(qu, CONTACTS_PREFIX, callback, opts);
 }
 
 /**

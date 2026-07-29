@@ -56,6 +56,8 @@ import { FileSystemFileStorageAdapter } from './src/adapters/node-fs-file-storag
 import { createRootContentRoutes } from './server/root-content-routes.mjs';
 import directoryManifest from './services/directory/manifest.mjs';
 import contactsManifest from './services/contacts/manifest.mjs';
+import appDirectoryManifest from './services/app-directory/manifest.mjs';
+import helloWorldManifest from './services/hello-world/manifest.mjs';
 
 // Last-resort safety net. Every known instance of "an async listener's
 // rejection goes uncaught" has been fixed at its source (Channel dispatch,
@@ -126,7 +128,7 @@ const DOC_DEFINITIONS = [
 // EXAMPLE_DEFINITIONS above, which are pure teaching material. Only added
 // when QU_SERVE_QUNIVERSE is on (these `mount` modules import shell-facing
 // Qu-Components that only make sense inside the ecosystem shell itself).
-const QUNIVERSE_DEFINITIONS = [directoryManifest, contactsManifest];
+const QUNIVERSE_DEFINITIONS = [appDirectoryManifest, directoryManifest, contactsManifest, helloWorldManifest];
 
 // The Services/Examples/Documentation catalog (dev/portal.mjs, server/
 // portal-routes.mjs, and QUniverse's own <qu-nav-dropdown>) — the single

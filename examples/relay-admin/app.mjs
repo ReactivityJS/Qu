@@ -1,20 +1,24 @@
-// Relay-Admin (standalone page) — Services eines Relays ein-/ausschalten
-// über signierte, verschlüsselte Admin-Kommandos (relay/relay.mjs's
-// `admin/**`-Listener, server/service-registry.mjs). Bewusst KEIN eigener
-// Login/Auth-Mechanismus: dieselbe lokal persistierte Identität wie jede
-// andere Qu-App (space-app-browser.js's loadOrCreateIdentity()) — ob sie
-// tatsächlich administrieren darf, entscheidet ausschließlich das Relay
+// Relay-Admin (standalone page) — relay-WIDE settings (rate-limit,
+// connection-limit, platform-modules, theme, deployment config) over
+// signed, verschlüsselte Admin-Kommandos (relay/relay.mjs's
+// `admin/**`-Listener). Per-app enable/disable now lives in
+// services/app-directory instead of here (browsing apps and switching one
+// on/off belong together) — this panel stays scoped to genuine relay
+// operations. Bewusst KEIN eigener Login/Auth-Mechanismus: dieselbe lokal
+// persistierte Identität wie jede andere Qu-App
+// (space-app-browser.js's loadOrCreateIdentity()) — ob sie tatsächlich
+// administrieren darf, entscheidet ausschließlich das Relay
 // (QU_RELAY_ADMINS, ACL-geprüft bei jedem Schreibversuch), nicht diese
-// Seite. Eine Person ohne Admin-Rechte kann diese Seite öffnen und sieht
-// den Katalog, aber jeder Toggle-Versuch scheitert sichtbar an der
-// Relay-ACL — Verstecken der Seite selbst wäre keine echte
-// Sicherheitsgrenze (siehe index.js's Kommentar zur 'admin'-Kategorie).
+// Seite. Eine Person ohne Admin-Rechte kann diese Seite öffnen, aber jeder
+// Speichern-Versuch scheitert sichtbar an der Relay-ACL — Verstecken der
+// Seite selbst wäre keine echte Sicherheitsgrenze (siehe index.js's
+// Kommentar zur 'admin'-Kategorie).
 //
 // This file only ever does its OWN identity bootstrap + relay connection
 // (a real second WebSocket connection, separate from any QUniverse shell
-// tab that might also be open) — the actual panel wiring (services,
-// rate-limit, connection-limit, platform-modules, theme, deployment) lives
-// in panel.mjs, shared verbatim with mount.mjs's in-shell embedded version
+// tab that might also be open) — the actual panel wiring (rate-limit,
+// connection-limit, platform-modules, theme, deployment) lives in
+// panel.mjs, shared verbatim with mount.mjs's in-shell embedded version
 // (shell/qu-app-shell.mjs mounts that one instead, reusing the shell's
 // ALREADY-connected `qu` — no second bootstrap there). This file stays the
 // bookmarkable, works-without-the-shell fallback entry point.

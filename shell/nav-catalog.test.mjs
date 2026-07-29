@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleCatalogEntries, sortCatalog } from './nav-catalog.mjs';
+import { visibleCatalogEntries, sortCatalog, footerEntries, resolveFavoriteEntries } from './nav-catalog.mjs';
 
 test('visibleCatalogEntries(): drops admin-category, disabled, and loader-less definitions; keeps mount-only ones', () => {
   const services = [
@@ -52,4 +52,35 @@ test('sortCatalog(): does not mutate the input array', () => {
   const original = [...list];
   sortCatalog(list);
   assert.deepEqual(list, original);
+});
+
+test('footerEntries(): keeps only example/documentation entries, drops service/custom/admin and disabled/loader-less ones', () => {
+  const services = [
+    { id: 'chat', category: 'example', label: 'Chat', entry: '/x' },
+    { id: 'readme', category: 'documentation', label: 'README', entry: '/y' },
+    { id: 'forum', category: 'service', label: 'Forum', entry: '/z' },
+    { id: 'relay-admin', category: 'admin', label: 'Relay-Admin', entry: '/a' },
+    { id: 'disabled-example', category: 'example', label: 'Disabled', entry: '/b', enabled: false },
+  ];
+  assert.deepEqual(footerEntries(services).map((s) => s.id), ['chat', 'readme']);
+});
+
+test('footerEntries(): empty when no example/documentation entries exist (both areas disabled on this relay)', () => {
+  const services = [{ id: 'forum', category: 'service', label: 'Forum', entry: '/z' }];
+  assert.deepEqual(footerEntries(services), []);
+});
+
+test('resolveFavoriteEntries(): resolves favorited ids against the catalog, in the given id order', () => {
+  const services = [
+    { id: 'chat', category: 'example', label: 'Chat', entry: '/x' },
+    { id: 'forum', category: 'service', label: 'Forum', entry: '/z' },
+  ];
+  const resolved = resolveFavoriteEntries(services, ['forum', 'chat']);
+  assert.deepEqual(resolved.map((s) => s.id), ['forum', 'chat']);
+});
+
+test('resolveFavoriteEntries(): silently drops a favorited id no longer in the catalog (removed/disabled since)', () => {
+  const services = [{ id: 'chat', category: 'example', label: 'Chat', entry: '/x' }];
+  const resolved = resolveFavoriteEntries(services, ['chat', 'gone']);
+  assert.deepEqual(resolved.map((s) => s.id), ['chat']);
 });

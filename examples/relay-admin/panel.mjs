@@ -33,8 +33,11 @@ async function fetchJSON(path) {
  * (`/relay/info`, already fetched by the caller — see mount.mjs/app.mjs).
  * Returns nothing — this is a one-time wiring pass, not a live component;
  * every reactive bit here is its own re-fetch-after-write confirmation
- * (see toggleService()'s own doc comment), same as the original
- * standalone-only version this was extracted from.
+ * (see togglePlatformModule()'s own doc comment), same as the original
+ * standalone-only version this was extracted from. No longer covers
+ * per-app enable/disable (moved to services/app-directory/app.mjs) —
+ * this stays scoped to genuine relay-wide operations (rate-limit,
+ * connection-limit, platform-modules, theme, deployment config).
  */
 export async function initAdminPanel(root, qu, info) {
   const $ = (id) => root.querySelector(`#${id}`);
@@ -42,8 +45,6 @@ export async function initAdminPanel(root, qu, info) {
   const relayFpEl = $('relay-fp');
   const connStatusEl = $('conn-status');
   const statusEl = $('status');
-  const listEl = $('service-list');
-  const refreshBtn = $('refresh-btn');
   const rateLimitFormEl = $('rate-limit-form');
   const rateLimitOffEl = $('rate-limit-off');
   const rateLimitMaxEl = $('rate-limit-max');
@@ -74,35 +75,6 @@ export async function initAdminPanel(root, qu, info) {
     statusEl.hidden = false;
   }
 
-  function renderServices(services) {
-    listEl.textContent = '';
-    for (const svc of services) {
-      const li = document.createElement('li');
-
-      const name = document.createElement('div');
-      name.className = 'name';
-      const label = document.createElement('div');
-      label.textContent = svc.label;
-      const id = document.createElement('div');
-      id.className = 'id';
-      id.textContent = svc.id;
-      name.append(label, id);
-
-      const badge = document.createElement('span');
-      badge.className = 'category-badge';
-      badge.textContent = svc.category;
-
-      const toggleBtn = document.createElement('button');
-      toggleBtn.type = 'button';
-      toggleBtn.className = svc.enabled ? 'enabled' : 'disabled';
-      toggleBtn.textContent = svc.enabled ? '● aktiv' : '○ deaktiviert';
-      toggleBtn.addEventListener('click', () => toggleService(svc, toggleBtn));
-
-      li.append(name, badge, toggleBtn);
-      listEl.appendChild(li);
-    }
-  }
-
   /**
    * `deployment` — index.js's own startup-time env-var choices
    * (server/relay-info-routes.mjs's own doc explains why these are
@@ -129,19 +101,13 @@ export async function initAdminPanel(root, qu, info) {
     deploymentTurnEl.textContent = deployment.turnConfigured ? 'konfiguriert' : 'nicht konfiguriert (nur STUN)';
   }
 
-  async function refreshCatalog() {
-    const services = await fetchJSON('/relay/services');
-    renderServices(services);
-    return services;
-  }
-
   /**
    * Populates both config-form panels from `/relay/info`'s `adminConfig`
    * (relay/relay.mjs's getAdminConfig(), see server/relay-info-routes.mjs) —
    * called once at startup and again after every save, so the form always
    * shows what the relay ACTUALLY has configured, not just what was last
-   * submitted (the same "re-read to confirm" principle toggleService()
-   * below already uses for services). `rateLimit` is `null` when this
+   * submitted (the same "re-read to confirm" principle togglePlatformModule()
+   * below already uses). `rateLimit` is `null` when this
    * relay wasn't given a rateLimiter at all (`QU_RATE_LIMIT=0`) — the
    * panel then shows an explanatory hint instead of inputs with no real
    * values behind them.
@@ -225,47 +191,14 @@ export async function initAdminPanel(root, qu, info) {
   await qu.session.trustPeer(info.fingerprint, info.epub);
 
   /**
-   * Builds+signs+encrypts an `admin/service/<id>` command and publishes it
-   * — `session.publish(id, value, { encryptFor })` (core/session.js) is
-   * the entire mechanism; no bespoke crypto code needed here (see
-   * README's "Admin-Kommandos" section for the full protocol).
-   *
-   * A REJECTED command (e.g. this identity isn't actually a
-   * QU_RELAY_ADMINS fingerprint) does NOT throw here — `publish()` only
-   * awaits the LOCAL write (this Qu instance's own store accepts it
-   * unconditionally — see this file's own top doc on why
-   * createSpacesPlugin() must already be installed), the relay's
-   * rejection happens asynchronously, server-side, with no ack/nack
-   * routed back to the sender (network/replication/default.js's push
-   * path is fire-and-forget by design). So success is verified by
-   * RE-READING the catalog afterwards and checking it actually changed as
-   * expected — the absence of a thrown error is not, on its own, proof of
-   * anything.
-   */
-  async function toggleService(svc, btn) {
-    btn.disabled = true;
-    try {
-      await qu.session.publish(`admin/service/${svc.id}`, { enabled: !svc.enabled }, { encryptFor: [info.fingerprint] });
-      await wait(200); // dem Relay Zeit geben, das Kommando zu verarbeiten, bevor der Katalog neu gelesen wird
-      const services = await refreshCatalog();
-      const updated = services.find((s) => s.id === svc.id);
-      if (updated && updated.enabled === !svc.enabled) {
-        showStatus(`"${svc.label}" ${svc.enabled ? 'deaktiviert' : 'aktiviert'}.`, 'ok');
-      } else {
-        showStatus(`"${svc.label}" unverändert — keine Bestätigung vom Relay erhalten. Ist deine Identität (${qu.fingerprint}) als QU_RELAY_ADMINS-Fingerprint hinterlegt?`, 'err');
-      }
-    } catch (e) {
-      showStatus(`Fehlgeschlagen: ${e.message}`, 'err');
-      btn.disabled = false;
-    }
-  }
-
-  /**
-   * Same fire-and-forget-then-reread confirmation as toggleService()/the
-   * rate-limit/connection-limit save handlers below — a single module's
-   * flag flips via `{ modules: { [id]: !enabled } }`, leaving every other
-   * module's state untouched (server/platform-registry.mjs's configure()
-   * only ever patches the ids present in the payload).
+   * Same fire-and-forget-then-reread confirmation as the rate-limit/
+   * connection-limit save handlers below — a single module's flag flips
+   * via `{ modules: { [id]: !enabled } }`, leaving every other module's
+   * state untouched (server/platform-registry.mjs's configure() only ever
+   * patches the ids present in the payload). Per-app enable/disable now
+   * lives in services/app-directory/app.mjs instead of here (its own
+   * toggleService() uses the identical `admin/service/<id>` protocol) —
+   * this panel stays scoped to genuine relay-wide operations.
    */
   async function togglePlatformModule(id, label, enabled, btn) {
     btn.disabled = true;
@@ -381,8 +314,4 @@ export async function initAdminPanel(root, qu, info) {
       connectionLimitSaveBtn.disabled = false;
     }
   });
-
-  refreshBtn.addEventListener('click', () => { refreshCatalog().catch((e) => showStatus(`Aktualisieren fehlgeschlagen: ${e.message}`, 'err')); });
-
-  await refreshCatalog();
 }

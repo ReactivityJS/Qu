@@ -100,6 +100,7 @@ qu-nav-dropdown { position: relative; display: inline-block; }
   cursor: pointer;
 }
 .qu-nav-dropdown-item:hover { background: rgba(255,255,255,0.06); }
+.qu-nav-dropdown-divider { border-top: 1px solid var(--border); margin: 0.3rem 0; }
 
 /* qu-notification-badge */
 qu-notification-badge { position: relative; display: inline-block; }
@@ -146,11 +147,18 @@ span.qu-notification-item { color: var(--muted); cursor: default; }
 /* identity screen */
 .qu-identity-fp { color: var(--muted); }
 .qu-identity-alias-edit { display: flex; align-items: center; gap: 0.5rem; margin: 1rem 0; }
+.qu-identity-avatar-edit { display: flex; align-items: center; gap: 0.75rem; margin: 1rem 0; }
+.qu-identity-avatar-preview { width: 2.5rem; height: 2.5rem; border-radius: 50%; object-fit: cover; background: var(--panel); }
+.qu-identity-avatar-preview:not([src]), .qu-identity-avatar-preview[src=""] { visibility: hidden; }
 .qu-identity-alias-status, .qu-identity-attrs-status { color: var(--muted); font-size: 0.85em; }
 .qu-identity-attrs { margin: 1.5rem 0; }
 .qu-identity-attrs-list { list-style: none; padding: 0; }
 .qu-identity-attrs-list li { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0; }
 .qu-identity-attrs-value { color: var(--muted); flex: 1; }
+/* Matches BOTH the plain case (<qu-bind class="qu-identity-attrs-value"><span contenteditable></qu-bind> — class and attribute on different elements) and the private case (both on the same <span>) — see identity-screen.mjs's buildValueElement() for why the two shapes differ. */
+.qu-identity-attrs-list [contenteditable="true"] { color: var(--text); border-bottom: 1px dashed var(--border); cursor: text; }
+.qu-identity-attrs-list [contenteditable="true"]:focus { outline: none; border-bottom-color: var(--accent); }
+.qu-identity-attrs-lock { color: var(--muted); font-size: 0.9em; }
 .qu-identity-attrs-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
 .qu-identity-share-wrap { display: flex; align-items: center; gap: 0.6rem; }
 .qu-identity-share {
@@ -183,6 +191,51 @@ span.qu-notification-item { color: var(--muted); cursor: default; }
 .qu-contacts-empty { color: var(--muted); }
 .qu-contacts-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 1rem; }
 .qu-contacts-status { color: var(--muted); font-size: 0.85em; }
+
+/* services/app-directory */
+.qu-app-directory-hint { color: var(--muted); font-size: 0.9em; }
+.qu-app-directory-status { padding: 0.6rem 0.9rem; border-radius: 8px; margin: 0.5rem 0; font-size: 0.9em; }
+.qu-app-directory-status.ok { background: rgba(74,222,128,0.12); color: var(--ok); }
+.qu-app-directory-status.err { background: rgba(248,113,113,0.12); color: var(--err); }
+.qu-app-directory-list { list-style: none; padding: 0; }
+.qu-app-directory-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.qu-app-directory-row:last-child { border-bottom: none; }
+.qu-app-directory-row .name { flex: 1; }
+.qu-app-directory-row .name a { color: var(--text); text-decoration: none; font-weight: 600; }
+.qu-app-directory-row .name a:hover { text-decoration: underline; }
+.qu-app-directory-row .name .id { color: var(--muted); font-size: 0.85em; }
+.qu-app-directory-shortcut { text-decoration: none; font-size: 1.1em; padding: 0.2rem; line-height: 1; }
+.qu-app-directory-row .category-badge { font-size: 0.75em; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0.1rem 0.5rem; }
+.qu-app-directory-star { background: transparent; border: none; font-size: 1.1em; cursor: pointer; padding: 0.2rem; line-height: 1; }
+.qu-app-directory-star:disabled { opacity: 0.5; cursor: default; }
+.qu-app-directory-row button.enabled,
+.qu-app-directory-row button.disabled {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+.qu-app-directory-row button.enabled { border-color: var(--ok); color: var(--ok); }
+.qu-app-directory-row button.disabled { border-color: var(--err); color: var(--err); }
+.qu-app-directory-row button:disabled { opacity: 0.5; cursor: default; }
+
+/* services/hello-world */
+.qu-hello-world-nav { display: flex; gap: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1rem; }
+.qu-hello-world-nav a { color: var(--muted); text-decoration: none; }
+.qu-hello-world-nav a.active { color: var(--accent); font-weight: 600; }
+.qu-hello-world-hint { color: var(--muted); font-size: 0.9em; }
+.qu-hello-world-global-greeting:empty::before { content: '(noch keine Ansage konfiguriert)'; color: var(--muted); font-style: italic; }
+.qu-hello-world-screen label { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.75rem; color: var(--muted); font-size: 0.9em; }
+.qu-hello-world-screen input {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+}
 
 /* services/relay-admin embed (mount.mjs) — scoped under .qu-relay-admin-embed
    so these generic class names (.panel, .status, .service-list, ...) never
@@ -250,3 +303,4 @@ span.qu-notification-item { color: var(--muted); cursor: default; }
 /* qu-profile-card (unstyled by default, see src/ui/profile-components.js) */
 .qu-profile-card { display: inline-flex; align-items: center; gap: 0.5rem; text-decoration: none; color: inherit; }
 .qu-profile-avatar { width: 1.6rem; height: 1.6rem; border-radius: 50%; object-fit: cover; }
+.qu-profile-fp { color: var(--muted); font-size: 0.8em; }
