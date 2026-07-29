@@ -3,15 +3,27 @@
 // listContacts/onContactsChange, installiert über createContactsPlugin()
 // in qu-app-shell.mjs). Ein Kontakt-Eintrag ist rein lokal/privat
 // (verschlüsselt-an-sich-selbst, siehe contacts.js's eigener Datei-
-// Kommentar) — anders als das Verzeichnis (services/directory/), das
+// Kommentar) — anders als das Nutzerverzeichnis (services/directory/), das
 // öffentlich, opt-in und geteilt ist.
 //
-// Zwei Wege, einen Kontakt hinzuzufügen: das Formular unten (bekannte
-// Fingerprint direkt eintragen) und der "Zu Kontakten hinzufügen"-Button
-// auf jedem fremden Profil (shell/identity-screen.mjs) — beide rufen
-// letztlich denselben qu.addContact() auf.
+// DREI Wege, einen Kontakt hinzuzufügen:
+//   1. Die eingebettete <qu-people-search mode="search"> unten — exakt
+//      dieselbe Komponente (src/ui/people-search-components.js) und
+//      dieselbe Alias-ODER-Fingerprint-Suche, die services/directory/app.mjs
+//      verwendet ("identischer Code", nicht nur "ähnliches Verhalten") —
+//      findet nur Identitäten, die sich selbst im Verzeichnis sichtbar
+//      gemacht haben. Ein Treffer verlinkt zum Profil, wo der bereits
+//      bestehende "Zu Kontakten hinzufügen"-Button (shell/identity-screen.mjs)
+//      wartet — Suchen/Finden und Hinzufügen bleiben bewusst getrennte
+//      Schritte, wie schon dort dokumentiert.
+//   2. Das Formular weiter unten (bekannten Fingerprint direkt eintragen) —
+//      für jemanden, der NICHT im Verzeichnis sichtbar ist (Kontakte
+//      brauchen keine Verzeichnis-Sichtbarkeit, nur die rohe Fingerprint).
+//   3. Der "Zu Kontakten hinzufügen"-Button auf jedem fremden Profil.
+// Alle drei rufen letztlich denselben qu.addContact() auf.
 
 import '../../src/ui/profile-components.js'; // Seiteneffekt: registriert <qu-profile-card>
+import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert <qu-people-search>
 import { isValidFingerprint, buildPath } from '../../src/index.js';
 
 export function mount(container, { qu }) {
@@ -21,6 +33,25 @@ export function mount(container, { qu }) {
   hint.className = 'qu-contacts-hint';
   hint.textContent = 'Nur für dich sichtbar — verschlüsselt an deine eigene Identität, niemals veröffentlicht.';
 
+  const searchHeading = document.createElement('h3');
+  searchHeading.textContent = 'Person suchen';
+  const searchHint = document.createElement('p');
+  searchHint.className = 'qu-contacts-hint';
+  searchHint.textContent = 'Nach Alias oder Fingerprint — findet nur Identitäten, die sich selbst im Nutzerverzeichnis sichtbar gemacht haben. Ein Treffer öffnet das Profil, dort steht „Zu Kontakten hinzufügen“.';
+  const search = document.createElement('qu-people-search');
+  search.setAttribute('mode', 'search');
+  search.setAttribute('fields', 'alias,fingerprint');
+  search.setAttribute('href', '#/u/{fp}');
+  search.setAttribute('show-fp', '');
+
+  const formHeading = document.createElement('h3');
+  formHeading.textContent = 'Bekannte Fingerprint eintragen';
+  const formHint = document.createElement('p');
+  formHint.className = 'qu-contacts-hint';
+  formHint.textContent = 'Für jemanden, der (noch) nicht im Nutzerverzeichnis sichtbar ist.';
+
+  const listHeading = document.createElement('h3');
+  listHeading.textContent = 'Deine Kontakte';
   const list = document.createElement('ul');
   list.className = 'qu-contacts-list';
   const empty = document.createElement('p');
@@ -44,7 +75,12 @@ export function mount(container, { qu }) {
   status.className = 'qu-contacts-status';
   form.append(fpInput, aliasInput, addBtn, status);
 
-  container.append(heading, hint, list, empty, form);
+  container.append(
+    heading, hint,
+    searchHeading, searchHint, search,
+    formHeading, formHint, form,
+    listHeading, list, empty,
+  );
 
   const rows = new Map(); // fingerprint -> <li>, siehe identity-screen.mjs's renderAttributesEditor() für dasselbe Patch-statt-Neubau-Muster
 

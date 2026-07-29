@@ -58,6 +58,47 @@ qu-app-shell { display: block; min-height: 100vh; }
 .qu-shell-screen { max-width: 720px; margin: 0 auto; padding: 2rem 1.5rem; }
 .qu-shell-welcome { color: var(--muted); }
 
+/* qu-history-nav */
+qu-history-nav { position: relative; display: inline-flex; align-items: center; gap: 0.3rem; }
+.qu-history-nav-back, .qu-history-nav-forward, .qu-history-nav-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.qu-history-nav-toggle:disabled { opacity: 0.5; cursor: default; }
+.qu-history-nav-menu {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 0.4rem);
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem 0;
+  min-width: 14rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 10;
+}
+.qu-history-nav-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 0.4rem 0.9rem;
+  text-decoration: none;
+}
+.qu-history-nav-item:hover { background: rgba(255,255,255,0.06); }
+.qu-history-nav-item qu-profile-card { pointer-events: none; } /* the surrounding <a> already handles the click/navigation */
+
 /* qu-nav-dropdown */
 qu-nav-dropdown { position: relative; display: inline-block; }
 .qu-nav-dropdown-toggle {
