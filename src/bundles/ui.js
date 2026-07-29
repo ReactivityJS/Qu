@@ -19,6 +19,7 @@ export {
   isPushSupported, registerServiceWorker, getExistingSubscription,
   publishPushSubscription, subscribeToPush, unsubscribeFromPush,
 } from '../ui/push.mjs';
+export { isWakeLockSupported, createWakeLock } from '../ui/wake-lock.mjs';
 export { findQu, QuViewElement, QuBindElement, QuListElement } from '../ui/components.js';
 export { QuProfileCardElement } from '../ui/profile-components.js';
 export { QuPeopleSearchElement } from '../ui/people-search-components.js';

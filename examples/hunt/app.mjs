@@ -55,6 +55,7 @@ import {
 } from '../hunt-lib.mjs';
 import { loadOrCreateIdentity, relayUrl } from '../space-app-browser.js';
 import { parseHashRoute, buildHashRoute } from '../space-app-lib.mjs';
+import { createWakeLock } from '../../src/ui/wake-lock.mjs';
 
 // Dieselbe Identität wie examples/chat/examples/people (siehe deren
 // IDENTITY_KEY-Doku: bewusst EIN Fingerprint fürs gesamte Ökosystem, kein
@@ -152,36 +153,19 @@ function colorForTeam(config, teamId) {
 }
 
 /**
- * Hält den Bildschirm an, solange die Seite sichtbar ist (Screen Wake
- * Lock API) — der Sperrbildschirm selbst bleibt dadurch aus, was auf
- * vielen Geräten der einzig verlässliche Weg ist, Geolocation/Timer am
- * Laufen zu halten (siehe Moduldoku oben). Das Lock wird vom Browser
- * automatisch freigegeben, sobald der Tab in den Hintergrund wechselt —
- * `visibilitychange` fordert es beim Zurückkehren einfach erneut an.
- * Fehlt die API (älterer Browser), bleibt der Toggle wirkungslos, aber
- * ungefährlich (try/catch schluckt das leise).
+ * Hält den Bildschirm an, solange die Seite sichtbar UND der Toggle
+ * eingeschaltet ist — der Sperrbildschirm selbst bleibt dadurch aus, was
+ * auf vielen Geräten der einzig verlässliche Weg ist, Geolocation/Timer am
+ * Laufen zu halten (siehe Moduldoku oben). Die eigentliche Sentinel-/
+ * Re-Acquire-Mechanik (inkl. `visibilitychange`) sitzt jetzt in
+ * `src/ui/wake-lock.mjs` — dieselbe Utility, die examples/chat/app.mjs für
+ * sein referenzgezähltes "wach halten während einer Anhang-Übertragung"
+ * verwendet, statt einer zweiten, eigenen Implementierung hier.
  */
 function setupWakeLock(toggle) {
-  let sentinel = null;
-
-  async function acquire() {
-    if (!toggle.checked || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
-    try {
-      sentinel = await navigator.wakeLock.request('screen');
-      sentinel.addEventListener('release', () => { sentinel = null; });
-    } catch {
-      // z. B. Akkusparmodus oder Berechtigung verweigert — Toggle bleibt einfach wirkungslos
-    }
-  }
-
-  function release() {
-    sentinel?.release().catch(() => {});
-    sentinel = null;
-  }
-
-  toggle.addEventListener('change', () => { toggle.checked ? acquire() : release(); });
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') acquire(); });
-  acquire();
+  const lock = createWakeLock();
+  toggle.addEventListener('change', () => { toggle.checked ? lock.acquire() : lock.release(); });
+  if (toggle.checked) lock.acquire();
 }
 
 /**
