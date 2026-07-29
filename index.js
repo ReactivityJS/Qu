@@ -156,7 +156,14 @@ const registry = createServiceRegistry([
   // can't do anything privileged in. Always registered, independent of
   // the three area toggles — administering a relay never depends on which
   // content areas that same relay happens to be serving.
-  { id: 'relay-admin', category: 'admin', label: 'Relay-Admin', description: 'Services verwalten (nur für QU_RELAY_ADMINS-Fingerprints).', entry: '/examples/relay-admin/index.html' },
+  // `mount` (in-shell, reuses the shell's already-connected `qu` — see
+  // examples/relay-admin/mount.mjs's own doc) is preferred by
+  // qu-app-shell.mjs's own dispatch; `entry` stays as the standalone,
+  // works-without-the-shell fallback (examples/relay-admin/index.html,
+  // its own separate identity+connection bootstrap via app.mjs) — same
+  // "mount preferred, entry as fallback" rule every other service here
+  // already follows (services/README.md's own doc).
+  { id: 'relay-admin', category: 'admin', label: 'Relay-Admin', description: 'Services verwalten (nur für QU_RELAY_ADMINS-Fingerprints).', entry: '/examples/relay-admin/index.html', mount: '/examples/relay-admin/mount.mjs' },
   // Reference custom service (relay/services/fail2ban.mjs, see
   // server/service-registry.mjs's extension contract doc for the full
   // reasoning) — registered but OFF by default: this demo deployment

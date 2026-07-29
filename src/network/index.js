@@ -43,6 +43,13 @@ import { DefaultReplication } from './replication/default.js';
  * `qu.use(createWebRTCPlugin())` (network/webrtc-plugin.js) — kept separate
  * so it's only ever bundled by apps that actually use it.
  */
+// Bounded, same FIFO-eviction trade-off as core/runtime.js's own regexCache
+// (see that file's comment for the reasoning) — a topic string is small and
+// reuse across a session is the common case, but a caller CAN construct
+// many distinct one-off topics (e.g. one per fingerprint browsed across a
+// long-lived tab), so this must not grow forever.
+const KNOWN_TOPICS_MAX = 2000;
+
 export function createNetworkPlugin() {
   let router = null;
   function getRouter() {
@@ -50,6 +57,23 @@ export function createNetworkPlugin() {
     return router;
   }
   const activeRepls = new Set();
+  // Every topic `subscribeDispatch` (below) has ever been asked for —
+  // replayed to each NEWLY connected repl. Without this, a `.on()`/`.map()`
+  // registered before ANY connection exists yet (e.g. a Qu-Component that
+  // mounts synchronously during initial page render, before `qu.connect()`
+  // has resolved — see shell/qu-app-shell.mjs's header `<qu-profile-card>`
+  // for a real instance this fixed) asks `subscribeDispatch`, which fans
+  // out to `[...activeRepls]` — EMPTY at that moment — and then NOTHING
+  // ever re-asks the network for it once a connection actually arrives:
+  // the listener silently stays on whatever the (possibly empty) local
+  // store already had, forever, contradicting the "reactive" contract
+  // `on()`/`map()` are supposed to guarantee regardless of timing.
+  // `ensureSynced()` is safe/cheap to call repeatedly (its own doc: sync()
+  // is incremental via its own `since` cursor), so replaying the full set
+  // to every new connection is not wasted work, just a bit of one-time
+  // catch-up traffic proportional to how many distinct topics this Qu
+  // instance currently cares about.
+  const knownTopics = new Set();
 
   return {
     install(qu) {
@@ -73,10 +97,24 @@ export function createNetworkPlugin() {
           // addresses a whole Space (see README's App-Space section).
           repl.subscribe(qu.userSpaceId).catch((e) => console.error('[Network] subscribeOwnSpace fehlgeschlagen:', e));
         }
+        // Catch-up for every `.on()`/`.map()` already registered before
+        // THIS connection existed — see `knownTopics`'s own doc above.
+        // Fire-and-forget, same as `subscribeOwnSpace` right above: a
+        // caller awaiting `qu.connect()` gets a usable connection back
+        // immediately, this only brings already-active listeners current
+        // shortly after, exactly like any other live update they'd get
+        // from an ordinary push.
+        for (const topic of knownTopics) {
+          repl.ensureSynced(topic).catch((e) => console.error(`[Network] Nachhol-Sync für "${topic}" fehlgeschlagen:`, e));
+        }
         return repl;
       };
       Object.defineProperty(qu, 'router', { get: getRouter, configurable: true });
       qu.setSubscribeHandler(async (session, topic) => {
+        if (!knownTopics.has(topic)) {
+          if (knownTopics.size >= KNOWN_TOPICS_MAX) knownTopics.delete(knownTopics.values().next().value);
+          knownTopics.add(topic);
+        }
         await Promise.all([...activeRepls].map((repl) => repl.ensureSynced(topic).catch((e) => console.error(`[Network] ensureSynced("${topic}") fehlgeschlagen:`, e))));
       });
     },

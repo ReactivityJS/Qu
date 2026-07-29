@@ -14,6 +14,7 @@
   --text: var(--qu-text, #e6e8ee);
   --muted: #9aa2b1;
   --accent: var(--qu-accent, #7dd3fc);
+  --ok: #4ade80;
   --err: #f87171;
   --border: #262b38;
   font-size: 16px;
@@ -182,6 +183,69 @@ span.qu-notification-item { color: var(--muted); cursor: default; }
 .qu-contacts-empty { color: var(--muted); }
 .qu-contacts-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 1rem; }
 .qu-contacts-status { color: var(--muted); font-size: 0.85em; }
+
+/* services/relay-admin embed (mount.mjs) — scoped under .qu-relay-admin-embed
+   so these generic class names (.panel, .status, .service-list, ...) never
+   leak into any other mounted app; adapted from examples/relay-admin/
+   style.css's own standalone-page rules, reusing THIS file's --bg/--panel/
+   --text/--muted/--accent/--border variables instead of redefining a
+   separate palette, so the embedded panel matches whatever theme (default
+   or an admin-set relay-config/theme) the rest of the shell is already
+   using. */
+.qu-relay-admin-embed h2 { font-size: 1.05rem; margin: 0; }
+.qu-relay-admin-embed .panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-top: 1rem;
+}
+.qu-relay-admin-embed .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+.qu-relay-admin-embed .label { color: var(--muted); display: inline-block; min-width: 8.5rem; }
+.qu-relay-admin-embed .status { padding: 0.75rem 1rem; border-radius: 8px; margin-top: 1rem; }
+.qu-relay-admin-embed .status.ok { background: rgba(74,222,128,0.12); color: var(--ok); }
+.qu-relay-admin-embed .status.err { background: rgba(248,113,113,0.12); color: var(--err); }
+.qu-relay-admin-embed .service-list { list-style: none; margin: 0; padding: 0; }
+.qu-relay-admin-embed .service-list li { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.qu-relay-admin-embed .service-list li:last-child { border-bottom: none; }
+.qu-relay-admin-embed .service-list .name { flex: 1; }
+.qu-relay-admin-embed .service-list .name .id { color: var(--muted); font-size: 0.85em; }
+.qu-relay-admin-embed .service-list .category-badge { font-size: 0.75em; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0.1rem 0.5rem; }
+.qu-relay-admin-embed .service-list button,
+.qu-relay-admin-embed .panel-head button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+.qu-relay-admin-embed .service-list button.enabled { border-color: var(--ok); color: var(--ok); }
+.qu-relay-admin-embed .service-list button.disabled { border-color: var(--err); color: var(--err); }
+.qu-relay-admin-embed .service-list button:disabled { opacity: 0.5; cursor: default; }
+.qu-relay-admin-embed p.hint { color: var(--muted); font-size: 0.9em; margin-top: 0.25rem; }
+.qu-relay-admin-embed .config-form { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.75rem; }
+.qu-relay-admin-embed .config-form label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.9em; color: var(--muted); }
+.qu-relay-admin-embed .config-form input,
+.qu-relay-admin-embed .config-form textarea {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+}
+.qu-relay-admin-embed .config-form textarea { resize: vertical; }
+.qu-relay-admin-embed .config-form button {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+.qu-relay-admin-embed .config-form button:disabled { opacity: 0.5; cursor: default; }
 
 /* qu-profile-card (unstyled by default, see src/ui/profile-components.js) */
 .qu-profile-card { display: inline-flex; align-items: center; gap: 0.5rem; text-decoration: none; color: inherit; }

@@ -56,6 +56,7 @@ export function renderIdentityView(container, { qu, fingerprint, repl, swRegistr
     container.appendChild(renderAttributesEditor(qu));
   } else {
     container.appendChild(renderAddContactButton(qu, fingerprint));
+    container.appendChild(renderAttributesReadOnly(qu, fingerprint));
   }
 
   renderAppParticipation(qu, fingerprint, appsList);
@@ -339,6 +340,48 @@ function renderPushToggle(qu, { repl, swRegistration, vapidPublicKey }) {
 }
 
 /**
+ * Shared row-rendering for both renderAttributesEditor() (own profile,
+ * editable) and renderAttributesReadOnly() (someone else's, view-only)
+ * below — same `rows` Map (key -> <li>, so a live update patches the
+ * existing row instead of rebuilding the whole list) and the exact same
+ * "🔒 (privat)" label for a private attribute either way.
+ *
+ * On someone else's profile, `entry.private` can only ever be `false`
+ * here: `listProfileAttrs()`'s own doc explains why — a field encrypted
+ * to someone ELSE (not the caller) fails to decrypt, `q.value` stays
+ * `undefined`, and `listProfileAttrs()` already filters that out before
+ * this ever runs. There is deliberately no separate server-side "is this
+ * public" check to duplicate — the SAME encryption that hides a private
+ * attribute from a relay operator already hides it from a non-owner
+ * viewer here, for free, as a side effect of simply not being able to
+ * decrypt it, not a UI-level access check that could be bypassed.
+ */
+function renderAttrRow(list, rows, key, entry, onDelete) {
+  let li = rows.get(key);
+  if (!li) {
+    li = document.createElement('li');
+    rows.set(key, li);
+    list.appendChild(li);
+  }
+  if (entry == null) { li.remove(); rows.delete(key); return; }
+  li.textContent = '';
+  const keyEl = document.createElement('code');
+  keyEl.textContent = key;
+  const valueEl = document.createElement('span');
+  valueEl.className = 'qu-identity-attrs-value';
+  valueEl.textContent = entry.private ? '🔒 (privat)' : String(entry.value);
+  li.append(keyEl, ': ', valueEl);
+  if (onDelete) {
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.textContent = '✕';
+    delBtn.title = `"${key}" löschen`;
+    delBtn.addEventListener('click', () => onDelete(delBtn));
+    li.appendChild(delBtn);
+  }
+}
+
+/**
  * Own-profile-only custom-attribute editor — the UI for
  * src/modules/profiles.js's `setProfileAttr()`/`deleteProfileAttr()`/
  * `listProfileAttrs()`/`onProfileAttrsChange()` (already installed as
@@ -366,38 +409,19 @@ function renderAttributesEditor(qu) {
   list.className = 'qu-identity-attrs-list';
   wrap.append(heading, list);
 
-  const rows = new Map(); // key -> <li> — so a live update patches the existing row instead of rebuilding the whole list
+  const rows = new Map();
+  const renderRow = (key, entry) => renderAttrRow(list, rows, key, entry, (btn) => {
+    btn.disabled = true;
+    qu.deleteProfileAttr(key).catch((e) => { console.error('[identity-screen] deleteProfileAttr failed:', e); btn.disabled = false; });
+  });
 
-  function renderRow(key, entry) {
-    let li = rows.get(key);
-    if (!li) {
-      li = document.createElement('li');
-      rows.set(key, li);
-      list.appendChild(li);
-    }
-    if (entry == null) { li.remove(); rows.delete(key); return; }
-    li.textContent = '';
-    const keyEl = document.createElement('code');
-    keyEl.textContent = key;
-    const valueEl = document.createElement('span');
-    valueEl.className = 'qu-identity-attrs-value';
-    valueEl.textContent = entry.private ? '🔒 (privat)' : String(entry.value);
-    const delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.textContent = '✕';
-    delBtn.title = `"${key}" löschen`;
-    delBtn.addEventListener('click', async () => {
-      delBtn.disabled = true;
-      try {
-        await qu.deleteProfileAttr(key);
-      } catch (e) {
-        console.error('[identity-screen] deleteProfileAttr failed:', e);
-        delBtn.disabled = false;
-      }
-    });
-    li.append(keyEl, ': ', valueEl, delBtn);
-  }
-
+  // Same two-part shape as every other reactive read in this file (see
+  // renderAliasEditor()'s own doc comment for the full reasoning): a
+  // one-shot `listProfileAttrs()` for whatever's already known, PLUS the
+  // live `onProfileAttrsChange()` below for both future changes and — via
+  // network/index.js's catch-up sync now replaying every known topic to
+  // each newly connected repl — the CURRENT value too, even if this
+  // specific subscription registers before any connection exists yet.
   qu.listProfileAttrs(qu.fingerprint).then((attrs) => {
     for (const [key, entry] of Object.entries(attrs)) renderRow(key, entry);
   }).catch((e) => console.error('[identity-screen] initial listProfileAttrs failed:', e));
@@ -453,31 +477,83 @@ function renderAttributesEditor(qu) {
   return wrap;
 }
 
-async function renderAppParticipation(qu, fingerprint, listEl) {
-  let attrs = {};
-  try {
-    attrs = await qu.listProfileAttrs(fingerprint);
-  } catch (e) {
-    console.error('[identity-screen] listProfileAttrs failed:', e);
-  }
-  if (!listEl.isConnected) return;
+/**
+ * Read-only counterpart to renderAttributesEditor() above, for viewing
+ * someone ELSE's profile — same reactive plumbing (one-shot
+ * `listProfileAttrs()` + live `onProfileAttrsChange()`, same shared
+ * `renderAttrRow()`), just no delete button and no add-form. Never shows
+ * anything empty-but-misleading: `wrap` (heading included) only gets
+ * attached to the DOM once at least one attribute has actually arrived —
+ * a fingerprint with zero public attributes shows nothing extra at all,
+ * same "never fabricate placeholder content" stance as
+ * renderAppParticipation() below already documents for its own empty case.
+ */
+function renderAttributesReadOnly(qu, fingerprint) {
+  const wrap = document.createElement('div');
+  wrap.className = 'qu-identity-attrs';
+  wrap.hidden = true;
+  const heading = document.createElement('h3');
+  heading.textContent = 'Attribute';
+  const list = document.createElement('ul');
+  list.className = 'qu-identity-attrs-list';
+  wrap.append(heading, list);
 
-  // Documented ecosystem convention (see src/modules/README.md's
-  // notifications.js entry / Phase 0 design doc): an app writes
-  // `app-<appId>` the first time a user meaningfully participates. No app
-  // in QUniverse writes this yet, so this is HONESTLY empty today for
-  // every fingerprint — never fabricated placeholder content.
-  const appKeys = Object.keys(attrs).filter((k) => k.startsWith('app-'));
-  if (appKeys.length === 0) {
-    const li = document.createElement('li');
-    li.className = 'qu-identity-apps-empty';
-    li.textContent = 'Noch keine Apps.';
-    listEl.appendChild(li);
-    return;
+  const rows = new Map();
+  const renderRow = (key, entry) => {
+    renderAttrRow(list, rows, key, entry);
+    wrap.hidden = rows.size === 0;
+  };
+
+  qu.listProfileAttrs(fingerprint).then((attrs) => {
+    for (const [key, entry] of Object.entries(attrs)) renderRow(key, entry);
+  }).catch((e) => console.error('[identity-screen] initial listProfileAttrs (read-only) failed:', e));
+  qu.onProfileAttrsChange(fingerprint, (q) => {
+    const key = q.id.slice(q.id.lastIndexOf('/') + 1);
+    renderRow(key, q.value == null ? null : { value: q.value, private: !!q.encrypted });
+  });
+
+  return wrap;
+}
+
+/**
+ * Documented ecosystem convention (see src/modules/README.md's
+ * notifications.js entry / Phase 0 design doc): an app writes
+ * `app-<appId>` (a profiles.js custom attribute, same storage as every
+ * other attribute above) the first time a user meaningfully participates.
+ * No app in QUniverse writes this yet, so this is HONESTLY empty today
+ * for every fingerprint — never fabricated placeholder content. Live via
+ * `onProfileAttrsChange()`, same one-shot + live pairing as every other
+ * reactive read in this file (see renderAliasEditor()'s own doc comment
+ * for the full reasoning) — a one-shot read alone would show "Noch keine
+ * Apps." forever if this specific subscription happened to register
+ * before this session had a connection yet.
+ */
+function renderAppParticipation(qu, fingerprint, listEl) {
+  const rows = new Map(); // appId -> <li>, same patch-not-rebuild shape as renderAttrRow() above
+  const empty = document.createElement('li');
+  empty.className = 'qu-identity-apps-empty';
+  empty.textContent = 'Noch keine Apps.';
+  listEl.appendChild(empty);
+
+  function renderRow(appId, present) {
+    let li = rows.get(appId);
+    if (!present) { li?.remove(); rows.delete(appId); }
+    else if (!li) {
+      li = document.createElement('li');
+      li.textContent = appId;
+      rows.set(appId, li);
+      listEl.appendChild(li);
+    }
+    empty.hidden = rows.size > 0;
   }
-  for (const key of appKeys) {
-    const li = document.createElement('li');
-    li.textContent = key.slice('app-'.length);
-    listEl.appendChild(li);
-  }
+
+  qu.listProfileAttrs(fingerprint).then((attrs) => {
+    for (const key of Object.keys(attrs)) {
+      if (key.startsWith('app-')) renderRow(key.slice('app-'.length), true);
+    }
+  }).catch((e) => console.error('[identity-screen] initial listProfileAttrs (apps) failed:', e));
+  qu.onProfileAttrsChange(fingerprint, (q) => {
+    const key = q.id.slice(q.id.lastIndexOf('/') + 1);
+    if (key.startsWith('app-')) renderRow(key.slice('app-'.length), q.value != null);
+  });
 }
