@@ -56,3 +56,18 @@ export function resolveFavoriteEntries(services, favoriteIds) {
   const byId = new Map(visibleCatalogEntries(services).map((s) => [s.id, s]));
   return favoriteIds.map((id) => byId.get(id)).filter(Boolean);
 }
+
+/**
+ * Resolves ONE fixed-by-id entry (App-Verzeichnis, Kontakte, Verzeichnis,
+ * Admin-Portal — qu-nav-dropdown.mjs's own always-shown core links,
+ * unlike favorites which are per-identity opt-in) — `undefined` if that id
+ * isn't currently a usable entry (missing from the catalog, disabled, or
+ * declaring neither `entry` nor `mount`). Deliberately NOT built on
+ * `visibleCatalogEntries()` — that filters out `category === 'admin'`
+ * entirely, which would make it unusable for resolving the Admin-Portal
+ * link itself; every OTHER caller here happens to pass a non-admin id, so
+ * the category check is simply irrelevant for them, not skipped on purpose.
+ */
+export function resolveFixedEntry(services, id) {
+  return services.find((s) => s.id === id && s.enabled !== false && (s.entry || s.mount));
+}

@@ -13,9 +13,15 @@
 // catalog now belongs to services/app-directory (its own fixed link
 // below), reachable from here in one click. This menu instead shows only:
 //   1. ⭐ Favoriten — apps this identity starred (in App-Verzeichnis).
-//   2. 🧩 App-Verzeichnis — the fixed link to the full catalog.
-//   3. 🛠️ Admin-Portal — fixed link, shown only for a QU_RELAY_ADMINS fp.
-//   4. A footer section — Examples/Documentation entries (one-off
+//   2. 📇 Kontakte / 🧭 Verzeichnis — the two identity-centric "platform"
+//      services (see server/platform-registry.mjs's own PLATFORM_MODULES
+//      list, which already treats 'contacts'/'directory' as baseline
+//      platform features, not just another app someone has to discover
+//      and favorite first) — fixed links, same treatment as App-Verzeichnis/
+//      Admin-Portal below, not gated behind ever having been favorited.
+//   3. 🧩 App-Verzeichnis — the fixed link to the full catalog.
+//   4. 🛠️ Admin-Portal — fixed link, shown only for a QU_RELAY_ADMINS fp.
+//   5. A footer section — Examples/Documentation entries (one-off
 //      reference material, not "apps" someone favorites/browses the way
 //      App-Verzeichnis handles those; see nav-catalog.mjs's
 //      footerEntries() for the exact category split).
@@ -33,10 +39,12 @@
 // can be undefined) — qu-app-shell.mjs's own listener decides which one to
 // act on (mount preferred, entry as fallback/redirect).
 
-import { visibleCatalogEntries, sortCatalog, footerEntries, resolveFavoriteEntries } from './nav-catalog.mjs';
+import { sortCatalog, footerEntries, resolveFavoriteEntries, resolveFixedEntry } from './nav-catalog.mjs';
 import { findQu } from '../src/ui/components.js';
 
 const FALLBACK_ICON = '\u{1F4E6}'; // package emoji — a visible placeholder, not a blank/broken-looking icon
+const CONTACTS_ID = 'contacts';
+const DIRECTORY_ID = 'directory';
 const APP_DIRECTORY_ID = 'app-directory';
 const ADMIN_ID = 'relay-admin';
 
@@ -94,8 +102,10 @@ export class QuNavDropdownElement extends HTMLElement {
     this.textContent = '';
 
     const favorites = sortCatalog(resolveFavoriteEntries(this._catalog, this._favoriteIds));
-    const appDirectory = this._catalog.find((s) => s.id === APP_DIRECTORY_ID && (s.entry || s.mount) && s.enabled !== false);
-    const admin = this._isAdmin ? this._catalog.find((s) => s.id === ADMIN_ID && (s.entry || s.mount) && s.enabled !== false) : null;
+    const contacts = resolveFixedEntry(this._catalog, CONTACTS_ID);
+    const directory = resolveFixedEntry(this._catalog, DIRECTORY_ID);
+    const appDirectory = resolveFixedEntry(this._catalog, APP_DIRECTORY_ID);
+    const admin = this._isAdmin ? resolveFixedEntry(this._catalog, ADMIN_ID) : null;
     const footer = sortCatalog(footerEntries(this._catalog));
 
     const toggle = document.createElement('button');
@@ -107,7 +117,7 @@ export class QuNavDropdownElement extends HTMLElement {
     menu.className = 'qu-nav-dropdown-menu';
     menu.hidden = !wasOpen; // re-render (e.g. a live favorites change) must not silently close an already-open menu
 
-    if (favorites.length === 0 && !appDirectory && !admin && footer.length === 0) {
+    if (favorites.length === 0 && !contacts && !directory && !appDirectory && !admin && footer.length === 0) {
       toggle.disabled = true;
       toggle.title = 'Noch keine Apps verfügbar';
       this.append(toggle);
@@ -147,6 +157,8 @@ export class QuNavDropdownElement extends HTMLElement {
       addHeading('⭐ Favoriten');
       for (const entry of favorites) addItem(entry);
     }
+    if (contacts) addItem(contacts);
+    if (directory) addItem(directory);
     if (appDirectory) addItem(appDirectory);
     if (admin) addItem(admin);
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleCatalogEntries, sortCatalog, footerEntries, resolveFavoriteEntries } from './nav-catalog.mjs';
+import { visibleCatalogEntries, sortCatalog, footerEntries, resolveFavoriteEntries, resolveFixedEntry } from './nav-catalog.mjs';
 
 test('visibleCatalogEntries(): drops admin-category, disabled, and loader-less definitions; keeps mount-only ones', () => {
   const services = [
@@ -83,4 +83,24 @@ test('resolveFavoriteEntries(): silently drops a favorited id no longer in the c
   const services = [{ id: 'chat', category: 'example', label: 'Chat', entry: '/x' }];
   const resolved = resolveFavoriteEntries(services, ['chat', 'gone']);
   assert.deepEqual(resolved.map((s) => s.id), ['chat']);
+});
+
+test('resolveFixedEntry(): finds a usable entry by id', () => {
+  const services = [{ id: 'contacts', category: 'service', label: 'Kontakte', mount: './x.mjs' }];
+  assert.equal(resolveFixedEntry(services, 'contacts')?.id, 'contacts');
+});
+
+test('resolveFixedEntry(): undefined when the id is missing, disabled, or has neither entry nor mount', () => {
+  const services = [
+    { id: 'contacts', category: 'service', label: 'Kontakte', mount: './x.mjs', enabled: false },
+    { id: 'directory', category: 'service', label: 'Verzeichnis' },
+  ];
+  assert.equal(resolveFixedEntry(services, 'contacts'), undefined);
+  assert.equal(resolveFixedEntry(services, 'directory'), undefined);
+  assert.equal(resolveFixedEntry(services, 'gone'), undefined);
+});
+
+test('resolveFixedEntry(): works for an admin-category entry too (unlike visibleCatalogEntries(), which filters those out)', () => {
+  const services = [{ id: 'relay-admin', category: 'admin', label: 'Relay-Admin', entry: '/x' }];
+  assert.equal(resolveFixedEntry(services, 'relay-admin')?.id, 'relay-admin');
 });
