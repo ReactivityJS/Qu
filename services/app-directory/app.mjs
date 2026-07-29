@@ -27,8 +27,16 @@
 // is the reference example); `hasAdmin` is additionally gated on `isAdmin`
 // here — same "UI convenience, not the real ACL boundary" stance as the
 // enable/disable toggle below.
+//
+// Disabled apps: an ADMIN always sees every one of them (badge "deaktiviert"
+// + the toggle button below — they're the ones who manage/re-enable them).
+// A non-admin sees them only if src/ui/service-visibility.mjs's
+// deployment-wide `show-disabled-apps` flag is on (default off) — set from
+// Relay-Admin, not here (see examples/relay-admin/panel.mjs's own
+// "App-Verzeichnis" panel).
 
 import { buildPath } from '../../src/index.js';
+import { onShowDisabledServicesChange } from '../../src/ui/service-visibility.mjs';
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -73,6 +81,7 @@ export async function mount(container, { qu }) {
   if (isAdmin) await qu.session.trustPeer(relayInfo.fingerprint, relayInfo.epub).catch((e) => console.error('[app-directory] trustPeer failed:', e));
 
   let favorites = new Set();
+  let showDisabled = false; // non-admin default — see visibility-lib.mjs's own doc; irrelevant for isAdmin, who always sees everything
   const rows = new Map(); // id -> <li>
 
   function renderRow(svc) {
@@ -174,14 +183,26 @@ export async function mount(container, { qu }) {
 
   async function refreshCatalog() {
     const all = await fetchJSON('/relay/services');
-    const apps = all.filter((s) => s.category === 'service' || s.category === 'custom');
+    const apps = all.filter((s) => (s.category === 'service' || s.category === 'custom') && (isAdmin || s.enabled !== false || showDisabled));
     const seenIds = new Set(apps.map((s) => s.id));
     for (const [id, li] of rows) { if (!seenIds.has(id)) { li.remove(); rows.delete(id); } }
     for (const svc of apps) renderRow(svc);
     return all;
   }
 
-  qu.onFavoritesChange((q) => {
+  // Non-admin visibility only — an admin's OWN refreshCatalog() call above
+  // already ignores `showDisabled` entirely, so this subscription changes
+  // nothing for them; it exists so a non-admin's already-open App-Verzeichnis
+  // updates live the moment an admin flips the Relay-Admin setting, instead
+  // of only taking effect on the next visit.
+  const offShowDisabled = onShowDisabledServicesChange(qu, (q) => {
+    const next = q?.value ?? false;
+    if (next === showDisabled) return;
+    showDisabled = next;
+    if (!isAdmin) refreshCatalog().catch((e) => console.error('[app-directory] refreshCatalog after show-disabled-apps change failed:', e));
+  });
+
+  const offFavorites = qu.onFavoritesChange((q) => {
     const appId = q.id.slice(q.id.lastIndexOf('/') + 1);
     if (q.value == null) favorites.delete(appId); else favorites.add(appId);
     const svcLi = rows.get(appId);
@@ -195,4 +216,6 @@ export async function mount(container, { qu }) {
   });
 
   await refreshCatalog();
+
+  return () => { offFavorites(); offShowDisabled(); };
 }

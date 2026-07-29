@@ -19,6 +19,7 @@
 
 import { PLATFORM_MODULES } from '../../server/platform-registry.mjs'; // labels only (id -> label) — the actual enabled state always comes live from /relay/info, never from this static list
 import { getTheme, setTheme } from '../../src/ui/theme.js';
+import { getShowDisabledServices, setShowDisabledServices } from '../../src/ui/service-visibility.mjs';
 
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -55,6 +56,7 @@ export async function initAdminPanel(root, qu, info) {
   const connectionLimitSaveBtn = $('connection-limit-save');
   const platformModulesListEl = $('platform-modules-list');
   const platformModulesOffEl = $('platform-modules-off');
+  const showDisabledAppsToggleEl = $('show-disabled-apps-toggle');
   const themeAccentEl = $('theme-accent');
   const themeBgEl = $('theme-bg');
   const themeTextEl = $('theme-text');
@@ -234,6 +236,41 @@ export async function initAdminPanel(root, qu, info) {
       showStatus(`Rate-Limit speichern fehlgeschlagen: ${e.message}`, 'err');
     } finally {
       rateLimitSaveBtn.disabled = false;
+    }
+  });
+
+  /**
+   * `relay-config/show-disabled-apps` — same plain, ACL-gated Space content
+   * shape as `relay-config/theme` below (public read, admin-only write, no
+   * encrypted `admin/config/*` command needed — see src/ui/service-visibility.mjs's
+   * own file doc). Toggling this button changes what a NON-admin identity's
+   * App-Verzeichnis shows them; an admin identity always sees disabled apps
+   * there regardless (services/app-directory/app.mjs's own doc).
+   */
+  async function refreshShowDisabledApps() {
+    const value = await getShowDisabledServices(qu);
+    showDisabledAppsToggleEl.className = value ? 'enabled' : 'disabled';
+    showDisabledAppsToggleEl.textContent = value ? '● sichtbar' : '○ ausgeblendet';
+    return value;
+  }
+  await refreshShowDisabledApps();
+
+  showDisabledAppsToggleEl.addEventListener('click', async () => {
+    showDisabledAppsToggleEl.disabled = true;
+    try {
+      const current = await getShowDisabledServices(qu);
+      await setShowDisabledServices(qu, !current);
+      await wait(200);
+      const confirmed = await refreshShowDisabledApps();
+      if (confirmed === !current) {
+        showStatus(`Deaktivierte Apps sind jetzt ${confirmed ? 'für alle sichtbar' : 'für Nicht-Admins ausgeblendet'}.`, 'ok');
+      } else {
+        showStatus(`Unverändert — keine Bestätigung vom Relay erhalten. Ist deine Identität (${qu.fingerprint}) als QU_RELAY_ADMINS-Fingerprint hinterlegt?`, 'err');
+      }
+    } catch (e) {
+      showStatus(`Fehlgeschlagen: ${e.message}`, 'err');
+    } finally {
+      showDisabledAppsToggleEl.disabled = false;
     }
   });
 
