@@ -19,6 +19,13 @@
   --border: #262b38;
   font-size: 16px;
 }
+/* A route whose content is taller than the previous one makes a vertical
+   scrollbar appear where there was none — without this, that narrows the
+   viewport by the scrollbar's own width and reflows the whole page,
+   visibly shifting the header's Zurück/Vorwärts/Apps buttons sideways on
+   every such navigation. Reserving the gutter unconditionally means a
+   scrollbar appearing/disappearing never changes the available width. */
+html { scrollbar-gutter: stable; }
 * { box-sizing: border-box; }
 body {
   background: var(--bg);
@@ -345,3 +352,30 @@ span.qu-notification-item { color: var(--muted); cursor: default; }
 .qu-profile-card { display: inline-flex; align-items: center; gap: 0.5rem; text-decoration: none; color: inherit; }
 .qu-profile-avatar { width: 1.6rem; height: 1.6rem; border-radius: 50%; object-fit: cover; }
 .qu-profile-fp { color: var(--muted); font-size: 0.8em; }
+
+/* Small/mobile: the same header controls, just touch-friendly and compact —
+   nothing here removes a control, only shrinks the room each one takes. */
+@media (max-width: 640px) {
+  .qu-shell-header { padding: 0.5rem 0.6rem; gap: 0.35rem; }
+  .qu-shell-brand { display: none; } /* icons already carry the header at this width — the wordmark is the first thing to go */
+  .qu-shell-screen { padding: 1.25rem 1rem; }
+
+  qu-history-nav { gap: 0.15rem; }
+  .qu-history-nav-back, .qu-history-nav-forward, .qu-history-nav-toggle {
+    padding: 0.3rem 0.4rem;
+    font-size: 0.85em;
+  }
+  .qu-nav-dropdown-toggle { padding: 0.3rem 0.55rem; font-size: 0.85em; }
+  .qu-notification-toggle { padding: 0.3rem 0.5rem; font-size: 0.85em; }
+
+  /* Own profile card in the header: an icon instead of the alias text —
+     there's no room to spell out a username next to three other controls.
+     `:has()` keeps a REAL avatar showing as-is (no redundant icon next to
+     it); only an identity with no avatar set falls back to a plain glyph. */
+  .qu-shell-header .qu-profile-card .qu-profile-alias { display: none; }
+  .qu-shell-header .qu-profile-card:not(:has(.qu-profile-avatar:not([hidden])))::before {
+    content: '👤';
+    font-size: 1.2em;
+    line-height: 1;
+  }
+}

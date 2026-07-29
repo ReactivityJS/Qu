@@ -83,6 +83,23 @@ const MARKUP = `
   </section>
 
   <section class="panel">
+    <h2>App-Verzeichnis</h2>
+    <p class="hint">Eine Admin-Identität sieht deaktivierte Apps im App-Verzeichnis immer (zum Verwalten/
+      Reaktivieren). Diese Einstellung entscheidet, ob eine NICHT-Admin-Identität sie dort auch sieht (klar als
+      "deaktiviert" markiert) oder ob sie komplett verschwinden — öffentlich lesbar, nur von einem Admin änderbar
+      (wie Theme unten, kein verschlüsseltes Admin-Kommando).</p>
+    <ul class="service-list">
+      <li>
+        <div class="name">
+          <div>Deaktivierte Apps für alle sichtbar</div>
+          <div class="id">relay-config/show-disabled-apps</div>
+        </div>
+        <button id="show-disabled-apps-toggle" type="button">…</button>
+      </li>
+    </ul>
+  </section>
+
+  <section class="panel">
     <h2>Theme</h2>
     <p class="hint">Deployment-weites Farbschema (CSS Custom Properties), das jede App/jeder Service auf diesem
       Relay lesen kann. Öffentlich lesbar, nur von einem Admin änderbar — ein plain signierter Write auf

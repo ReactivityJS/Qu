@@ -13,6 +13,7 @@ export { buildPath, parsePathSegments } from '../ui/hash-router.js';
 export { decideRoute, createRouter } from '../ui/router.js';
 export { createWindowHashSource } from '../ui/router-browser.js';
 export { getTheme, setTheme, onThemeChange, applyTheme } from '../ui/theme.js';
+export { getShowDisabledServices, setShowDisabledServices, onShowDisabledServicesChange } from '../ui/service-visibility.mjs';
 export { canShare, shareContent } from '../ui/share.mjs';
 export {
   isPushSupported, registerServiceWorker, getExistingSubscription,
