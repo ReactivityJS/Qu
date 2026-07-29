@@ -60,6 +60,11 @@
 //                own `href` attribute (its `{fp}` templating, see
 //                ui/profile-components.js) — omit to instead only listen
 //                for `qu-profile-open` events bubbling up from the cards.
+//   show-fp      Boolean (present = on). Forwarded to every rendered
+//                <qu-profile-card>'s own `show-fp` — shows each result's
+//                fingerprint alongside its avatar/alias, telling two
+//                same-alias identities apart in a results list (a single
+//                card shown alone doesn't usually need this).
 //   placeholder  Input placeholder text.
 //
 // Which Qu instance: same non-global resolution as every other
@@ -81,7 +86,7 @@ import './profile-components.js'; // Seiteneffekt: registriert <qu-profile-card>
 const DEFAULT_FIELDS = ['alias', 'fingerprint'];
 
 export class QuPeopleSearchElement extends HTMLElement {
-  static get observedAttributes() { return ['mode', 'fields', 'href', 'placeholder']; }
+  static get observedAttributes() { return ['mode', 'fields', 'href', 'placeholder', 'show-fp']; }
 
   connectedCallback() { this._mount(); }
   disconnectedCallback() { this._unmount(); }
@@ -104,6 +109,7 @@ export class QuPeopleSearchElement extends HTMLElement {
     const mode = this.getAttribute('mode') === 'search' ? 'search' : 'browse';
     const fields = (this.getAttribute('fields') ?? DEFAULT_FIELDS.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
     const hrefTemplate = this.getAttribute('href');
+    const showFp = this.hasAttribute('show-fp');
 
     this.textContent = '';
     const input = document.createElement('input');
@@ -168,6 +174,7 @@ export class QuPeopleSearchElement extends HTMLElement {
         const card = document.createElement('qu-profile-card');
         card.setAttribute('fp', r.fingerprint);
         if (hrefTemplate) card.setAttribute('href', hrefTemplate);
+        if (showFp) card.setAttribute('show-fp', '');
         li.appendChild(card);
         list.appendChild(li);
       }

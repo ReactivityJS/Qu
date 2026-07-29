@@ -24,6 +24,7 @@ export function mount(container) {
   // qu-app-shell.mjs's eigener Home-Screen-Kommentar zu genau demselben
   // Muster: buildPath() würde die Platzhalter-Klammern selbst URL-kodieren.
   search.setAttribute('href', '#/u/{fp}');
+  search.setAttribute('show-fp', ''); // Avatar (klein) + Alias + Fingerprint pro Zeile — zwei Identitäten mit demselben Alias bleiben unterscheidbar
   container.append(heading, hint, search);
   // Kein Rückgabewert nötig — <qu-people-search> räumt seine eigenen
   // .on()-Subscriptions in disconnectedCallback() auf, sobald die Shell

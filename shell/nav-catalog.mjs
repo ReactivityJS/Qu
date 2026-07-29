@@ -23,3 +23,36 @@ export function sortCatalog(list) {
     return (a.label ?? '').localeCompare(b.label ?? '');
   });
 }
+
+const FOOTER_CATEGORIES = ['example', 'documentation'];
+
+/**
+ * The bottom-of-menu Examples/Documentation section — real 'service'/
+ * 'custom' apps now live exclusively in the App-Verzeichnis
+ * (services/app-directory, itself just a fixed link in this dropdown, see
+ * qu-nav-dropdown.mjs's own doc), not individually listed in this compact
+ * dropdown anymore. Examples/Documentation stay listed here directly
+ * (they're one-off reference pages, not "apps" someone browses/enables/
+ * favorites the way App-Verzeichnis handles those) — naturally empty
+ * (renders nothing) when QU_SERVE_EXAMPLES/QU_SERVE_DOCS are both off,
+ * since /relay/services then never contains such entries at all.
+ */
+export function footerEntries(services) {
+  return visibleCatalogEntries(services).filter((s) => FOOTER_CATEGORIES.includes(s.category));
+}
+
+/**
+ * Resolves a favorited-appId list (src/modules/favorites.js's
+ * `listFavorites()`/`onFavoritesChange()`) against the CURRENT catalog —
+ * a favorited id that's since been removed/disabled (or was an example/
+ * doc entry filtered out by visibleCatalogEntries()'s own `enabled`/
+ * loader check) is silently dropped, never a broken/blank menu entry
+ * pointing nowhere. Order follows the catalog's own `favoriteIds`
+ * argument order, not alphabetical — a caller wanting stable display
+ * order applies `sortCatalog()` to the result, same as any other list
+ * this module produces.
+ */
+export function resolveFavoriteEntries(services, favoriteIds) {
+  const byId = new Map(visibleCatalogEntries(services).map((s) => [s.id, s]));
+  return favoriteIds.map((id) => byId.get(id)).filter(Boolean);
+}

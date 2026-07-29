@@ -11,6 +11,7 @@
 import { isValidFingerprint, DIRECTORY_ID, buildPath } from '../src/index.js';
 import { canShare, shareContent } from '../src/ui/share.mjs';
 import { isPushSupported, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '../src/ui/push.mjs';
+import '../src/ui/components.js'; // Seiteneffekt: registriert <qu-view>/<qu-bind> (renderAttributesEditor()/renderAvatarEditor() unten) — bisher nur zufällig schon von shell/qu-nav-dropdown.mjs's eigenem Import mitregistriert, hier jetzt explizit, da diese Datei sie selbst direkt verwendet.
 
 /**
  * Renders into `container` (cleared first). `qu` is the shell's shared,
@@ -51,6 +52,7 @@ export function renderIdentityView(container, { qu, fingerprint, repl, swRegistr
   const isOwn = fingerprint === qu.fingerprint;
   if (isOwn) {
     container.appendChild(renderAliasEditor(qu));
+    container.appendChild(renderAvatarEditor(qu));
     container.appendChild(renderVisibilityToggle(qu));
     container.appendChild(renderPushToggle(qu, { repl, swRegistration, vapidPublicKey }));
     container.appendChild(renderAttributesEditor(qu));
@@ -178,6 +180,44 @@ function renderAliasEditor(qu) {
     }
   });
 
+  return wrap;
+}
+
+/**
+ * Own-profile-only avatar editor — a plain (not encrypted) leaf QuBit at
+ * `~<fp>/avatar`, same public visibility as `alias` (any `<qu-profile-card>`
+ * showing this fingerprint anywhere already renders it live, see
+ * ui/profile-components.js's own `.on()` subscription — no separate wiring
+ * needed for it to show up elsewhere the moment it's saved here). A real
+ * `<qu-bind>` for the URL input AND a real `<qu-view>` for the live
+ * preview — no manual get()/on()/put() plumbing at all, both Qu-Components
+ * do the entire round trip on their own.
+ */
+function renderAvatarEditor(qu) {
+  const wrap = document.createElement('div');
+  wrap.className = 'qu-identity-avatar-edit';
+  const label = document.createElement('label');
+  label.textContent = 'Avatar-URL ';
+  const bind = document.createElement('qu-bind');
+  bind.setAttribute('path', `~${qu.fingerprint}`);
+  bind.setAttribute('key', 'avatar');
+  bind.setAttribute('attr', 'value');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'https://…/bild.png';
+  bind.appendChild(input);
+  label.appendChild(bind);
+
+  const preview = document.createElement('qu-view');
+  preview.setAttribute('path', `~${qu.fingerprint}`);
+  preview.setAttribute('key', 'avatar');
+  preview.setAttribute('attr', 'src');
+  const img = document.createElement('img');
+  img.className = 'qu-identity-avatar-preview';
+  img.alt = '';
+  preview.appendChild(img);
+
+  wrap.append(label, preview);
   return wrap;
 }
 
@@ -340,37 +380,113 @@ function renderPushToggle(qu, { repl, swRegistration, vapidPublicKey }) {
 }
 
 /**
- * Shared row-rendering for both renderAttributesEditor() (own profile,
- * editable) and renderAttributesReadOnly() (someone else's, view-only)
- * below — same `rows` Map (key -> <li>, so a live update patches the
- * existing row instead of rebuilding the whole list) and the exact same
- * "🔒 (privat)" label for a private attribute either way.
- *
- * On someone else's profile, `entry.private` can only ever be `false`
- * here: `listProfileAttrs()`'s own doc explains why — a field encrypted
- * to someone ELSE (not the caller) fails to decrypt, `q.value` stays
- * `undefined`, and `listProfileAttrs()` already filters that out before
- * this ever runs. There is deliberately no separate server-side "is this
- * public" check to duplicate — the SAME encryption that hides a private
- * attribute from a relay operator already hides it from a non-owner
- * viewer here, for free, as a side effect of simply not being able to
- * decrypt it, not a UI-level access check that could be bypassed.
+ * The value control for one attribute row — three cases:
+ *   - `!editable` (someone else's profile, always plain — see
+ *     renderAttrRow()'s own doc for why a private attribute can never
+ *     even reach this far for a non-owner viewer): a plain read-only span.
+ *   - `editable && !entry.private`: a REAL `<qu-bind>` (src/ui/components.js)
+ *     around a `contenteditable` span — the Qu-Component does the entire
+ *     read+live-update+write dance on its own, no manual event wiring at
+ *     all, editing on blur/input exactly like any other `<qu-bind>`.
+ *   - `editable && entry.private`: `<qu-bind>` is NOT used here — its
+ *     underlying `bindKey()` (src/ui/bindings.js) writes via a bare
+ *     `node.put(value)`, no `encryptFor` option at all, so saving an
+ *     already-private attribute through it would silently STRIP its
+ *     encryption on the very next edit. This mirrors `<qu-bind>`'s own
+ *     shape by hand (contenteditable, write on blur, skip an unchanged
+ *     value) but adds the one thing it can't do: re-encrypting on every
+ *     write, via `qu.setProfileAttr(key, value, {encryptFor:[qu.fingerprint]})`.
  */
-function renderAttrRow(list, rows, key, entry, onDelete) {
-  let li = rows.get(key);
-  if (!li) {
-    li = document.createElement('li');
-    rows.set(key, li);
-    list.appendChild(li);
+function buildValueElement(qu, key, entry, editable) {
+  if (!editable) {
+    const span = document.createElement('span');
+    span.className = 'qu-identity-attrs-value';
+    span.textContent = String(entry.value);
+    return span;
   }
-  if (entry == null) { li.remove(); rows.delete(key); return; }
-  li.textContent = '';
+  if (!entry.private) {
+    const bind = document.createElement('qu-bind');
+    bind.className = 'qu-identity-attrs-value';
+    bind.setAttribute('path', `~${qu.fingerprint}`);
+    bind.setAttribute('key', `attrs/${key}`);
+    bind.setAttribute('attr', 'textContent');
+    const span = document.createElement('span');
+    span.contentEditable = 'true';
+    bind.appendChild(span);
+    return bind;
+  }
+  const span = document.createElement('span');
+  span.className = 'qu-identity-attrs-value';
+  span.contentEditable = 'true';
+  span.textContent = String(entry.value);
+  let lastValue = span.textContent;
+  span.addEventListener('blur', async () => {
+    const value = span.textContent;
+    if (value === lastValue) return;
+    const previous = lastValue;
+    lastValue = value;
+    try {
+      await qu.setProfileAttr(key, value, { encryptFor: [qu.fingerprint] });
+    } catch (e) {
+      console.error('[identity-screen] inline edit (private attribute) failed:', e);
+      lastValue = previous;
+      span.textContent = previous;
+    }
+  });
+  return span;
+}
+
+/**
+ * Shared row-rendering for both renderAttributesEditor() (own profile,
+ * `editable: true`) and renderAttributesReadOnly() (someone else's,
+ * `editable: false`) below — same `rows` Map (key -> <li>, so a live
+ * update patches the existing row instead of rebuilding the whole list).
+ *
+ * A row, once created, is deliberately NEVER rebuilt again while its key
+ * still exists — only removed (tombstone) or left alone. The value
+ * control itself (a live `<qu-bind>`, or the private-attribute span's own
+ * blur handler above) already keeps ITSELF current; tearing the whole
+ * `<li>` down and recreating it on every live event — as an earlier
+ * version of this function did — would blow away whatever the user is
+ * CURRENTLY typing the moment any unrelated attribute event arrives
+ * (`onProfileAttrsChange()` fires for every key, not just this one).
+ *
+ * A private attribute is ALWAYS shown with its real, decrypted value —
+ * never a "🔒 (privat)" placeholder that hides it even from its own
+ * owner: `entry.private` only reaches this far at all because THIS
+ * caller already successfully decrypted it (session.js's own doc: a
+ * qubit only reports `encrypted: true` on a SUCCESSFUL decrypt too, not
+ * just on failure). On someone else's profile, `entry.private` can only
+ * ever be `false` in the first place — `listProfileAttrs()`'s own doc
+ * explains why: a field encrypted to someone ELSE (not the caller) fails
+ * to decrypt, `q.value` stays `undefined`, and `listProfileAttrs()`
+ * already filters that out before this ever runs. There is deliberately
+ * no separate server-side "is this public" check to duplicate — the SAME
+ * encryption that hides a private attribute from a relay operator already
+ * hides it from a non-owner viewer here, for free, not a UI-level access
+ * check that could be bypassed. The 🔒 badge below is purely informational
+ * (own view only: "this one is hidden from everyone else"), never a
+ * value-hiding device.
+ */
+function renderAttrRow(qu, list, rows, key, entry, { editable = false, onDelete } = {}) {
+  const existing = rows.get(key);
+  if (entry == null) { existing?.remove(); rows.delete(key); return; }
+  if (existing) return; // already rendered — see doc above for why nothing here needs refreshing
+
+  const li = document.createElement('li');
+  rows.set(key, li);
+  list.appendChild(li);
+
   const keyEl = document.createElement('code');
   keyEl.textContent = key;
-  const valueEl = document.createElement('span');
-  valueEl.className = 'qu-identity-attrs-value';
-  valueEl.textContent = entry.private ? '🔒 (privat)' : String(entry.value);
-  li.append(keyEl, ': ', valueEl);
+  li.append(keyEl, ': ', buildValueElement(qu, key, entry, editable));
+  if (entry.private) {
+    const lock = document.createElement('span');
+    lock.className = 'qu-identity-attrs-lock';
+    lock.title = 'Privat — nur für dich sichtbar (verschlüsselt)';
+    lock.textContent = ' 🔒';
+    li.appendChild(lock);
+  }
   if (onDelete) {
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
@@ -410,9 +526,12 @@ function renderAttributesEditor(qu) {
   wrap.append(heading, list);
 
   const rows = new Map();
-  const renderRow = (key, entry) => renderAttrRow(list, rows, key, entry, (btn) => {
-    btn.disabled = true;
-    qu.deleteProfileAttr(key).catch((e) => { console.error('[identity-screen] deleteProfileAttr failed:', e); btn.disabled = false; });
+  const renderRow = (key, entry) => renderAttrRow(qu, list, rows, key, entry, {
+    editable: true,
+    onDelete: (btn) => {
+      btn.disabled = true;
+      qu.deleteProfileAttr(key).catch((e) => { console.error('[identity-screen] deleteProfileAttr failed:', e); btn.disabled = false; });
+    },
   });
 
   // Same two-part shape as every other reactive read in this file (see
@@ -500,7 +619,7 @@ function renderAttributesReadOnly(qu, fingerprint) {
 
   const rows = new Map();
   const renderRow = (key, entry) => {
-    renderAttrRow(list, rows, key, entry);
+    renderAttrRow(qu, list, rows, key, entry);
     wrap.hidden = rows.size === 0;
   };
 

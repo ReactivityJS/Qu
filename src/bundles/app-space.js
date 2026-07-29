@@ -14,7 +14,9 @@ export {
   spaceWriterRecipients,
 } from '../modules/space-membership.js';
 export { notifyUser, onNotification, createNotificationsPlugin, createNotificationPushRule } from '../modules/notifications.js';
+export { star, unstar, listStarred, onStarredChange } from '../modules/starred.js';
 export { addContact, removeContact, listContacts, onContactsChange, createContactsPlugin } from '../modules/contacts.js';
+export { addFavorite, removeFavorite, listFavorites, onFavoritesChange, createFavoritesPlugin } from '../modules/favorites.js';
 export { registerDevice, removeDevice, listDevices, onDevicesChange, createDevicesPlugin } from '../modules/devices.js';
 export {
   itemInviteBoxId, inviteToItem, onItemInvite, createItemInvitesPlugin, createItemInvitePushRule,

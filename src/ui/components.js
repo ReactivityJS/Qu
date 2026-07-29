@@ -276,6 +276,31 @@ export class QuListElement extends HTMLElement {
   }
 }
 
+/**
+ * `<qu-key>` — displays the LAST path segment of the current `.qu`
+ * context's own id (e.g. a `<qu-list>` item bound to `~fp/attrs/bio` ->
+ * `bio`) as plain text. The one thing a `<qu-list>` `<template>` has no
+ * OTHER declarative way to show: the item's own IDENTITY, not just its
+ * bound VALUE (already covered by `<qu-view key="...">`) — useful for any
+ * key -> value collection (custom profile attributes, a todo list keyed
+ * by title, ...) where the key itself is part of what the list needs to
+ * display.
+ *
+ * Never subscribes to anything and never re-reads after mount — an
+ * item's own id is exactly what `<qu-list>` used to DECIDE this is a
+ * distinct item in the first place, so it structurally cannot change
+ * without becoming a different item (a new `<li>` `<qu-list>` itself
+ * would stamp), unlike this item's VALUE, which is why `<qu-view>` still
+ * needs a live subscription and this doesn't.
+ */
+export class QuKeyElement extends HTMLElement {
+  connectedCallback() {
+    const qu = findQu(this);
+    this.textContent = qu?.id ? qu.id.slice(qu.id.lastIndexOf('/') + 1) : '';
+  }
+}
+
 if (!customElements.get('qu-view')) customElements.define('qu-view', QuViewElement);
 if (!customElements.get('qu-bind')) customElements.define('qu-bind', QuBindElement);
 if (!customElements.get('qu-list')) customElements.define('qu-list', QuListElement);
+if (!customElements.get('qu-key')) customElements.define('qu-key', QuKeyElement);

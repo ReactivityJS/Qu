@@ -27,6 +27,11 @@
 //         so a host app can navigate through its OWN router (see
 //         examples/people/app.mjs) instead of being forced into the
 //         `href` templating for anything more elaborate.
+//   show-fp  Boolean (present = on). Appends the fingerprint itself
+//         (classed `qu-profile-fp`, a `<code>`) after the alias — for a
+//         list where telling two same-alias identities apart matters
+//         (e.g. services/directory's people search), not needed for a
+//         single card shown alone (the header, a chat message).
 //
 // Which Qu instance: same non-global resolution as ui/components.js's
 // `<qu-view>`/`<qu-bind>` — see findQu() there, reused here as-is (never a
@@ -41,7 +46,7 @@
 import { findQu } from './components.js';
 
 export class QuProfileCardElement extends HTMLElement {
-  static get observedAttributes() { return ['fp', 'href']; }
+  static get observedAttributes() { return ['fp', 'href', 'show-fp']; }
 
   connectedCallback() { this._mount(); }
   disconnectedCallback() { this._unmount(); }
@@ -82,6 +87,12 @@ export class QuProfileCardElement extends HTMLElement {
     nameEl.textContent = fp;
 
     root.append(avatarEl, nameEl);
+    if (this.hasAttribute('show-fp')) {
+      const fpEl = document.createElement('code');
+      fpEl.className = 'qu-profile-fp';
+      fpEl.textContent = fp;
+      root.appendChild(fpEl);
+    }
     this.appendChild(root);
 
     root.addEventListener('click', () => {

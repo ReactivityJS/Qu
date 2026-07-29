@@ -30,7 +30,7 @@
 // exact contract a mount module must implement.
 
 import {
-  createNetworkPlugin, createSpacesPlugin, createProfilesPlugin, createContactsPlugin, createWebSocketChannel,
+  createNetworkPlugin, createSpacesPlugin, createProfilesPlugin, createContactsPlugin, createFavoritesPlugin, createWebSocketChannel,
   createRouter, buildPath, inboxId,
 } from '../src/index.js';
 import { loadOrCreateIdentity, relayUrl } from '../src/ui/session-bootstrap.js';
@@ -70,7 +70,8 @@ export class QuAppShellElement extends HTMLElement {
       .use(createNetworkPlugin())
       .use(createSpacesPlugin())
       .use(createProfilesPlugin())
-      .use(createContactsPlugin());
+      .use(createContactsPlugin())
+      .use(createFavoritesPlugin());
     this.qu = qu; // MUST be set before any descendant <qu-*> element renders — see file doc above
     this._stopTheme = applyTheme(qu); // this deployment's relay-config/theme (qu-core's admin/relay-admin panel), live — see that file's own doc for the null/never-set behavior
 
@@ -106,8 +107,6 @@ export class QuAppShellElement extends HTMLElement {
       .then((services) => { this._services = services; router.setServices(services); })
       .catch((e) => { console.error('[qu-app-shell] failed to load /relay/services:', e); this._services = []; router.setServices([]); });
 
-    this._revealAdminLinkIfAdmin(qu);
-
     // Registered at `/sw.js` (default scope `/`, the directory of the
     // script itself — see that file's own doc comment) — a platform-level
     // registration covering the whole ecosystem shell. Qu's own
@@ -138,27 +137,9 @@ export class QuAppShellElement extends HTMLElement {
     brand.textContent = 'QUniverse';
     const nav = document.createElement('qu-nav-dropdown');
     const notifications = document.createElement('qu-notification-badge');
-    // Hidden until _revealAdminLinkIfAdmin() below confirms this identity is
-    // actually on the relay's QU_RELAY_ADMINS list — nav-catalog.mjs's
-    // visibleCatalogEntries() deliberately excludes category:'admin' from
-    // qu-nav-dropdown ("a product nav, not a dev/ops catalog"), so an admin
-    // otherwise has no visible link to relay-admin anywhere in this shell.
-    this._adminLinkEl = document.createElement('a');
-    this._adminLinkEl.className = 'qu-shell-admin-link';
-    // In-shell (a hash link the router itself resolves — see index.js's
-    // `relay-admin` catalog entry, now carrying a `mount` alongside
-    // `entry`), not a full-page `location.href` to the standalone page —
-    // reuses this shell's ALREADY-connected `qu`/identity instead of a
-    // second bootstrap+WebSocket connection to the same relay. The
-    // standalone page (`/examples/relay-admin/index.html`) still exists
-    // as a bookmarkable, works-without-the-shell fallback, just no longer
-    // this link's own target.
-    this._adminLinkEl.href = buildPath('relay-admin');
-    this._adminLinkEl.textContent = '🛠️ Admin-Portal';
-    this._adminLinkEl.hidden = true;
     const ownCard = document.createElement('qu-profile-card');
     ownCard.setAttribute('href', buildPath(`~${this.qu.fingerprint}`));
-    header.append(brand, nav, notifications, this._adminLinkEl, ownCard);
+    header.append(brand, nav, notifications, ownCard);
 
     this._screenEl = document.createElement('main');
     this._screenEl.className = 'qu-shell-screen';
@@ -317,28 +298,6 @@ export class QuAppShellElement extends HTMLElement {
   _reRenderIdentityIfCurrent() {
     const d = this._lastDecision;
     if (d?.kind === 'space-default' && d.spaceId?.startsWith('~')) this._renderRoute(d);
-  }
-
-  /**
-   * Purely a UI convenience, NOT a security check (same stance as dev/
-   * portal.mjs's own revealAdminTabIfLocalIdentityIsAdmin(), which this
-   * mirrors) — reveals `_adminLinkEl` only if THIS shell's already-loaded
-   * identity happens to be on the relay's QU_RELAY_ADMINS list
-   * (GET /relay/info). A real unauthorized write attempt still fails at
-   * the relay's own ACL either way; this only saves an actual admin the
-   * trouble of remembering/bookmarking `/examples/relay-admin/index.html`
-   * — see qu-nav-dropdown.mjs's nav-catalog.mjs for why it isn't already
-   * in the regular app menu.
-   */
-  async _revealAdminLinkIfAdmin(qu) {
-    let admins;
-    try {
-      admins = (await (await fetch('/relay/info')).json()).admins ?? [];
-    } catch (e) {
-      console.error('[qu-app-shell] failed to load /relay/info — admin link stays hidden:', e);
-      return;
-    }
-    if (this._adminLinkEl && admins.includes(qu.fingerprint)) this._adminLinkEl.hidden = false;
   }
 
   /**

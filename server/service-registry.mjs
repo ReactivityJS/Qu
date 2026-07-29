@@ -197,7 +197,7 @@ export function createServiceRegistry(definitions = []) {
 
     /** Metadata only (never route/gate functions) — what a portal UI or admin UI fetches to render the current catalog + state. A QUniverse App Manifest field (see file doc above) is included only when the definition actually carries it — an app that never set e.g. `icon` gets no `icon: undefined` key at all, keeping the shape identical to before these fields existed for every plain service definition. */
     toJSON() {
-      const manifestFields = ['icon', 'navOrder', 'spaceMode', 'fixedSpaceId', 'requiredPlugins', 'aclDefaults', 'notificationTopics', 'mount', 'usesCms'];
+      const manifestFields = ['icon', 'navOrder', 'spaceMode', 'fixedSpaceId', 'requiredPlugins', 'aclDefaults', 'notificationTopics', 'mount', 'usesCms', 'hasSettings', 'hasAdmin'];
       return this.list().map((def) => {
         const { id, category, label, description, entry, enabled } = def;
         const out = { id, category, label, description, entry, enabled };
