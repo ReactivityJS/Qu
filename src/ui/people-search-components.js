@@ -190,11 +190,23 @@ export class QuPeopleSearchElement extends HTMLElement {
       }
       for (const { fingerprint: fp } of entries) {
         if (aliasUnsubs.has(fp)) continue;
-        // Kein initial:true nötig (siehe ui/profile-components.js — derselbe
-        // Trick): das bloße Registrieren eines .on() löst über qu.connect()s
-        // globalen subscribeDispatch (network/index.js) den eigentlichen
-        // Netzwerk-Sync von selbst aus; der aktuelle Wert kommt dann als
-        // ganz normaler Ingest hier an, kein separates repl.sync() nötig.
+        // TWO reads, not one — the same "one-shot for CURRENT state, plus a
+        // live .on() for what changes next" shape every other reactive
+        // read in this codebase uses (see e.g. shell/identity-screen.mjs's
+        // renderVisibilityToggle()). `.on()` ALONE is forward-only: if the
+        // alias is already sitting in the local store by the time this
+        // registers (a very real case — network/index.js's catch-up sync
+        // re-fetches an already-known value as a `noop` ingest, which never
+        // calls a subscriber; so does simply mounting AFTER another part of
+        // the page already pulled this same alias down), `.on()` never
+        // fires AT ALL for it, and aliasCache silently stays without an
+        // entry — the exact bug that made alias search look broken (a
+        // query with `entry.alias` falling back to the raw fingerprint via
+        // `aliasCache.get(fp) ?? fp` never matches a human-typed alias
+        // substring). The one-shot `.get()` below is what actually
+        // guarantees the CURRENT value always lands here, `.on()` alone
+        // never did.
+        qu.get(`~${fp}`).get('alias').then((q) => { if (mounted) { aliasCache.set(fp, q?.value ?? fp); render(); } }).catch(() => {});
         aliasUnsubs.set(fp, qu.get(`~${fp}`).get('alias').on((q) => { aliasCache.set(fp, q?.value ?? fp); render(); }));
       }
       render();

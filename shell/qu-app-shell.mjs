@@ -145,7 +145,15 @@ export class QuAppShellElement extends HTMLElement {
     // otherwise has no visible link to relay-admin anywhere in this shell.
     this._adminLinkEl = document.createElement('a');
     this._adminLinkEl.className = 'qu-shell-admin-link';
-    this._adminLinkEl.href = '/examples/relay-admin/index.html';
+    // In-shell (a hash link the router itself resolves — see index.js's
+    // `relay-admin` catalog entry, now carrying a `mount` alongside
+    // `entry`), not a full-page `location.href` to the standalone page —
+    // reuses this shell's ALREADY-connected `qu`/identity instead of a
+    // second bootstrap+WebSocket connection to the same relay. The
+    // standalone page (`/examples/relay-admin/index.html`) still exists
+    // as a bookmarkable, works-without-the-shell fallback, just no longer
+    // this link's own target.
+    this._adminLinkEl.href = buildPath('relay-admin');
     this._adminLinkEl.textContent = '🛠️ Admin-Portal';
     this._adminLinkEl.hidden = true;
     const ownCard = document.createElement('qu-profile-card');
