@@ -67,6 +67,18 @@
 //                card shown alone doesn't usually need this).
 //   placeholder  Input placeholder text.
 //
+// Set `el.rowActions = (fingerprint) => Node | Node[] | null` (a plain
+// property, not an attribute — same reason as matchFn above) to append
+// extra per-result controls after each rendered <qu-profile-card> — e.g.
+// a <qu-contact-star> (ui/contact-components.js) so a caller like
+// services/directory/app.mjs or services/contacts/app.mjs can add someone
+// as a contact right from the result row, no click-through to their
+// profile needed. Called fresh on every render() (every keystroke, every
+// directory/alias update) — a stateful Node returned here (like
+// <qu-contact-star>, which owns its own subscription) cleans itself up
+// normally when its row is discarded on the next render, the same
+// Custom-Element lifecycle guarantee <qu-profile-card> already relies on.
+//
 // Which Qu instance: same non-global resolution as every other
 // Qu-Component here — see ui/components.js's findQu(); set `.qu` on this
 // element or an ancestor.
@@ -176,6 +188,10 @@ export class QuPeopleSearchElement extends HTMLElement {
         if (hrefTemplate) card.setAttribute('href', hrefTemplate);
         if (showFp) card.setAttribute('show-fp', '');
         li.appendChild(card);
+        if (this.rowActions) {
+          const extra = this.rowActions(r.fingerprint);
+          for (const node of [].concat(extra ?? [])) li.appendChild(node);
+        }
         list.appendChild(li);
       }
       this.dispatchEvent(new CustomEvent('qu-people-search-results', { detail: { count: results.length, query: raw }, bubbles: true }));

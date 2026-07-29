@@ -254,7 +254,18 @@ span.qu-notification-item { color: var(--muted); cursor: default; }
 .qu-app-directory-row .name .id { color: var(--muted); font-size: 0.85em; }
 .qu-app-directory-shortcut { text-decoration: none; font-size: 1.1em; padding: 0.2rem; line-height: 1; }
 .qu-app-directory-row .category-badge { font-size: 0.75em; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0.1rem 0.5rem; }
-.qu-app-directory-star { background: transparent; border: none; font-size: 1.1em; cursor: pointer; padding: 0.2rem; line-height: 1; }
+.qu-app-directory-star {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 1.2em;
+  cursor: pointer;
+  padding: 0.3rem 0.55rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.qu-app-directory-star:hover { background: rgba(255,255,255,0.06); }
 .qu-app-directory-star:disabled { opacity: 0.5; cursor: default; }
 .qu-app-directory-row button.enabled,
 .qu-app-directory-row button.disabled {
@@ -352,6 +363,24 @@ span.qu-notification-item { color: var(--muted); cursor: default; }
 .qu-profile-card { display: inline-flex; align-items: center; gap: 0.5rem; text-decoration: none; color: inherit; }
 .qu-profile-avatar { width: 1.6rem; height: 1.6rem; border-radius: 50%; object-fit: cover; }
 .qu-profile-fp { color: var(--muted); font-size: 0.8em; }
+
+/* qu-contact-star (unstyled by default, see src/ui/contact-components.js) — same bordered-button
+   treatment as .qu-app-directory-star, so a lone ☆/⭐ glyph reads as an obviously clickable
+   control instead of blending into surrounding text. */
+qu-contact-star { display: inline-flex; }
+.qu-contact-star {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 1.2em;
+  cursor: pointer;
+  padding: 0.3rem 0.55rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.qu-contact-star:hover { background: rgba(255,255,255,0.06); }
+.qu-contact-star:disabled { opacity: 0.5; cursor: default; }
 
 /* Small/mobile: the same header controls, just touch-friendly and compact —
    nothing here removes a control, only shrinks the room each one takes. */
