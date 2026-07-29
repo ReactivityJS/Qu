@@ -20,6 +20,7 @@ import {
   parseFormatting, parseMessageBlocks,
 } from './chat-lib.mjs';
 import '../../src/ui/people-search-components.js'; // Seiteneffekt: registriert <qu-profile-card> (renderRoomHeader()/renderGroupMemberList()) UND <qu-people-search> (Neuer-Chat-Formular)
+import { createWakeLock } from '../../src/ui/wake-lock.mjs';
 
 // Anruf-Diagnose: jede Signaling-/ICE-/Verbindungs-Phase eines Anrufs
 // landet mit [webrtc:...]/[webrtc-pm:...]-Präfix in der Browser-Konsole
@@ -930,40 +931,30 @@ async function main() {
   }
 
   /**
-   * Hält den Bildschirm wach (Screen Wake Lock API), SOLANGE mindestens
-   * eine Anhang-Übertragung läuft (eigener Upload-Sync via
-   * confirmDelivery() unten, oder ein Download via renderAttachment()s
-   * reveal()) — ein großer Video-Anhang über eine schwache Verbindung
-   * kann Minuten brauchen; schaltet sich das Display währenddessen ab,
-   * pausiert (je nach Gerät/Browser) oft auch die laufende Übertragung
-   * selbst. Referenzgezählt (`activeTransfers`), nicht ein einfaches
-   * Ja/Nein-Flag — mehrere gleichzeitige Übertragungen (z. B. Senden UND
-   * gleichzeitig einen anderen Anhang laden) dürfen sich nicht gegenseitig
-   * das Lock vorzeitig freigeben. Kein Fehler, wenn die API fehlt (ältere
-   * Safari-Versionen) — dann bleibt es schlicht wirkungslos, wie bisher.
+   * Hält den Bildschirm wach (src/ui/wake-lock.mjs, dieselbe Utility, die
+   * examples/hunt/app.mjs für seinen Toggle nutzt), SOLANGE mindestens eine
+   * Anhang-Übertragung läuft (eigener Upload-Sync via confirmDelivery()
+   * unten, oder ein Download via renderAttachment()s reveal()) — ein
+   * großer Video-Anhang über eine schwache Verbindung kann Minuten
+   * brauchen; schaltet sich das Display währenddessen ab, pausiert (je
+   * nach Gerät/Browser) oft auch die laufende Übertragung selbst.
+   * Referenzgezählt (`activeTransfers`), nicht ein einfaches Ja/Nein-Flag —
+   * mehrere gleichzeitige Übertragungen (z. B. Senden UND gleichzeitig
+   * einen anderen Anhang laden) dürfen sich nicht gegenseitig das Lock
+   * vorzeitig freigeben; die Re-Acquire-nach-`visibilitychange`-Mechanik
+   * selbst sitzt bereits in der gemeinsamen Utility, hier nur noch der
+   * Refcount darüber.
    */
-  let wakeLock = null;
+  const wakeLock = createWakeLock();
   let activeTransfers = 0;
   async function beginTransfer() {
     activeTransfers++;
-    if (activeTransfers === 1 && 'wakeLock' in navigator) {
-      try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { console.warn('[chat] Screen Wake Lock nicht verfügbar:', e.message); }
-    }
+    if (activeTransfers === 1) await wakeLock.acquire();
   }
   function endTransfer() {
     activeTransfers = Math.max(0, activeTransfers - 1);
-    if (activeTransfers === 0 && wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    if (activeTransfers === 0) wakeLock.release();
   }
-  // Ein Wake Lock wird vom Browser automatisch freigegeben, sobald der Tab
-  // in den Hintergrund wechselt (Spezifikation) — kommt er zurück, während
-  // noch eine Übertragung läuft, muss es explizit neu angefordert werden,
-  // sonst bliebe das Display ab hier dauerhaft ungeschützt, obwohl
-  // `activeTransfers` weiterhin > 0 ist.
-  document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState === 'visible' && activeTransfers > 0 && !wakeLock && 'wakeLock' in navigator) {
-      try { wakeLock = await navigator.wakeLock.request('screen'); } catch { /* z. B. Tab doch nicht wirklich sichtbar — nächster Wechsel versucht es erneut */ }
-    }
-  });
 
   async function confirmDelivery(entry) {
     if (deliveredMsgIds.has(entry.id) || confirmInFlight.has(entry.id)) return;
