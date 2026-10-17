@@ -670,6 +670,10 @@ scripts/run-node-only.mjs   node:test-Runner für die Node-only-Dateien, als iso
                           von server/test-runner.mjs aufgerufen; bewusst außerhalb test/, weil
                           Node's `--test`-Discovery sonst diese Datei selbst als Testdatei anfasst
 assets/style.css            gemeinsames Stylesheet für alle Tooling-Seiten
+assets/vendor/marked.min.js    vendored statt CDN-geladen (einzige externe Abhängigkeit im
+                            gesamten Projekt, nur fürs Tooling — src/ bleibt frei davon),
+                            damit docs/view.html auch ohne Zugriff auf cdnjs.cloudflare.com
+                            funktioniert; Lizenz in assets/vendor/marked-LICENSE.md
 docs/view.html                generischer Markdown-Viewer (Whitepaper, README, API.md)
 src/
   index.js              ← einziger öffentlicher Einstiegspunkt der Bibliothek
